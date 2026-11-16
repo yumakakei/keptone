@@ -117,11 +117,13 @@ The docked inspector stays as well. It follows the selection, so it suits keyboa
 
 High-DPI is the harder sizing problem: Full HD at 100 %, 4K at 150 % or 200 % on Windows and Linux, and a Mac with a 4K display in a scaled mode. The editor is laid out in logical pixels and drawn at
 
-$$s = s_{\text{system}} \times \texttt{ui.scale}$$
+```math
+s = s_{\text{system}} \times \texttt{ui.scale}
+```
 
 device pixels per logical pixel. `ui.scale` is 50–400 %, default 100 %.
 
-**Where $s_{\text{system}}$ comes from:**
+**Where $`s_{\text{system}}`$ comes from:**
 
 | System | Source | Notes |
 | --- | --- | --- |
@@ -134,15 +136,15 @@ Mixing up logical and physical sizes between systems is the classic HiDPI plugin
 
 **Drawing on the device grid.** Fractional scales (125 %, 150 %, 175 %) blur naively scaled UIs. The rules:
 
-- Layout happens in logical units. Before drawing, every rectangle edge is rounded to a device pixel: $x_{\text{dev}} = \operatorname{round}(x \cdot s)$, for both edges independently. A 1 px gap never becomes 0 or 2 px apart from rounding.
-- A stroke of logical width $w$ is $\max(1, \operatorname{round}(w s))$ device pixels wide. It is placed so that it covers whole pixels: centred on a pixel centre when that width is odd, on a pixel edge when it is even. Hairlines are exactly one device pixel at every scale.
-- Text is rasterised by FreeType at $\text{size} \times s$ device pixels, with light (vertical-only) hinting, and the glyph atlas is rebuilt per scale. Glyph advances stay unhinted, so a line of text keeps the same length across scales.
+- Layout happens in logical units. Before drawing, every rectangle edge is rounded to a device pixel: $`x_{\text{dev}} = \mathrm{round}(x \cdot s)`$, for both edges independently. A 1 px gap never becomes 0 or 2 px apart from rounding.
+- A stroke of logical width $`w`$ is $`\mathrm{max}(1, \mathrm{round}(w s))`$ device pixels wide. It is placed so that it covers whole pixels: centred on a pixel centre when that width is odd, on a pixel edge when it is even. Hairlines are exactly one device pixel at every scale.
+- Text is rasterised by FreeType at $`\text{size} \times s`$ device pixels, with light (vertical-only) hinting, and the glyph atlas is rebuilt per scale. Glyph advances stay unhinted, so a line of text keeps the same length across scales.
 - Curves (envelopes, edges in the graph, plots) are not snapped. They are antialiased by analytic coverage (DESIGN §8.3).
 - There are no bitmaps. Icons are paths, so they are exact at every scale.
 
 **Changing scale live.** When the window moves between a Full HD and a 4K monitor:
 
-- the editor re-lays out at the new $s$;
+- the editor re-lays out at the new $`s`$;
 - it rebuilds the glyph atlas;
 - it asks the host for the new physical size (CLAP `gui.request_resize`; the wrappers' equivalents) so the logical size stays the same.
 

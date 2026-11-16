@@ -15,7 +15,7 @@ Every value that `docs/MATH.md` tags **verify** has a row here. A row records th
 | # | MATH § | Item | Provisional (source) | Check against | Status | Decision |
 | --- | --- | --- | --- | --- | --- | --- |
 | V1 | 1, 3.4 | Full-scale gain 2 → modulation index 2 turns (4π rad) | MSFA `exp2.cc`, `fm_op_kernel.cc` | SHIRRIFF-EXP; AJXS-ROM operator output scaling | open | |
-| V2 | 2.2 | Detune law $0.0209e^{-0.396p}p(d-7)/7$ | MSFA `osc_freq` (measured on one DX7) | AJXS-ROM pitch computation (`VOICE_CONVERT_NOTE_TO_PITCH` and detune) | open | |
+| V2 | 2.2 | Detune law $`0.0209\,\mathrm{e}^{-0.396p}p\cdot(d - 7)/7`$ | MSFA `osc_freq` (measured on one DX7) | AJXS-ROM pitch computation (`VOICE_CONVERT_NOTE_TO_PITCH` and detune) | open | |
 | V3 | 2.3 | Fixed-mode detune (only for d > 7) and fixed operators ignore PEG/LFO | MSFA | AJXS-ROM | open | |
 | V4 | 2.4 | Pitch-modulation sensitivity table and depth scaling (/256 octaves) | MSFA `pitchmodsenstab`, `Dx7Note::compute` | AJXS-ROM LFO pitch modulation; DX7-MANUAL ranges | open | |
 | V5 | 3.2 | Keyboard level scaling constants (329, exp table, offset 17) | MSFA `ScaleLevel`/`ScaleCurve` | AJXS-ROM keyboard scaling; DX7-MANUAL | open | |

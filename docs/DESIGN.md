@@ -137,7 +137,7 @@ The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbi
 `CompiledPatch::new(&Patch, &Settings) -> CompiledPatch` is total.
 
 - Every table lookup of MATH §2–§7 is resolved into binary64 coefficients.
-- The algorithm graph is reduced to SCCs, an evaluation order, ADAA offsets $s_k$ (MATH §10.5) and delay-line requirements.
+- The algorithm graph is reduced to SCCs, an evaluation order, ADAA offsets $`s_k`$ (MATH §10.5) and delay-line requirements.
 - The Kapteyn tables are prepared if any operator might need them (MATH §9.5). Large tables are built on the worker thread and swapped in when ready; until then the point solver is used.
 
 ### 6.2 Render loop (audio thread)
