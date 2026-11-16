@@ -28,7 +28,7 @@ English | [日本語](README.ja.md)
 
 ## Where it stands
 
-Milestone M1 of the plan ([docs/DESIGN.md](docs/DESIGN.md) §16) is under way. M0 set up the workspace: thirteen crates under the project's lints, the toolchain files, the CI on Windows, Ubuntu and macOS, and the specification. So far in M1, `keptone-math` has its elementary functions: the sine and cosine of a phase in turns, the exponential of base 2, and sinc and its derivative, each tested against CORE-MATH's correctly rounded functions or against references computed with mpmath. The other crates are still empty, and nothing plays yet.
+Milestone M1 of the plan ([docs/DESIGN.md](docs/DESIGN.md) §16) is under way. M0 set up the workspace: thirteen crates under the project's lints, the toolchain files, the CI on Windows, Ubuntu and macOS, and the specification. So far in M1, `keptone-math` has its elementary functions: the sine and cosine of a phase in turns, the exponential of base 2, and sinc and its derivative, each tested against CORE-MATH's correctly rounded functions or against references computed with mpmath; and the closed forms of antiderivative antialiasing of the first and second orders, which average the sine of a phase over a sample, tested against mpmath's references. The other crates are still empty, and nothing plays yet.
 
 | Crate | What it is to hold | Milestone |
 | --- | --- | --- |

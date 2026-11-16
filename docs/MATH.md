@@ -478,6 +478,7 @@ Here $`\mathrm{sinc}\,u = \sin(\pi u)/(\pi u)`$.
 
 - The 0/0 of the general formula disappears: sinc is evaluated stably (§12.2).
 - The delay is ½ sample. The frequency response is $`\mathrm{sinc}(f/f_{\mathrm{e}})`$.
+- The kernel takes $`x_{n-1}`$ and $`\Delta_n`$, and reduces $`x_{n-1}`$ exactly to $`[-1/2, 1/2]`$ first (§12.1). Target: within $`9 \cdot 2^{-53}`$ absolute (§16).
 
 ### 10.3 Second order (ADAA-2, default)
 
@@ -492,12 +493,17 @@ ADAA-2 [BILBAO-ADAA] is twice the second divided difference of $`F_2(x) = -\sin(
 
   $`\displaystyle \hat y_n \approx 2\left(\partial_a F_2[a,b] + \frac{h^2}{24}\,\partial_a^3 F_2[a,b]\right),\qquad \partial_a F_2[a,b] = \frac{1}{2}\,\sin\,\pi(a+b)\,\mathrm{sinc}(a-b) - \frac{\cos\,\pi(a+b)\,\mathrm{sinc}'(a-b)}{2\pi}`$
 
-  Derive $`\partial_a^3`$ in closed form with a CAS (`scripts/adaa_derivatives.py`) and check it numerically.
-- Measured while writing this spec, against a 40-digit reference of the quotient:
+  With $`d = a - b`$, the CAS of `scripts/adaa_derivatives.py` gives, and checks numerically:
+
+  $`\displaystyle \partial_a^3 F_2[a,b] = \sin\,\pi(a+b)\cdot\left(\frac{3}{2}\,\mathrm{sinc}''(d) - \frac{\pi^2}{2}\,\mathrm{sinc}(d)\right) + \cos\,\pi(a+b)\cdot\left(\frac{3\pi}{2}\,\mathrm{sinc}'(d) - \frac{\mathrm{sinc}'''(d)}{2\pi}\right)`$
+
+  sinc″ and sinc‴ come from their Taylor series below $`\left|d\right| = 1/4`$, and from $`u\,\mathrm{sinc}'' + 2\,\mathrm{sinc}' + \pi^2 u\,\mathrm{sinc} = 0`$ and its derivative above. The remainder of the expansion is at most $`(2\pi)^4 h^4/5760 \le 0.271h^4`$, which a still phase at a quarter turn reaches.
+- Measured while writing this spec (`scripts/verify_spec_math.py`, in numpy, without the exact reduction of §12.1), against a 40-digit reference of the quotient:
   - The quotient alone errs 6·10⁻¹³ at $`\left|h\right| = 10^{-3}`$ and 7·10⁻⁸ at $`10^{-8}`$.
   - The expansion without the $`h^2`$ term errs 8·10⁻⁹ at $`10^{-4}`$.
   - With the $`h^2`$ term it errs 3·10⁻¹³ at $`10^{-3}`$. The crossover near $`2^{-10}`$ keeps the worst case about 3·10⁻¹³.
 - Check: three equal points give $`\hat y = \sin\,2\pi x`$.
+- The kernel takes $`x_{n-1}`$, $`\Delta_n`$ and $`\Delta_{n-1}`$, so that $`h = \Delta_n + \Delta_{n-1}`$, and reduces $`x_{n-1}`$ exactly first. Target: within $`\mathrm{max}(4.81u/\tau_2 + 4.35u,\ 0.271\tau_2^4 + 14u)`$ absolute, with $`u = 2^{-53}`$ and $`\tau_2`$ = `adaa.tau2`: $`5.5 \cdot 10^{-13}`$ for the default (§16). The first part bounds the quotient, whose rounding the division by $`\pi h`$ amplifies; the second, the expansion's remainder and rounding.
 - The delay is 1 sample. For a steady partial (constant $`\Delta`$) the response is $`\mathrm{sinc}^2(f/f_{\mathrm{e}})`$.
 - The formula is [BILBAO-ADAA]'s. It equals the triangular-kernel filtering of the piecewise-linear $`x(t)`$ **only when $`\Delta`$ is the same over both samples**. When the increment changes, it is a different (cheaper) approximation. This was checked numerically: it agrees with the triangular kernel to 10⁻¹⁴ for linear $`x`$ and differs for kinked $`x`$. `adaa.order2_kernel = bilbao | triangular`, default `bilbao`. `triangular` integrates $`\int_0^1 t\,\sin\,2\pi(a + t d)\,\mathrm{d}t`$ and its mirror exactly. These have closed forms with a small-$`\left|d\right|`$ series (cf. the exact piecewise formulae in [GABRIELLI-POLYADAA]'s background). Derive and test it in M4, then choose the default by the alias metric.
 
@@ -639,6 +645,7 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 | --- | --- | --- |
 | sin2pi, cos2pi, exp2 | against CORE-MATH, ≥ 10⁸ random inputs and special points | ≤ 1 ulp |
 | sinc, sinc' | against MPFR-precision references (`scripts/` with mpmath) | ≤ 2 ulp; sinc' for $`\left\|u\right\| \ge 1/2`$: ≤ $`9 \cdot 2^{-53}`$ absolute |
+| ADAA-1, ADAA-2 | against mpmath references of the closed forms and of the divided difference, the inputs exact (`scripts/adaa_references.py`): special points (still, steady and reversing phases, $`h`$ on either side of $`\tau_2`$) and random inputs; ADAA-2 at $`\tau_2 = 2^{-12}, 2^{-10}, 2^{-8}`$; three equal points give $`\sin\,2\pi x`$ | ≤ $`9 \cdot 2^{-53}`$ absolute; ≤ $`\mathrm{max}(4.81u/\tau_2 + 4.35u,\ 0.271\tau_2^4 + 14u)`$ absolute |
 | Kepler solver | residual over a β × Φ grid (β ∈ [0, 0.999], 10⁶ points), and iteration counts | $`\left\| h(\Theta) - \Phi\right\| \le 4u\,\mathrm{max}(1,\left\|\Phi\right\|)`$; ≤ 8 iterations |
 | Kapteyn coefficients | against mpmath for n ≤ 2000, β on a grid | ≤ 1e-15 absolute |
 | Series vs point solution | where both apply and the tail is negligible | ≤ 1e-14 |

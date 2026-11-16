@@ -22,6 +22,7 @@ coefficients in crates/keptone-math/src/coefficients.rs, each the largest over
 largest, and the bounds that follow; the documentation rounds them up.
 """
 
+import math
 import re
 import struct
 import sys
@@ -153,8 +154,8 @@ def sinc_series(c: Coefficients) -> None:
     show("its error, at most (u)", error)
 
 
-def sinc_derivative(c: Coefficients) -> None:
-    """sinc' 's polynomial, c1 u + u^3 R(u^2) for |u| < 1/2."""
+def sinc_derivative(c: Coefficients) -> mpmath.mpf:
+    """sinc' 's polynomial, c1 u + u^3 R(u^2) for |u| < 1/2; its error in ulp."""
     cs = [c[f"SINC_PRIME_{k}"] for k in range(3, 20, 2)]
     c1 = c["SINC_PRIME_1_HI"] + c["SINC_PRIME_1_LO"]
     tail = steps = error = mpmath.mpf(0)
@@ -169,10 +170,12 @@ def sinc_derivative(c: Coefficients) -> None:
     show("the tail, with u^2 and the two fused steps that add it, within (u)", steps + 3)
     show("the error of the tail beside the result, at most (u)", error)
     show("error, at most (ulp)", error + mpmath.mpf(0.5))
+    return error + mpmath.mpf(0.5)
 
 
-def sinc_and_closed_form(sine_ulp: mpmath.mpf, sine_relative: mpmath.mpf) -> None:
-    """sinc from |u| = 2^-6 on, and sinc' from 1/2 on, from the bounds of sin2pi and cos2pi."""
+def sinc_and_closed_form(sine_ulp: mpmath.mpf, sine_relative: mpmath.mpf) -> tuple[mpmath.mpf, mpmath.mpf]:
+    """sinc from |u| = 2^-6 on, and sinc' from 1/2 on, from the bounds of sin2pi and cos2pi; sinc's relative error
+    in u, its last rounding included, and the absolute bound of sinc' in 2^-53."""
     sinc_ulp = sine_relative + mpmath.mpf(0.5)
     print("sinc u, |u| >= 2^-6:")
     show("the sine's relative error, at most (u)", sine_relative)
@@ -190,6 +193,82 @@ def sinc_and_closed_form(sine_ulp: mpmath.mpf, sine_relative: mpmath.mpf) -> Non
     show("|sinc u|, at most (2/pi)", 2 / mpmath.pi)
     show("the numerator, at most (2^-53)", numerator)
     show("error, at most (2^-53)", 2 * numerator + 1)
+    return sine_relative + 1, 2 * numerator + 1
+
+
+def ulps(v: mpmath.mpf) -> mpmath.mpf:
+    """The spacing of binary64 at |v|, in u."""
+    return mpmath.mpf(2) ** (mpmath.floor(mpmath.log(abs(v), 2)) - 52) / U
+
+
+def sinc_values(v: mpmath.mpf) -> tuple[mpmath.mpf, mpmath.mpf, mpmath.mpf]:
+    """sinc v, sinc' v and sinc'' v for v > 0, sinc'' from u sinc'' + 2 sinc' + pi^2 u sinc = 0."""
+    s0 = mpmath.sinpi(v) / (mpmath.pi * v)
+    s1 = (mpmath.cospi(v) - s0) / v
+    return s0, s1, -(mpmath.pi**2) * s0 - 2 * s1 / v
+
+
+def sinc_higher(sinc_relative: mpmath.mpf, prime_ulp: mpmath.mpf, prime_absolute: mpmath.mpf) -> None:
+    """sinc'' and sinc''' from |u| = 1/4 on, where sinc_derivatives takes the equation and its derivative."""
+    pi2 = mpmath.pi**2
+    second = third = mpmath.mpf(0)
+    for v in grid(mpmath.mpf(1) / 4, mpmath.mpf(64)):
+        s0, s1, s2 = sinc_values(v)
+        e1 = prime_ulp * ulps(s1) if v < mpmath.mpf(1) / 2 else prime_absolute
+        # sinc'' = -pi^2 sinc - 2 sinc'/u: the parts' errors, and three roundings at most of the size of the parts.
+        e2 = pi2 * sinc_relative * abs(s0) + 2 * e1 / v + 3 * (pi2 * abs(s0) + 2 * abs(s1) / v)
+        # sinc''' = -(3 sinc'' + pi^2 sinc)/u - pi^2 sinc': likewise.
+        size = (3 * abs(s2) + pi2 * abs(s0)) / v + pi2 * abs(s1)
+        e3 = (3 * e2 + pi2 * sinc_relative * abs(s0)) / v + pi2 * e1 + 4 * size
+        second, third = max(second, e2), max(third, e3)
+    print("sinc'' and sinc''', |u| >= 1/4, absolute:")
+    show("sinc'', at most (u)", second)
+    show("sinc'', at most", second * U)
+    show("sinc''', at most (u)", third)
+    show("sinc''', at most", third * U)
+
+
+def adaa(
+    sine_relative: mpmath.mpf, sinc_relative: mpmath.mpf, prime_ulp: mpmath.mpf, prime_absolute: mpmath.mpf
+) -> None:
+    """ADAA-1 and ADAA-2 (keptone-math's adaa), from the bounds of the functions they take."""
+    pi = mpmath.pi
+    product = sinc_relative + sine_relative + 1
+    far = max(abs(sinc_values(v)[0]) * (product + pi * ulps(mpmath.mpf(0.5) + v / 2)) for v in grid(1, 1024))
+    print("ADAA-1, absolute:")
+    show("sinc, sin2pi and their product, at most (u)", product)
+    show("with the midpoint's rounding, |D| < 1, at most (u)", product + pi)
+    show("from |D| = 1 on, at most (u)", far)
+    numerator = product + (product - 1) + 2 * pi
+    relative = 4 + abs(mpmath.mpf(math.pi) - pi) / pi / U
+    tau2 = mpmath.mpf(2) ** -10
+    print("ADAA-2's quotient, absolute:")
+    show("the difference of the two products, at most (u)", numerator)
+    show("over pi h: the coefficient of u/|h|", numerator / pi)
+    show("h, pi, the product, the division and the difference, relative, at most (u)", relative)
+    show("at |h| = 2^-10, at most", numerator / pi * U / tau2 + relative * U)
+    remainder = (2 * pi) ** 4 / 5760
+    terms = {"d": 0, "m": 0, "trig": 0, "sinc": 0, "prime": 0, "operations": 0, "total": 0}
+    for v in grid(mpmath.mpf(2) ** -12, mpmath.mpf(64)):
+        s0, s1, s2 = sinc_values(v)
+        part = {
+            "d": v * (pi * abs(s0) + 2 * abs(s1) + abs(s2) / pi),
+            "m": pi * ulps(mpmath.mpf(0.5) + v / 2) * (abs(s0) + abs(s1) / pi),
+            "trig": sine_relative * (abs(s0) + abs(s1) / pi),
+            "sinc": sinc_relative * abs(s0),
+            "prime": (prime_ulp * ulps(s1) if v < mpmath.mpf(1) / 2 else prime_absolute) / pi,
+            "operations": abs(s1) * (2 + relative - 4) / pi + abs(s0) + abs(s1) / pi,
+        }
+        part["total"] = sum(part.values())
+        for name, value in part.items():
+            terms[name] = max(terms[name], value)
+    print("ADAA-2's expansion, absolute:")
+    show("the remainder: the coefficient of h^4, (2 pi)^4/5760", remainder)
+    show("the term in h^2: the coefficient of h^2, pi^2/12", pi**2 / 12)
+    for name in ("d", "m", "trig", "sinc", "prime", "operations"):
+        show(f"the rounding of the first term, from {name}, at most (u)", terms[name])
+    show("the rounding of the first term, at most (u)", terms["total"])
+    show("at |h| = 2^-10, at most", remainder * tau2**4 + terms["total"] * U)
 
 
 def main() -> int:
@@ -202,8 +281,11 @@ def main() -> int:
     show("relative error, at most (u)", max(sin_relative, cos_relative))
     exponential(c)
     sinc_series(c)
-    sinc_derivative(c)
-    sinc_and_closed_form(max(sin_ulp, cos_ulp), max(sin_relative, cos_relative))
+    prime_ulp = sinc_derivative(c)
+    sine_relative = max(sin_relative, cos_relative)
+    sinc_relative, prime_absolute = sinc_and_closed_form(max(sin_ulp, cos_ulp), sine_relative)
+    sinc_higher(sinc_relative, prime_ulp, prime_absolute)
+    adaa(sine_relative, sinc_relative, prime_ulp, prime_absolute)
     return 0
 
 

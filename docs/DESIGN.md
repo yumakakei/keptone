@@ -367,7 +367,7 @@ Dependencies are kept to the minimum for their own sake, not banned. Each one is
 | MTS-ESP client | submodule | optional feature | 0BSD | dynamic tuning (loads the user's `libMTS`) |
 | libfuzzer-sys | crates.io | fuzz/libfuzzer only (nightly) | MIT/Apache-2.0 | coverage-guided fuzzing |
 | loom | crates.io | keptone-rt dev-dependency | MIT | exhaustive interleaving tests of the queues |
-| Python: mpmath, numpy, scipy | pip | scripts/ only | BSD | high-precision references, filter checks |
+| Python: mpmath, SymPy, numpy, scipy | pip | scripts/ only | BSD | high-precision references, derivations, filter checks |
 | Sollya | tool | scripts/ only | CeCILL-C | coefficient design and error certificates |
 
 ### 12.3 Testing tools

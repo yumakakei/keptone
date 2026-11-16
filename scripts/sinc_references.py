@@ -23,18 +23,17 @@ fixed seed, so the file is the same every time.
 """
 
 import math
-import struct
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import mpmath
+
+from binary64 import double_double, from_bits, line, neighbours, splitmix64
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "crates" / "keptone-math" / "tests" / "data" / "sinc.txt"
 SEED = 0x73696E63
 RANDOM = 5000
-MASK = (1 << 64) - 1
 
 # The head of the file written, which names its copyright holder and license as
 # every file of the repository does.
@@ -45,35 +44,6 @@ HEADER = """\
 # Written by scripts/sinc_references.py with mpmath; do not edit.
 # u, sinc u (high, low), sinc' u (high, low): binary64 bits in hexadecimal.
 """
-
-
-def splitmix64(state: int) -> Iterator[int]:
-    """SplitMix64, as the Rust tests have it."""
-    while True:
-        state = (state + 0x9E3779B97F4A7C15) & MASK
-        z = state
-        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK
-        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK
-        yield z ^ (z >> 31)
-
-
-def from_bits(bits: int) -> float:
-    """The binary64 of these bits."""
-    return struct.unpack("<d", struct.pack("<Q", bits))[0]
-
-
-def to_bits(x: float) -> int:
-    """The bits of a binary64."""
-    return struct.unpack("<Q", struct.pack("<d", x))[0]
-
-
-def neighbours(x: float, k: int) -> list[float]:
-    """x and the k binary64 on either side of it."""
-    out, up, down = [x], x, x
-    for _ in range(k):
-        up, down = math.nextafter(up, math.inf), math.nextafter(down, -math.inf)
-        out += [up, down]
-    return out
 
 
 def inputs() -> list[float]:
@@ -118,20 +88,13 @@ def references(u: float) -> tuple[mpmath.mpf, mpmath.mpf]:
         return +sinc, +derivative
 
 
-def double_double(value: mpmath.mpf) -> tuple[float, float]:
-    """value as hi + lo, hi the nearest binary64 and lo the nearest to the rest."""
-    hi = float(value)
-    lo = float(value - mpmath.mpf(hi))
-    return hi, lo
-
-
 def main() -> int:
     """Write the references."""
     lines = []
     for u in inputs():
         sinc, derivative = references(u)
         numbers = [u, *double_double(sinc), *double_double(derivative)]
-        lines.append(" ".join(f"{to_bits(x):016x}" for x in numbers))
+        lines.append(line(numbers))
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(HEADER + "\n".join(lines) + "\n", encoding="utf-8")
     print(f"wrote {len(lines)} references to {OUTPUT.relative_to(ROOT)}")
