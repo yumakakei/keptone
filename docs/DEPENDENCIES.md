@@ -30,7 +30,7 @@ The tools that `scripts/` runs to compute what the code and the tests take, whic
 | --- | --- | --- | --- |
 | Python | 3.14, the target of `ruff.toml` | PSF-2.0 | The language of `scripts/`. |
 | Sollya | 8.0, Ubuntu's package | CeCILL-C | `scripts/minimax.sollya` designs the polynomials of `keptone-math` with `fpminimax`, their coefficients in binary64 and the leading one a double-double, and certifies their errors with `supnorm` (MATH §12); `scripts/minimax.py` runs it and writes `crates/keptone-math/src/coefficients.rs`, which says which Sollya wrote it. |
-| mpmath | 1.4.1, Ubuntu's package `python3-mpmath` | BSD-3-Clause | Arithmetic of any precision: `scripts/sinc_references.py` and `scripts/adaa_references.py` write the references of sinc and sinc′, of ADAA-1 and ADAA-2 and of sinc″ and sinc‴ in `crates/keptone-math/tests/data/`, and `scripts/rounding_bounds.py` computes the constants of the rounding analyses in the documentation of `keptone-math`. |
+| mpmath | 1.4.1, Ubuntu's package `python3-mpmath` | BSD-3-Clause | Arithmetic of any precision: `scripts/sinc_references.py`, `scripts/adaa_references.py` and `scripts/kapteyn_references.py` write the references of sinc and sinc′, of ADAA-1 and ADAA-2, of sinc″ and sinc‴ and of the Kapteyn coefficients in `crates/keptone-math/tests/data/`, and `scripts/rounding_bounds.py` computes the constants of the rounding analyses in the documentation of `keptone-math`. |
 | SymPy | 1.14.0, Ubuntu's package `python3-sympy` | BSD-3-Clause | The computer algebra that MATH §10.3 asks for: `scripts/adaa_derivatives.py` derives with it the third derivative in the expansion of ADAA-2 and the Taylor coefficients of sinc″ and sinc‴, and checks them against `crates/keptone-math`. |
 
 ## Toolchain

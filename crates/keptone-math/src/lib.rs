@@ -9,8 +9,8 @@
 //! Keptone's reference functions, scalar and in binary64.
 //!
 //! The numerical methods that docs/MATH.md specifies, each a function in plain
-//! Rust that the engine, the editor and the tests share. So far, the elementary
-//! functions of MATH §12:
+//! Rust that the engine, the editor and the tests share: those of milestone M1
+//! (docs/DESIGN.md §16). The elementary functions of MATH §12:
 //!
 //! - [`sin2pi`] and [`cos2pi`], the sine and cosine of a phase in turns, within
 //!   1 ulp of the correctly rounded result;
@@ -21,11 +21,11 @@
 //! the closed forms of antiderivative antialiasing of MATH §10, in [`adaa`]:
 //! [`adaa::first_order`], within 9 · 2⁻⁵³ absolute, and
 //! [`adaa::second_order`], within 5.5 · 10⁻¹³ absolute for the default of
-//! `adaa.tau2`; and the solver of Kepler's equation of MATH §9.4,
-//! [`kepler::solve`], whose residual is within 4u max(1, |Φ|).
-//!
-//! The tables of the Kapteyn series of the feedback operator (MATH §9.5) are
-//! still to come, in milestone M1 (docs/DESIGN.md §16).
+//! `adaa.tau2`; and the feedback operator of MATH §9: the solver of Kepler's
+//! equation, [`kepler::solve`], whose residual is within 4u max(1, |Φ|), and
+//! the coefficients of its Fourier series, the Kapteyn series, by a DFT and in
+//! tables of Chebyshev series in β, with the bounds of their tail, in
+//! [`kapteyn`].
 //!
 //! These are the portable forms, which every vector form in `keptone-kernels`
 //! must agree with to within its accuracy contract (MATH §0.2). They use
@@ -45,6 +45,7 @@ pub mod adaa;
 pub mod coefficients;
 mod eft;
 mod exponential;
+pub mod kapteyn;
 pub mod kepler;
 mod sinc;
 mod trig;
