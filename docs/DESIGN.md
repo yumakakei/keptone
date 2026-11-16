@@ -186,7 +186,7 @@ LV2: not planned (CLAP and VST3 cover the Linux hosts in use). AAX: no. AUv3: on
 ### 7.4 Parameters
 
 - One host parameter per voice parameter (155) and per function parameter (14). Settings that suit automation (MATH §17) get one too.
-- Every parameter is continuous (binary64). The display shows the DX7 grid. Exporting to `.syx` rounds by `syx.export_rounding = nearest | floor`, default `nearest`, and the export warns when that loses information.
+- Every parameter that is a number is continuous (binary64): a value of the DX7's scale that may lie between its steps (`keptone_model::voice::Value`). The enumerations (the algorithm, the curves of keyboard scaling, the oscillator mode, the LFO's wave) and the switches take only the DX7's steps. The display shows the DX7 grid. Exporting to `.syx` rounds by `syx.export_rounding = nearest | floor`, default `nearest` (a value halfway between two steps to the even one), and the export warns when that loses information, as it does for an operator switched off, which no dump holds.
 - Parameter IDs are stable forever. They are documented in `docs/STATE-FORMAT.md`.
 
 ## 8. Editor (GUI) and rendering
@@ -332,9 +332,9 @@ Specified in `docs/STATE-FORMAT.md`, which is written in milestone M2.
 
 ### 11.2 Voices and banks
 
-- DX7 `.syx` 1-voice and 32-voice dumps are read and written exactly [DEXED-SYSEX]. Concatenated and garbage-prefixed files are scanned for every well-formed message, not only the first.
+- DX7 `.syx` 1-voice and 32-voice dumps are read and written exactly [DEXED-SYSEX] (`keptone_model::syx`). Concatenated and garbage-prefixed files are scanned for every well-formed message, not only the first. A message cut short, by another status byte or by the end of the file, is reported, and the scan goes on from the byte that cut it.
 - Checksum mismatches are reported. The data is loaded only if `syx.accept_bad_checksum` (default `true`) allows it.
-- Out-of-range bytes are reported. They are mapped by an explicit, documented policy (`syx.out_of_range = clamp | reject`, default `clamp`), not by the ad-hoc scaling Dexed uses.
+- Out-of-range bytes are reported: a step beyond its parameter's range, and a packed byte that sets bits its format leaves unused. They are mapped by an explicit, documented policy (`syx.out_of_range = clamp | reject`, default `clamp`), not by the ad-hoc scaling Dexed uses: `clamp` takes a step beyond the range as the range's end and ignores unused bits, and `reject` refuses the message. A message is loaded or refused whole.
 - Later: DX7II/TX802 supplements (AMEM/ACED, the TX802 performance) and user graphs in the native format.
 
 ### 11.3 Themes

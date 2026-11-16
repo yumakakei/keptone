@@ -717,3 +717,6 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `engine.idle_s` | 0.5 | ≥ 0 | 13.4 |
 | `output.gain` | 0.5 | ≥ 0 | 14 |
 | `output.carrier_normalization` | none | none / count / sqrt-count | 14 |
+| `syx.accept_bad_checksum` | true | bool | DESIGN §11.2 |
+| `syx.out_of_range` | clamp | clamp / reject | DESIGN §11.2 |
+| `syx.export_rounding` | nearest | nearest / floor | DESIGN §7.4 |

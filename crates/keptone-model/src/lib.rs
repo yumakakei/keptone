@@ -10,12 +10,20 @@
 //!
 //! Every input becomes a typed value at exactly one boundary per format, and
 //! every field of a value is a range type, so that a value out of range cannot
-//! be represented (docs/DESIGN.md §2, §11): the voices and function data of the
-//! DX7 and their SysEx messages (single-voice and 32-voice dumps, parameter
-//! changes, requests), the native state, and Scala's `.scl` and `.kbm` files.
-//! Every parser is total: any bytes give a value or an error, never a panic and
-//! never an unbounded allocation.
+//! be represented (docs/DESIGN.md §2, §11). So far, in milestone M2
+//! (docs/DESIGN.md §16):
 //!
-//! Nothing is here yet: the crate is filled in milestone M2, with the
-//! specification of the native state (docs/DESIGN.md §16).
+//! - [`voice`]: the DX7's voice, every parameter a range type, and the numbers
+//!   the DX7 gives its parameters;
+//! - [`syx`]: the DX7's dumps of one voice and of 32, read from `.syx` files
+//!   and SysEx messages, however many a file holds, and written back byte for
+//!   byte.
+//!
+//! The function data, the parameter changes and requests, the native state and
+//! Scala's `.scl` and `.kbm` files come later in the milestone. Every parser is
+//! total: any bytes give a value or an error, never a panic and never an
+//! unbounded allocation.
 #![forbid(unsafe_code)]
+
+pub mod syx;
+pub mod voice;
