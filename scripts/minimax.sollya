@@ -6,10 +6,11 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 //
-// The polynomials of keptone-math (docs/MATH.md §12): each designed by
+// The polynomials of keptone-math (docs/MATH.md §9.4, §12): most designed by
 // fpminimax with binary64 coefficients -- the leading one a double-double, so
-// that the term that carries the result is not rounded -- and its error
-// certified by supnorm. scripts/minimax.py runs this file and writes
+// that the term that carries the result is not rounded -- and the Taylor
+// polynomials of sinc and of 2 pi t - sin 2 pi t rounded from their series, the
+// error of each certified by supnorm. scripts/minimax.py runs this file and writes
 // crates/keptone-math/src/coefficients.rs from what it prints, one line per
 // item:
 //
@@ -89,6 +90,32 @@ for k from 1 to 20 do {
 };
 display = decimal;
 print("bound", "sinc_taylor", "relative", round(sup(supnorm(t, ts, [2^-60; 2^-6], relative, 2^-24)), 24, RU));
+
+// (2 pi t - sin 2 pi t)/t^3 on |t| <= 1/4, for Kepler's equation near its
+// cusp: the Taylor polynomial to t^20, the series being the sum over k of
+// (-1)^k (2 pi)^(2k+3) t^(2k) / (2k+3)!, its constant term a double-double and
+// the rest rounded to nearest, and its error against the series to t^40, whose
+// next term is below 2^-200 there. With t^3 taken out the function has no zero,
+// so supnorm certifies the relative error, which is that of 2 pi t - sin 2 pi t.
+t = 0; ts = 0; fact = 6;
+for k from 0 to 20 do {
+  if k > 0 then fact = fact * (2*k + 2) * (2*k + 3);
+  c = (-1)^k * (2*pi)^(2*k + 3) / fact;
+  ts = ts + c * x^(2*k);
+  if k <= 10 then {
+    s = power(2*k);
+    display = hexadecimal;
+    hi = round(c, D, RN);
+    print("coefficient", "kepler", s, hi);
+    if k == 0 then {
+      lo = round(c - hi, D, RN);
+      print("low", "kepler", s, lo);
+      t = t + hi + lo;
+    } else t = t + hi * x^(2*k);
+  };
+};
+display = decimal;
+print("bound", "kepler", "relative", round(sup(supnorm(t, ts, [0; 1/4], relative, 2^-24)), 24, RU));
 
 // pi as a double-double (sinc).
 display = hexadecimal;

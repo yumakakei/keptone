@@ -40,6 +40,10 @@ DESCRIPTIONS = {
         "SINC_TAYLOR",
         "sinc u - 1 on |u| < 2^-6, the Taylor polynomial: u^2 (c2 + c4 u^2 + ... + c12 u^10)",
     ),
+    "kepler": (
+        "KEPLER",
+        "(2 pi t - sin 2 pi t)/t^3 on |t| <= 1/4, the Taylor polynomial: c0 + c2 t^2 + ... + c20 t^20",
+    ),
     "pi": ("PI", "π"),
 }
 

@@ -402,11 +402,13 @@ $`h(\Theta) = \Theta - \beta\,\sin\,\Theta`$ has $`h' = 1 - \beta\,\cos\,\Theta`
 
 Safeguarded Newton on $`h(\Theta) - \Phi`$:
 
-- Reduce Φ to $`[-\pi, \pi)`$. The solution keeps Φ's sign, by odd symmetry.
-- Bracket: $`\Theta \in [\Phi - \beta, \Phi + \beta]`$, since $`\left|\sin\right| \le 1`$.
-- Start from the previous sample's Θ advanced by the change in Φ (continuation). On a cold start, use [MARKLEY]'s starter.
-- If a Newton step leaves the bracket, take a bisection step instead [ODELL-GOODING].
+- Reduce Φ to $`[-\pi, \pi]`$. The solution keeps Φ's sign, by odd symmetry: solve for $`\left|\Phi\right|`$ and give the sign back.
+- Bracket: for $`\Phi \ge 0`$, $`\Theta \in [\Phi, \mathrm{min}(\Phi + \beta, \pi)]`$, since $`0 \le \sin\,\Theta \le 1`$ there. On it $`h`$ is increasing and convex, so a Newton step from a point where $`h(\Theta) \gt \Phi`$ goes down to the root and no further.
+- Start every sample from [MARKLEY]'s starter, his equations (5), (9), (10), (14), (15) and (20), within a relative 2.8·10⁻⁴ of the solution; the solver keeps no state. Continuation from the previous sample's Θ advanced by the change in Φ, specified here first, took up to 11 iterations near the cusp in measurements made while the solver was written, where the starter takes at most 4.
+- If a Newton step leaves the bracket, take the bracket's top instead while it is still $`\mathrm{min}(\Phi + \beta, \pi)`$, from which Newton converges monotonically, and bisect otherwise [ODELL-GOODING]. Bisection alone, specified here first, crept up to the top linearly where $`\Theta \approx \pi/2`$, the root then lying within about 10⁻¹² of $`\Phi + \beta`$, and took up to 14 iterations on the grid of §16.
+- Near the cusp $`h(\Theta) - \Phi`$ cancels. Evaluate it as $`(1 - \beta)\Theta + \beta\cdot(\Theta - \sin\,\Theta) - \Phi`$, with $`\Theta - \sin\,\Theta`$ from its own Taylor polynomial below $`\Theta = \pi/2`$, and $`h'`$ as $`1 - \beta + 2\beta\,\sin^2(\Theta/2)`$ [MARKLEY], so that the residual errs by less than $`u\left|\Phi\right|`$ and the stopping rule can be met.
 - Stop when $`\left|\text{step}\right| \le 2u\,\mathrm{max}(1, \left|\Theta\right|)`$, with $`u = 2^{-53}`$, or after `feedback.max_iterations` (default 16).
+- `keptone-math::kepler` works in turns, $`\Theta = 2\pi\tau`$ and $`\Phi = 2\pi\varphi`$, where sin2pi and cos2pi reduce exactly; Newton's iteration and the stopping rule carry over as they are.
 - The tests record the distribution of iteration counts and fail if any case in the test grid needs more than 8.
 
 ### 9.5 Band-limited form
@@ -646,7 +648,7 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 | sin2pi, cos2pi, exp2 | against CORE-MATH, ≥ 10⁸ random inputs and special points | ≤ 1 ulp |
 | sinc, sinc' | against MPFR-precision references (`scripts/` with mpmath) | ≤ 2 ulp; sinc' for $`\left\|u\right\| \ge 1/2`$: ≤ $`9 \cdot 2^{-53}`$ absolute |
 | ADAA-1, ADAA-2 | against mpmath references of the closed forms and of the divided difference, the inputs exact (`scripts/adaa_references.py`): special points (still, steady and reversing phases, $`h`$ on either side of $`\tau_2`$) and random inputs; ADAA-2 at $`\tau_2 = 2^{-12}, 2^{-10}, 2^{-8}`$; three equal points give $`\sin\,2\pi x`$ | ≤ $`9 \cdot 2^{-53}`$ absolute; ≤ $`\mathrm{max}(4.81u/\tau_2 + 4.35u,\ 0.271\tau_2^4 + 14u)`$ absolute |
-| Kepler solver | residual over a β × Φ grid (β ∈ [0, 0.999], 10⁶ points), and iteration counts | $`\left\| h(\Theta) - \Phi\right\| \le 4u\,\mathrm{max}(1,\left\|\Phi\right\|)`$; ≤ 8 iterations |
+| Kepler solver | residual over a β × Φ grid (β ∈ [0, 0.999], 10⁶ points), and iteration counts; the same nearer the cusp, β up to 1 − 2⁻⁵² and Φ down to 10⁻³⁰⁰, the residual in double-double | $`\left\| h(\Theta) - \Phi\right\| \le 4u\,\mathrm{max}(1,\left\|\Phi\right\|)`$; ≤ 8 iterations |
 | Kapteyn coefficients | against mpmath for n ≤ 2000, β on a grid | ≤ 1e-15 absolute |
 | Series vs point solution | where both apply and the tail is negligible | ≤ 1e-14 |
 | EG | closed form vs high-precision integration of the ODE; segment times vs §4.3's $`t^{\ast}`$ | ≤ 1e-12 relative |

@@ -25,3 +25,13 @@ pub(crate) fn fast_two_sum(a: f64, b: f64) -> (f64, f64) {
     let s = a + b;
     (s, b - (s - a))
 }
+
+/// a + b as (s, e) with s = fl(a + b) and s + e = a + b exactly, whatever the
+/// sizes of a and b, unless the sum overflows (Knuth's two-sum).
+#[inline]
+pub(crate) fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let s = a + b;
+    let a_part = s - b;
+    let b_part = s - a_part;
+    (s, (a - a_part) + (b - b_part))
+}

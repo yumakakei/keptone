@@ -125,6 +125,33 @@ pub(crate) const SINC_TAYLOR_10: f64 = f64::from_bits(0xbf63_3816_aa46_07ab); //
 /// The coefficient of power 12.
 pub(crate) const SINC_TAYLOR_12: f64 = f64::from_bits(0x3f23_7471_9fab_3915); // 0x1.374719fab3915p-13
 
+// (2 pi t - sin 2 pi t)/t^3 on |t| <= 1/4, the Taylor polynomial: c0 + c2 t^2 + ... + c20 t^20.
+// Certified relative error ≤ 3.96e-18 (3.957119140300070908307199235576234741529333405196666717529297e-18).
+/// The coefficient of power 0, high part.
+pub(crate) const KEPLER_0_HI: f64 = f64::from_bits(0x4044_abbc_e625_be53); // 0x1.4abbce625be53p5
+/// The coefficient of power 0, low part.
+pub(crate) const KEPLER_0_LO: f64 = f64::from_bits(0xbce0_5511_c684_76a8); // -0x1.05511c68476a8p-49
+/// The coefficient of power 2.
+pub(crate) const KEPLER_2: f64 = f64::from_bits(0xc054_66bc_6775_aae2); // -0x1.466bc6775aae2p6
+/// The coefficient of power 4.
+pub(crate) const KEPLER_4: f64 = f64::from_bits(0x4053_2d2c_ce62_bd86); // 0x1.32d2cce62bd86p6
+/// The coefficient of power 6.
+pub(crate) const KEPLER_6: f64 = f64::from_bits(0xc045_0783_487e_e782); // -0x1.50783487ee782p5
+/// The coefficient of power 8.
+pub(crate) const KEPLER_8: f64 = f64::from_bits(0x402e_3074_fde8_871f); // 0x1.e3074fde8871fp3
+/// The coefficient of power 10.
+pub(crate) const KEPLER_10: f64 = f64::from_bits(0xc00e_8f43_4d01_8d63); // -0x1.e8f434d018d63p1
+/// The coefficient of power 12.
+pub(crate) const KEPLER_12: f64 = f64::from_bits(0x3fe6_fadb_9f15_5744); // 0x1.6fadb9f155744p-1
+/// The coefficient of power 14.
+pub(crate) const KEPLER_14: f64 = f64::from_bits(0xbfba_aec3_2af9_3359); // -0x1.aaec32af93359p-4
+/// The coefficient of power 16.
+pub(crate) const KEPLER_16: f64 = f64::from_bits(0x3f88_a404_211f_9547); // 0x1.8a404211f9547p-7
+/// The coefficient of power 18.
+pub(crate) const KEPLER_18: f64 = f64::from_bits(0xbf52_8770_20d5_2cf0); // -0x1.2877020d52cfp-10
+/// The coefficient of power 20.
+pub(crate) const KEPLER_20: f64 = f64::from_bits(0x3f17_215f_879e_1ac9); // 0x1.7215f879e1ac9p-14
+
 // π.
 /// The coefficient of power 0, high part.
 pub(crate) const PI_0_HI: f64 = f64::from_bits(0x4009_21fb_5444_2d18); // 0x1.921fb54442d18p1

@@ -18,13 +18,14 @@
 //!   where |u| < 1/2 and within an absolute 9 · 2⁻⁵³ elsewhere;
 //! - [`exp2`], the exponential of base 2, within 1 ulp;
 //!
-//! and the closed forms of antiderivative antialiasing of MATH §10, in
-//! [`adaa`]: [`adaa::first_order`], within 9 · 2⁻⁵³ absolute, and
+//! the closed forms of antiderivative antialiasing of MATH §10, in [`adaa`]:
+//! [`adaa::first_order`], within 9 · 2⁻⁵³ absolute, and
 //! [`adaa::second_order`], within 5.5 · 10⁻¹³ absolute for the default of
-//! `adaa.tau2`.
+//! `adaa.tau2`; and the solver of Kepler's equation of MATH §9.4,
+//! [`kepler::solve`], whose residual is within 4u max(1, |Φ|).
 //!
-//! The solver of Kepler's equation and the tables of its Kapteyn series (MATH
-//! §9) are still to come, in milestone M1 (docs/DESIGN.md §16).
+//! The tables of the Kapteyn series of the feedback operator (MATH §9.5) are
+//! still to come, in milestone M1 (docs/DESIGN.md §16).
 //!
 //! These are the portable forms, which every vector form in `keptone-kernels`
 //! must agree with to within its accuracy contract (MATH §0.2). They use
@@ -44,6 +45,7 @@ pub mod adaa;
 pub mod coefficients;
 mod eft;
 mod exponential;
+pub mod kepler;
 mod sinc;
 mod trig;
 
