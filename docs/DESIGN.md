@@ -59,7 +59,7 @@ The project's analysis of Dexed 1.1.0 and AV Dexed found these classes of defect
 ```
 Cargo.toml  Cargo.lock  rust-toolchain.toml  rustfmt.toml  clippy.toml  ruff.toml  .cargo/config.toml
 CMakeLists.txt  CMakePresets.json        # only the C++ wrappers and the C layout tests
-REUSE.toml  LICENSE  LICENSES/  README.md  README.ja.md  .gitignore  .gitattributes
+REUSE.toml  LICENSE  LICENSES/  README.md  README.ja.md  .gitignore  .gitattributes  .gitmodules
 .github/workflows/ci.yml                 # the CI jobs of §13.2, each running a script of ci/
 crates/
   keptone-cpu/        processor features and the level in effect (as kiral-cpu)
@@ -85,7 +85,7 @@ fuzz/
   dict/  seeds/  regressions/<target>/
 bench/baselines.toml
 scripts/            Python (ruff-checked): mpmath references, Sollya drivers, filter design checks
-ci/                 setup.sh  rust.sh  targets.sh  emulated.sh  python.sh  wrappers.sh  fuzz.sh  sanitizers.sh
+ci/                 setup.sh  core-math.sh  rust.sh  targets.sh  emulated.sh  python.sh  wrappers.sh  fuzz.sh  sanitizers.sh
 thirdparty/         git submodules, pinned commits (§12)
 docs/               DESIGN.md  MATH.md  UI.md  REFERENCES.md  VERIFICATION.md  STATE-FORMAT.md  DEPENDENCIES.md
   mockups/          editor mockups (HTML, PNG) and their README
@@ -363,7 +363,7 @@ Dependencies are kept to the minimum for their own sake, not banned. Each one is
 | VST 3 SDK ≥ 3.8 | submodule | wrappers/ | MIT | VST3 |
 | AudioUnitSDK | submodule | wrappers/ (macOS) | Apache-2.0 | AUv2 |
 | FreeType, HarfBuzz | submodules | keptone-ui | FreeType (FTL or GPLv2), HarfBuzz (Old MIT) | text. Record which FreeType license option is taken, and why, in DEPENDENCIES.md |
-| CORE-MATH | submodule | tests only | MIT | correctly rounded oracle |
+| CORE-MATH | submodule | tests only: the few files they compile, which `ci/core-math.sh` fetches | MIT | correctly rounded oracle |
 | MTS-ESP client | submodule | optional feature | 0BSD | dynamic tuning (loads the user's `libMTS`) |
 | libfuzzer-sys | crates.io | fuzz/libfuzzer only (nightly) | MIT/Apache-2.0 | coverage-guided fuzzing |
 | loom | crates.io | keptone-rt dev-dependency | MIT | exhaustive interleaving tests of the queues |
@@ -392,7 +392,7 @@ As kiral and JPEG-Unround:
 
 GitHub Actions, plain git checkout, no third-party actions:
 
-1. **rust** (Linux, Windows, macOS): `cargo fmt --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; the documentation with every rustdoc warning an error; tests in dev and release, at every level the runner has.
+1. **rust** (Linux, Windows, macOS): `cargo fmt --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; the documentation with every rustdoc warning an error; tests in dev and release, at every level the runner has, with the files of CORE-MATH that `ci/core-math.sh` fetches for them.
 2. **targets**: the x86-64-v4 build, tested where the runner has AVX-512. The v3 build is the default one (§10.1), which the rust job builds and tests. **emulated**: SDE runs on a machine of one's own.
 3. **wrappers**: CMake builds of VST3, AUv2 (macOS) and standalone; then clap-validator, pluginval at strictness 10, and auval.
 4. **sanitizers**:

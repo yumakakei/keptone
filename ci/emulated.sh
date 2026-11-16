@@ -27,6 +27,10 @@
 # The models, by default: Haswell (the first with all of x86-64-v3), Alder Lake
 # and Arrow Lake (x86-64-v3 and no AVX-512), Skylake-SP (the first with all of
 # x86-64-v4), Ice Lake-SP and Sapphire Rapids.
+#
+# The tests of keptone-math against CORE-MATH take 10⁸ random inputs for each
+# function in the release profile, and 10⁶ here, unless KEPTONE_ORACLE_INPUTS
+# says otherwise; they need CORE-MATH's files (ci/core-math.sh).
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -40,6 +44,7 @@ if [[ ${#models[@]} -eq 0 ]]; then
     models=(hsw adl arl skx icx spr)
 fi
 triple=x86_64-unknown-linux-gnu
+export KEPTONE_ORACLE_INPUTS=${KEPTONE_ORACLE_INPUTS:-1000000}
 
 # The builds each model runs besides the default one.
 builds_of() {

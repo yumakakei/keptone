@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# CORE-MATH, under the MIT license (its LICENSE), serves the tests alone: they
+# compare keptone-math with its correctly rounded functions
+# (docs/DEPENDENCIES.md). ci/core-math.sh fetches from the URL here, at the
+# commit that the submodule records, the three files that the tests compile and
+# the license, and nothing else.
+
+[submodule "thirdparty/core-math"]
+	path = thirdparty/core-math
+	url = https://gitlab.inria.fr/core-math/core-math.git

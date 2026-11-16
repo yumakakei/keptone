@@ -28,7 +28,7 @@ English | [日本語](README.ja.md)
 
 ## Where it stands
 
-The workspace: milestone M0 of the plan ([docs/DESIGN.md](docs/DESIGN.md) §16). Thirteen crates, still empty, under the project's lints; the toolchain files; the CI on Windows, Ubuntu and macOS; and the specification. Nothing plays yet.
+Milestone M1 of the plan ([docs/DESIGN.md](docs/DESIGN.md) §16) is under way. M0 set up the workspace: thirteen crates under the project's lints, the toolchain files, the CI on Windows, Ubuntu and macOS, and the specification. So far in M1, `keptone-math` has its elementary functions: the sine and cosine of a phase in turns, the exponential of base 2, and sinc and its derivative, each tested against CORE-MATH's correctly rounded functions or against references computed with mpmath. The other crates are still empty, and nothing plays yet.
 
 | Crate | What it is to hold | Milestone |
 | --- | --- | --- |
@@ -66,10 +66,14 @@ cargo build --release --locked
 ```
 
 ```bash
+bash ci/core-math.sh
+```
+
+```bash
 bash ci/rust.sh
 ```
 
-`ci/rust.sh` checks the layout, clippy with every warning an error, and the documentation, and runs the tests in the dev and the release profile. `bash ci/targets.sh test` builds the workspace for x86-64-v4 with vectors of 512 bits, and tests it where the processor has AVX-512. `bash ci/emulated.sh <sde64>` runs the tests under [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) as Haswell, Alder Lake, Arrow Lake, Skylake-SP, Ice Lake-SP and Sapphire Rapids. `bash ci/python.sh` checks `scripts/` with ruff, and `reuse lint` the licensing of every file.
+`ci/core-math.sh` fetches the files of CORE-MATH that the tests of `keptone-math` compile with Clang and compare with, at the commit that the submodule `thirdparty/core-math` records; `git submodule update --init` fetches all of CORE-MATH instead. `ci/rust.sh` checks the layout, clippy with every warning an error, and the documentation, and runs the tests in the dev and the release profile. `bash ci/targets.sh test` builds the workspace for x86-64-v4 with vectors of 512 bits, and tests it where the processor has AVX-512. `bash ci/emulated.sh <sde64>` runs the tests under [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) as Haswell, Alder Lake, Arrow Lake, Skylake-SP, Ice Lake-SP and Sapphire Rapids. `bash ci/python.sh` checks `scripts/` with ruff, and `reuse lint` the licensing of every file.
 
 ## License
 

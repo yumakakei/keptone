@@ -9,21 +9,39 @@
 //! Keptone's reference functions, scalar and in binary64.
 //!
 //! The numerical methods that docs/MATH.md specifies, each a function in plain
-//! Rust that the engine, the editor and the tests share:
+//! Rust that the engine, the editor and the tests share. So far, the elementary
+//! functions of MATH §12:
 //!
-//! - the sine and cosine of a phase in turns, sinc and its derivative, and the
-//!   exponential of base 2 (MATH §12), each within a stated bound of the
-//!   correctly rounded result;
-//! - the closed forms of first- and second-order antiderivative antialiasing for
-//!   the sine (MATH §10);
-//! - the solver of Kepler's equation for the feedback operator, and the tables of
-//!   its Kapteyn series (MATH §9).
+//! - [`sin2pi`] and [`cos2pi`], the sine and cosine of a phase in turns, within
+//!   1 ulp of the correctly rounded result;
+//! - [`sinc`], within 2 ulp, and its derivative [`sinc_prime`], within 2 ulp
+//!   where |u| < 1/2 and within an absolute 9 · 2⁻⁵³ elsewhere;
+//! - [`exp2`], the exponential of base 2, within 1 ulp.
+//!
+//! The closed forms of antiderivative antialiasing (MATH §10), the solver of
+//! Kepler's equation and the tables of its Kapteyn series (MATH §9) are still to
+//! come, in milestone M1 (docs/DESIGN.md §16).
 //!
 //! These are the portable forms, which every vector form in `keptone-kernels`
 //! must agree with to within its accuracy contract (MATH §0.2). They use
 //! `f64::mul_add` where a fused operation is the more accurate, and fixed orders
-//! of summation, and they never change the floating-point environment.
-//!
-//! Nothing is here yet: the crate is filled in milestone M1 (docs/DESIGN.md
-//! §16).
+//! of summation, and they never change the floating-point environment. Their
+//! polynomials were designed by Sollya with binary64 coefficients and their
+//! approximation errors certified ([`coefficients`] says by how much), so that
+//! what remains of each contract is the rounding of the evaluation, which each
+//! function's documentation bounds to first order in u = 2⁻⁵³ (Horner's scheme
+//! with fused steps as in \[HIGHAM\] §5.1), with the constants that
+//! `scripts/rounding_bounds.py` computes from the coefficients. The tests
+//! compare them with CORE-MATH's correctly rounded functions and with references
+//! computed by mpmath.
 #![forbid(unsafe_code)]
+
+pub mod coefficients;
+mod eft;
+mod exponential;
+mod sinc;
+mod trig;
+
+pub use exponential::exp2;
+pub use sinc::{sinc, sinc_prime};
+pub use trig::{cos2pi, sin2pi};

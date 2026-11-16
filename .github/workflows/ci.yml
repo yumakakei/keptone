@@ -16,7 +16,9 @@
 # and the release profile. The x86-64 builds are for x86-64-v3, the macOS ones
 # for Apple silicon, macOS 26.0 and later. ci/setup.sh, before it, installs the
 # pinned LLVM and checks that its Clang contracts floating-point operations as
-# the project needs.
+# the project needs, and ci/core-math.sh fetches the files of CORE-MATH that the
+# tests of keptone-math compile with that Clang, to compare its functions with
+# CORE-MATH's correctly rounded ones.
 #
 # The targets job builds the workspace for x86-64-v4, with vectors of 512 bits,
 # and tests the build where the runner has AVX-512 (ci/targets.sh). The levels no
@@ -27,8 +29,9 @@
 # checks with reuse lint, from Ubuntu's reuse package, that every file names its
 # copyright holder and license (REUSE.toml, LICENSES/).
 #
-# The checkout is plain git, and ci/setup.sh installs a pinned LLVM toolchain,
-# as in kiral, JPEG-Unround and ADLplug-Next. No action from elsewhere is used.
+# The checkout is plain git, CORE-MATH's files included (ci/core-math.sh), and
+# ci/setup.sh installs a pinned LLVM toolchain, as in kiral, JPEG-Unround and
+# ADLplug-Next. No action from elsewhere is used.
 
 name: CI
 
@@ -72,6 +75,9 @@ jobs:
       - name: Set up the toolchain
         run: bash ci/setup.sh
 
+      - name: Fetch CORE-MATH for the tests
+        run: bash ci/core-math.sh
+
       - name: Check and test
         run: bash ci/rust.sh
 
@@ -96,6 +102,9 @@ jobs:
 
       - name: Set up the toolchain
         run: bash ci/setup.sh
+
+      - name: Fetch CORE-MATH for the tests
+        run: bash ci/core-math.sh
 
       - name: Build for x86-64-v4, and test where the runner has it
         run: bash ci/targets.sh test

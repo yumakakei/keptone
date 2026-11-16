@@ -555,7 +555,7 @@ Estimate each carrier's bandwidth $`B = 2(\Delta f + f_{\text{mod}})`$ [CARSON],
 
 ## 12. Elementary functions (`keptone-math`)
 
-All are portable Rust (the reference) with optional vector forms (DESIGN §10). Their tests compare against [CORE-MATH]'s correctly rounded functions.
+All are portable Rust (the reference) with optional vector forms (DESIGN §10). Their tests compare against [CORE-MATH]'s correctly rounded functions, and sinc and sinc′, which CORE-MATH does not have, against references computed with mpmath (§16).
 
 ### 12.1 sin and cos of turns
 
@@ -569,9 +569,11 @@ Target: ≤ 1 ulp against `cr_sinpi(2r)` (2r is exact). `cos2pi` is analogous.
 
 ### 12.2 sinc and its derivative
 
-- For $`\left|u\right| \ge 2^{-6}`$: $`\mathrm{sinc}(u) = \mathrm{sin2pi}(u/2)/(\pi u)`$.
+- For $`\left|u\right| \ge 2^{-6}`$: $`\mathrm{sinc}(u) = \mathrm{sin2pi}(u/2)/(\pi u)`$, with $`\pi u`$ as a double-double.
 - Below: an even Taylor polynomial to degree 12, exact to < 1 ulp on that range.
-- $`\mathrm{sinc}'(u) = (\cos\,\pi u - \mathrm{sinc}\,u)/u`$ above the threshold, and an odd series below it.
+- For $`\left|u\right| \ge 1/2`$: $`\mathrm{sinc}'(u) = (\cos\,\pi u - \mathrm{sinc}\,u)/u`$. Below: an odd minimax polynomial. The formula cancels as $`u \to 0`$, and near the zeros of sinc′ ($`u \approx 1.4303, 2.4590, \ldots`$) no error bound relative to the result can hold, so from 1/2 on its bound is absolute, which is what ADAA-2 needs of it (§10.3).
+
+Targets: sinc ≤ 2 ulp; sinc′ ≤ 2 ulp for $`\left|u\right| \lt 1/2`$, and within $`9 \cdot 2^{-53}`$ absolute from 1/2 on.
 
 ### 12.3 Exponentials
 
@@ -631,10 +633,12 @@ No recursive state is allowed to decay into subnormals:
 
 ## 16. Tests and tolerances
 
+An error in ulp is measured from the correctly rounded result, in units in the last place of that result, as against CORE-MATH; an absolute error, from the exact value.
+
 | What | Check | Tolerance |
 | --- | --- | --- |
 | sin2pi, cos2pi, exp2 | against CORE-MATH, ≥ 10⁸ random inputs and special points | ≤ 1 ulp |
-| sinc, sinc' | against MPFR-precision references (`scripts/` with mpmath) | ≤ 2 ulp |
+| sinc, sinc' | against MPFR-precision references (`scripts/` with mpmath) | ≤ 2 ulp; sinc' for $`\left\|u\right\| \ge 1/2`$: ≤ $`9 \cdot 2^{-53}`$ absolute |
 | Kepler solver | residual over a β × Φ grid (β ∈ [0, 0.999], 10⁶ points), and iteration counts | $`\left\| h(\Theta) - \Phi\right\| \le 4u\,\mathrm{max}(1,\left\|\Phi\right\|)`$; ≤ 8 iterations |
 | Kapteyn coefficients | against mpmath for n ≤ 2000, β on a grid | ≤ 1e-15 absolute |
 | Series vs point solution | where both apply and the tail is negligible | ≤ 1e-14 |

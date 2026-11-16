@@ -1,0 +1,98 @@
+// SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Keptone. The SPDX lines name its copyright holder and its
+// license, in the machine-readable form of the REUSE specification: the GNU
+// General Public License, version 3 or any later version
+// (LICENSES/GPL-3.0-or-later.txt).
+//
+// The polynomials of keptone-math (docs/MATH.md §12): each designed by
+// fpminimax with binary64 coefficients -- the leading one a double-double, so
+// that the term that carries the result is not rounded -- and its error
+// certified by supnorm. scripts/minimax.py runs this file and writes
+// crates/keptone-math/src/coefficients.rs from what it prints, one line per
+// item:
+//
+//   coefficient <polynomial> <power> <binary64, hexadecimal>
+//   low <polynomial> <power> <binary64, hexadecimal>   (the low part of a double-double)
+//   bound <polynomial> <relative|absolute> <upper bound, decimal>
+//
+// The degrees are the least that reach about 2^-63, below which rounding the
+// coefficients to binary64 gains nothing.
+
+prec = 200;
+verbosity = 0;
+
+// A power as a decimal string, whatever the display mode later.
+procedure power(k) {
+  var s;
+  display = decimal;
+  s = "" @ k;
+  return s;
+};
+
+procedure emit(name, p, mons, kind, e) {
+  var k, c, hi, s;
+  for k in mons do {
+    s = power(k);
+    display = hexadecimal;
+    c = coeff(p, k);
+    hi = round(c, D, RN);
+    print("coefficient", name, s, hi);
+    if c != hi then print("low", name, s, round(c - hi, D, RN));
+  };
+  display = decimal;
+  print("bound", name, kind, round(sup(e), 24, RU));
+};
+
+procedure fit(name, f, mons, I, kind) {
+  var k, fmts, p, e;
+  fmts = [||];
+  for k in mons do { if fmts == [||] then fmts = fmts :. DD else fmts = fmts :. D; };
+  p = fpminimax(f, mons, fmts, I, floating, kind);
+  e = supnorm(p, f, I, kind, 2^-24);
+  emit(name, p, mons, kind, e);
+};
+
+// sin 2 pi t on |t| <= 1/8 (sin2pi, cos2pi): odd, degree 15.
+fit("sin_2pi", sin(2*pi*x), [|1, 3, 5, 7, 9, 11, 13, 15|], [2^-60; 1/8], relative);
+
+// cos 2 pi t - 1 on |t| <= 1/8: even, degree 16, error relative to cos 2 pi t - 1.
+fit("cos_2pi", cos(2*pi*x) - 1, [|2, 4, 6, 8, 10, 12, 14, 16|], [2^-60; 1/8], relative);
+
+// 2^r - 1 on |r| <= 1/2 (exp2): degree 12.
+fit("exp2", 2^x - 1, [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12|], [-1/2; 1/2], absolute);
+
+// sinc'(u) on |u| < 1/2: odd, degree 19. sinc' is given as its Taylor series,
+// sum over k >= 1 of (-1)^k pi^(2k) 2k u^(2k-1) / (2k+1)!, to k = 30, whose
+// next term is below 2^-180 there; the closed form (cos pi u - sinc u)/u
+// cancels as u goes to 0.
+sp = 0; fact = 1;
+for k from 1 to 30 do { fact = fact * (2*k) * (2*k + 1); sp = sp + (-1)^k * pi^(2*k) * 2 * k * x^(2*k - 1) / fact; };
+fit("sinc_prime", sp, [|1, 3, 5, 7, 9, 11, 13, 15, 17, 19|], [2^-60; 1/2], relative);
+
+// sinc u on |u| < 2^-6: its Taylor polynomial to degree 12, the coefficients
+// (-1)^k pi^(2k) / (2k+1)! rounded to nearest, and the error of that polynomial
+// against the series to k = 20, whose next term is below 2^-400 there (a
+// division by u would keep supnorm from certifying near 0).
+t = 1; ts = 1; fact = 1;
+for k from 1 to 20 do {
+  fact = fact * (2*k) * (2*k + 1);
+  ts = ts + (-1)^k * pi^(2*k) * x^(2*k) / fact;
+  if k <= 6 then {
+    s = power(2*k);
+    display = hexadecimal;
+    c = round((-1)^k * pi^(2*k) / fact, D, RN);
+    print("coefficient", "sinc_taylor", s, c);
+    t = t + c * x^(2*k);
+  };
+};
+display = decimal;
+print("bound", "sinc_taylor", "relative", round(sup(supnorm(t, ts, [2^-60; 2^-6], relative, 2^-24)), 24, RU));
+
+// pi as a double-double (sinc).
+display = hexadecimal;
+print("coefficient", "pi", "0", round(pi, D, RN));
+print("low", "pi", "0", round(pi - round(pi, D, RN), D, RN));
+
+quit;
