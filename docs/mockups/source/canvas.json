@@ -1,0 +1,59 @@
+{
+ "v": 3,
+ "createdOnFiles": {
+  "v": 1,
+  "at": "2026-11-16T05:11:49Z"
+ },
+ "title": "Keptone エディタ — ビジュアル方向性モックアップ",
+ "launch": {
+  "view": "canvas"
+ },
+ "pages": [],
+ "boards": {
+  "Main.dc.html": {
+   "x": 0,
+   "y": 0,
+   "w": 1200,
+   "h": 760,
+   "title": "Built-in theme: membrane (default)"
+  },
+  "CityNight.dc.html": {
+   "x": 1280,
+   "y": 0,
+   "w": 1200,
+   "h": 760,
+   "title": "Built-in theme: city-night"
+  },
+  "Cyber.dc.html": {
+   "x": 2560,
+   "y": 0,
+   "w": 1200,
+   "h": 760,
+   "title": "Built-in theme: ideal-compute"
+  },
+  "ValueEditor.dc.html": {
+   "x": 0,
+   "y": 880,
+   "w": 1000,
+   "h": 600,
+   "title": "Value editor popovers — interactive (try the slider, the text field, the ratios, the theme buttons)",
+   "is_interactive": true
+  }
+ },
+ "order": [
+  "Main.dc.html",
+  "CityNight.dc.html",
+  "Cyber.dc.html",
+  "ValueEditor.dc.html"
+ ],
+ "notes": {
+  "title": {
+   "x": 0,
+   "y": -260,
+   "text": "Keptone editor — three built-in themes, same layout",
+   "kind": "title1",
+   "maxW": 3760
+  }
+ },
+ "designSystems": []
+}

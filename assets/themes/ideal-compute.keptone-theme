@@ -1,0 +1,50 @@
+{
+  "format": 1,
+  "name": "ideal-compute",
+  "title": "Ideal Compute",
+  "variant": "dark",
+  "colors": {
+    "ground": "#07090C",
+    "panel": "#0B0F13",
+    "panel_raised": "#10161C",
+    "field": "#090D11",
+    "canvas": "#07090C",
+    "rule": "#1E2A33",
+    "text": "#E6F2F0",
+    "text_secondary": "#8FA7A6",
+    "accent": "#3CF0C5",
+    "accent_ink": "#02130E",
+    "edge": "#3A5260",
+    "bus": "#3CF0C5",
+    "node_carrier_fill": "#0E151A",
+    "node_modulator_fill": "#07090C",
+    "node_carrier_border": "#5D7A86",
+    "node_modulator_border": "#3A5260",
+    "row_selected": "#0F1A1C",
+    "plot_fill": "#24414A",
+    "operators": [
+      "#E6F2F0",
+      "#B9F35A",
+      "#3CF0C5",
+      "#62B7FF",
+      "#FF8A7A",
+      "#C79BFF"
+    ]
+  },
+  "geometry": {
+    "radius": 0,
+    "node_radius": 0,
+    "stroke": 1,
+    "stroke_strong": 2
+  },
+  "type": {
+    "ui": "Space Grotesk",
+    "numerals": "JetBrains Mono"
+  },
+  "style": {
+    "labels": "upper",
+    "canvas": "dots",
+    "numbers": "full",
+    "meters": "bar"
+  }
+}

@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# The Rust toolchain of Keptone: the latest stable, with clippy and rustfmt.
+# Cargo.toml's rust-version is the stable release at the project's start.
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

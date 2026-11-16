@@ -1,0 +1,50 @@
+{
+  "format": 1,
+  "name": "city-night",
+  "title": "City Night",
+  "variant": "dark",
+  "colors": {
+    "ground": "#0E1322",
+    "panel": "#131A2D",
+    "panel_raised": "#1A2238",
+    "field": "#111829",
+    "canvas": "#0B101D",
+    "rule": "#2A3452",
+    "text": "#EEF1F8",
+    "text_secondary": "#A3ADC8",
+    "accent": "#F4B76E",
+    "accent_ink": "#241503",
+    "edge": "#4A5679",
+    "bus": "#8FE3D0",
+    "node_carrier_fill": "#1C2540",
+    "node_modulator_fill": "#141B2F",
+    "node_carrier_border": "#7D8BB3",
+    "node_modulator_border": "#56638A",
+    "row_selected": "#1C2540",
+    "plot_fill": "#3A4670",
+    "operators": [
+      "#EEF1F8",
+      "#F4B76E",
+      "#8FE3D0",
+      "#9DB8FF",
+      "#F59BB6",
+      "#C9B2FF"
+    ]
+  },
+  "geometry": {
+    "radius": 8,
+    "node_radius": 14,
+    "stroke": 1,
+    "stroke_strong": 2
+  },
+  "type": {
+    "ui": "Manrope",
+    "numerals": "DM Mono"
+  },
+  "style": {
+    "labels": "as-written",
+    "canvas": "skyline",
+    "numbers": "compact",
+    "meters": "bar"
+  }
+}

@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# The rules of the Python of the repository, which is scripts/ alone: kiral's and
+# JPEG-Unround's, lines of up to 120 columns as in the Rust.
+line-length = 120
+target-version = "py314"
+src = ["scripts"]
+# scripts/verify_spec_math.py is the record of the numerical checks run while
+# docs/MATH.md was written, kept as it was run. Its header says that milestone M1
+# replaces it with generators of reference vectors, which these rules check.
+extend-exclude = ["scripts/verify_spec_math.py"]
+
+[lint]
+select = [
+  "A", "ANN", "ARG", "B", "BLE", "C4", "E", "ERA", "F", "FBT", "FURB", "I", "N", "PERF",
+  "PL", "PTH", "RET", "RUF", "S", "SIM", "T20", "TRY", "UP", "W",
+]
+ignore = [
+  "TRY003",  # an exception says what went wrong where it is raised
+]
+
+# Command-line programs print, and compare with the numbers of the formats and
+# of the laws they check.
+[lint.per-file-ignores]
+"scripts/**" = ["T201", "PLR2004"]

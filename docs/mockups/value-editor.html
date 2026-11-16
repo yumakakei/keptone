@@ -1,0 +1,157 @@
+<!doctype html>
+<!--
+SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Keptone — value editor popovers</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&family=JetBrains+Mono:wght@400;600&family=Manrope:wght@400;600;700&family=Space+Grotesk:wght@400;600&display=swap">
+<style>
+body { margin: 0 }
+* { box-sizing: border-box }
+#app { width: 1000px; height: 600px; padding: 24px 28px; display: flex; flex-direction: column; gap: 18px;
+  background: var(--bg); color: var(--text); font-family: var(--ui) }
+.lab { font-family: var(--ui); font-size: 11px; color: var(--text2); text-transform: var(--case); letter-spacing: var(--ls) }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums }
+.btn { height: 32px; min-width: 32px; padding: 0 12px; border: 1px solid var(--rule); background: var(--panel2);
+  color: var(--text); border-radius: var(--radius); font-family: var(--ui); font-size: 13px; cursor: pointer }
+.card { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--panel); padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 12px }
+.field { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--rule);
+  border-radius: var(--radius); background: var(--field); color: var(--text) }
+.field.on { border: 2px solid var(--accent) }
+.ticks { position: relative; height: 18px }
+.ticks span { position: absolute; transform: translateX(-50%); font-size: 10px; color: var(--text2) }
+.rticks { position: relative; height: 30px; border-top: 1px solid var(--rule) }
+.rticks i { position: absolute; top: 0; width: 1px; height: 6px; background: var(--text2) }
+.rticks span { position: absolute; top: 8px; transform: translateX(-50%); font-size: 10px; color: var(--text2) }
+input[type=range] { width: 100%; margin: 0; height: 28px; accent-color: var(--accent) }
+.grid8 { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px }
+.ratio { height: 28px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--field); color: var(--text); cursor: pointer }
+.ratio[aria-pressed=true] { background: var(--accent); color: var(--ink); border-color: var(--accent) }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0) }
+p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text2) }
+</style>
+</head>
+<body>
+<div id="app">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="font-size: 15px; font-weight: 600">Operator 3</span><span class="lab">Modulator → 1</span>
+    <div style="flex-grow: 1"></div><span class="lab">Theme</span><span id="themes" style="display: flex; gap: 6px"></span>
+  </div>
+  <div id="fields" style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px"></div>
+  <div style="display: flex; gap: 20px; align-items: flex-start">
+    <section class="card" aria-label="Output level popover" style="width: 540px">
+      <div style="display: flex; justify-content: space-between; align-items: baseline">
+        <span class="lab">Output level · continuous</span><span class="num" id="delta" style="font-size: 11px; color: var(--text2)"></span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 14px">
+        <span class="num" id="big" style="font-size: 40px; font-weight: 600; min-width: 64px"></span>
+        <div style="display: flex; flex-direction: column; gap: 2px">
+          <span class="num" id="rad" style="font-size: 15px; color: var(--accent)"></span>
+          <span class="num" id="db" style="font-size: 12px; color: var(--text2)"></span>
+        </div>
+      </div>
+      <div class="ticks num" id="dxticks"></div>
+      <label><span class="sr">Output level</span><input type="range" id="slider" min="0" max="99" step="1"></label>
+      <div class="rticks num" id="radticks"><span class="lab" style="right: 0; top: 18px; transform: none; left: auto">index (rad) — note the bunching below 20</span></div>
+      <div style="display: flex; align-items: center; gap: 8px">
+        <button type="button" class="btn" id="dec" aria-label="Decrease">−</button>
+        <label style="display: flex; align-items: center; gap: 6px; flex-grow: 1; height: 32px; padding: 0 10px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--field)">
+          <span class="lab">Type</span>
+          <input type="text" id="typed" aria-label="Type a value: 0–99, dB or rad" class="num" style="flex-grow: 1; border: 0; outline: none; background: transparent; color: var(--text); font-size: 13px">
+        </label>
+        <button type="button" class="btn" id="inc" aria-label="Increase">+</button>
+      </div>
+      <p>Modulator of operator 1: raising it makes operator 1 brighter. Accepts <span class="num">79</span>, <span class="num">-15dB</span> or <span class="num">2.2rad</span>; <span id="note"></span></p>
+      <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <button type="button" class="btn" id="revert">Revert (Esc)</button>
+        <button type="button" class="btn" style="background: var(--accent); color: var(--ink); border-color: var(--accent)">Done (Enter)</button>
+      </div>
+    </section>
+    <section class="card" aria-label="Coarse ratio popover" style="flex-grow: 1">
+      <span class="lab">Coarse · discrete set</span>
+      <div style="display: flex; align-items: baseline; gap: 12px">
+        <span class="num" id="ratio" style="font-size: 32px; font-weight: 600"></span>
+        <span class="num" id="hz" style="font-size: 13px; color: var(--text2)"></span>
+      </div>
+      <div class="grid8 num" id="ratios"></div>
+      <p>Integer ratios against the carrier give harmonic spectra; Fine moves off them for inharmonic, bell-like ones. A slider over 32 discrete ratios would be a worse control than this grid.</p>
+    </section>
+  </div>
+</div>
+<script>
+'use strict';
+// Values come from docs/MATH.md §3 (levels): s(L), T = 4032 + 32 s(L) - 4256, g = 2^(T/256 - 14).
+const THEMES = {"membrane": {"name": "membrane", "bg": "#17130F", "panel": "#1F1A15", "panel2": "#29221C", "field": "#211B16", "rule": "#3B322A", "text": "#F1EBE3", "text2": "#B3A698", "accent": "#7FD9B5", "ink": "#10201A", "radius": "2px", "ui": "'IBM Plex Sans', system-ui, sans-serif", "mono": "'IBM Plex Mono', ui-monospace, monospace", "hue3": "#7FD9B5", "hue1": "#F1EBE3", "case": "uppercase", "ls": "0.08em"}, "city-night": {"name": "city-night", "bg": "#0E1322", "panel": "#131A2D", "panel2": "#1A2238", "field": "#111829", "rule": "#2A3452", "text": "#EEF1F8", "text2": "#A3ADC8", "accent": "#F4B76E", "ink": "#241503", "radius": "8px", "ui": "'Manrope', system-ui, sans-serif", "mono": "'DM Mono', ui-monospace, monospace", "hue3": "#8FE3D0", "hue1": "#EEF1F8", "case": "none", "ls": "0"}, "ideal-compute": {"name": "ideal-compute", "bg": "#07090C", "panel": "#0B0F13", "panel2": "#10161C", "field": "#090D11", "rule": "#1E2A33", "text": "#E6F2F0", "text2": "#8FA7A6", "accent": "#3CF0C5", "ink": "#02130E", "radius": "0px", "ui": "'Space Grotesk', system-ui, sans-serif", "mono": "'JetBrains Mono', ui-monospace, monospace", "hue3": "#3CF0C5", "hue1": "#E6F2F0", "case": "uppercase", "ls": "0.08em"}};
+const S = [0,5,9,13,17,20,23,25,27,29,31,33,35,37,39,41,42,43,45,46];
+const sOf = (L) => L < 20 ? S[L] : 28 + L;
+const tOf = (L) => 4032 + 32 * sOf(L) - 4256;
+const dbOf = (L) => (tOf(L) - 3840) * 20 * Math.log10(2) / 256;
+const radOf = (L) => 2 * Math.PI * Math.pow(2, tOf(L) / 256 - 14);
+const nearest = (f, x) => { let b = 0, e = Infinity; for (let L = 0; L <= 99; L++) { const d = Math.abs(f(L) - x); if (d < e) { e = d; b = L; } } return b; };
+const fmt = (x, n) => x.toFixed(n).replace('-', '\u2212');
+const RATIOS = [0.5].concat(Array.from({ length: 31 }, (_, i) => i + 1));
+const st = { theme: 'membrane', level: 74, atOpen: 74, coarse: 1, note: 'Enter applies the nearest value.' };
+const $ = (id) => document.getElementById(id);
+
+function applyTheme() {
+  const t = THEMES[st.theme], r = document.documentElement.style;
+  for (const [k, v] of Object.entries({ bg: t.bg, panel: t.panel, panel2: t.panel2, field: t.field, rule: t.rule, text: t.text,
+    text2: t.text2, accent: t.accent, ink: t.ink, radius: t.radius, ui: t.ui, mono: t.mono, case: t.case, ls: t.ls })) r.setProperty('--' + k, v);
+  $('themes').innerHTML = '';
+  for (const k of Object.keys(THEMES)) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn num'; b.textContent = k;
+    b.style.height = '28px'; b.style.fontSize = '12px';
+    if (k === st.theme) { b.style.background = t.accent; b.style.color = t.ink; }
+    b.onclick = () => { st.theme = k; applyTheme(); };
+    $('themes').appendChild(b);
+  }
+}
+function setLevel(L, fromText) {
+  st.level = Math.max(0, Math.min(99, Math.round(L)));
+  if (!fromText) $('typed').value = String(st.level);
+  update();
+}
+function update() {
+  const L = st.level, d = dbOf(L) - dbOf(st.atOpen);
+  $('big').textContent = L; $('slider').value = L;
+  $('rad').textContent = 'index ' + fmt(radOf(L), 3) + ' rad';
+  $('db').textContent = fmt(dbOf(L), 2) + ' dB at full envelope';
+  $('delta').textContent = 'was ' + st.atOpen + ' · now ' + L + ' · ' + (d >= 0 ? '+' : '') + fmt(d, 2) + ' dB';
+  $('note').textContent = st.note;
+  const ratio = RATIOS[st.coarse];
+  $('ratio').textContent = '\u00d7' + ratio.toFixed(2);
+  $('hz').textContent = (440 * ratio).toFixed(1) + ' Hz at A4 · against op 1: ' + ratio + ' : 1' + (Number.isInteger(ratio) ? ' (harmonic)' : '');
+  const fields = [['Coarse', st.coarse, 'ratio ' + ratio.toFixed(2)], ['Fine', 0, '+0.0%'], ['Detune', 7, '\u00b10 c'],
+                  ['Output', L, fmt(radOf(L), 3) + ' rad'], ['Feedback', 5, '\u03b2 0.180']];
+  $('fields').innerHTML = fields.map(([l, v, p]) => `<div class="field${l === 'Output' ? ' on' : ''}"><span class="lab">${l}</span>` +
+    `<span style="display:flex;justify-content:space-between;align-items:baseline"><span class="num" style="font-size:16px">${v}</span>` +
+    `<span class="num" style="font-size:11px;color:var(--text2)">${p}</span></span></div>`).join('');
+  [...$('ratios').children].forEach((b, i) => b.setAttribute('aria-pressed', String(i === st.coarse)));
+}
+$('dxticks').innerHTML = [0,10,20,30,40,50,60,70,80,90,99].map((v) => `<span style="left:${v / 99 * 100}%">${v}</span>`).join('');
+$('radticks').insertAdjacentHTML('afterbegin', [0.01,0.03,0.1,0.3,1,3,10].map((r) => {
+  const x = nearest((L) => Math.log(radOf(L)), Math.log(r)) / 99 * 100;
+  return `<i style="left:${x}%"></i><span style="left:${x}%">${r}</span>`; }).join(''));
+RATIOS.forEach((r, i) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'ratio num';
+  b.textContent = r === 0.5 ? '0.5' : String(r); b.onclick = () => { st.coarse = i; update(); }; $('ratios').appendChild(b); });
+$('slider').addEventListener('input', (e) => setLevel(Number(e.target.value)));
+$('inc').onclick = () => setLevel(st.level + 1);
+$('dec').onclick = () => setLevel(st.level - 1);
+$('revert').onclick = () => { st.note = 'Enter applies the nearest value.'; setLevel(st.atOpen); };
+$('typed').addEventListener('input', (e) => {
+  const s = e.target.value.trim().toLowerCase().replace('\u2212', '-');
+  const m = s.match(/^(-?[0-9]+(?:\.[0-9]+)?)\s*(db|rad)?$/);
+  let target = null;
+  if (m) { const x = Number(m[1]); target = m[2] === 'db' ? nearest(dbOf, x) : m[2] === 'rad' ? (x > 0 ? nearest((L) => Math.log(radOf(L)), Math.log(x)) : null) : x; }
+  st.note = target === null ? (s.length ? 'not a value yet.' : 'Enter applies the nearest value.') : 'nearest DX value: ' + Math.max(0, Math.min(99, Math.round(target))) + '.';
+  if (target !== null) setLevel(target, true); else update();
+});
+$('typed').value = String(st.level);
+applyTheme(); update();
+</script>
+</body>
+</html>

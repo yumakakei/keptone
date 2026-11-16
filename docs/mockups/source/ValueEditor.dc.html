@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Value editor popovers</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Manrope:wght@400;600;700&amp;family=Space+Grotesk:wght@400;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#888}a:hover{color:#555}
+input[type=range]{width:100%;margin:0}
+</style>
+</helmet>
+<div style="width: 1000px; height: 600px; box-sizing: border-box; background: {{t.bg}}; color: {{t.text}}; font-family: {{t.ui}}; display: flex; flex-direction: column; gap: 18px; padding: 24px 28px">
+
+<div style="display: flex; align-items: center; gap: 12px">
+<span style="font-size: 15px; font-weight: 600; color: {{t.text}}">Operator 3</span>
+<span style="font-family: {{t.ui}}; font-size: 11px; color: {{t.text2}}; text-transform: {{t.case}}; letter-spacing: {{t.ls}}">Modulator → 1</span>
+<div style="flex-grow: 1"></div>
+<span style="font-family: {{t.ui}}; font-size: 11px; color: {{t.text2}}; text-transform: {{t.case}}; letter-spacing: {{t.ls}}">Theme</span>
+<sc-for list="{{themes}}" as="th" hint-placeholder-count="3">
+<button type="button" onClick="{{th.pick}}" style="height: 28px; padding: 0 12px; border: 1px solid {{t.rule}}; border-radius: {{t.radius}}; background: {{th.bg}}; color: {{th.fg}}; font-family: {{t.mono}}; font-size: 12px; cursor: pointer">{{th.name}}</button>
+</sc-for>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px">
+<sc-for list="{{fields}}" as="f" hint-placeholder-count="5">
+<button type="button" onClick="{{f.open}}" style="text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: {{f.border}}; border-radius: {{t.radius}}; background: {{t.field}}; cursor: pointer">
+<span style="font-family: {{t.ui}}; font-size: 11px; color: {{t.text2}}; text-transform: {{t.case}}; letter-spacing: {{t.ls}}">{{f.label}}</span>
+<span style="display: flex; justify-content: space-between; align-items: baseline; width: 100%"><span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 16px; color: {{t.text}}">{{f.dx}}</span><span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 11px; color: {{t.text2}}">{{f.phys}}</span></span>
+</button>
+</sc-for>
+</div>
+
+<div style="display: flex; gap: 20px; align-items: flex-start">
+
+<section aria-label="Output level popover" style="width: 540px; box-sizing: border-box; border: 1px solid {{t.rule}}; border-radius: {{t.radius}}; background: {{t.panel}}; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: baseline">
+<span style="font-family: {{t.ui}}; font-size: 11px; color: {{t.text2}}; text-transform: {{t.case}}; letter-spacing: {{t.ls}}">Output level · continuous</span>
+<span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 11px; color: {{t.text2}}">was {{levelAtOpen}} · now {{level}} · {{deltaDb}}</span>
+</div>
+<div style="display: flex; align-items: baseline; gap: 14px">
+<span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 40px; font-weight: 600; color: {{t.text}}; min-width: 64px">{{level}}</span>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 15px; color: {{t.accent}}">index {{rad}} rad</span>
+<span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 12px; color: {{t.text2}}">{{db}} dB at full envelope</span>
+</div>
+</div>
+<div style="position: relative; height: 18px">
+<sc-for list="{{dxTicks}}" as="k" hint-placeholder-count="10">
+<span style="position: absolute; left: {{k.left}}%; transform: translateX(-50%); font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 10px; color: {{t.text2}}">{{k.label}}</span>
+</sc-for>
+</div>
+<label style="display: flex; flex-direction: column; gap: 0">
+<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Output level</span>
+<input type="range" min="0" max="99" step="1" value="{{level}}" onChange="{{onLevel}}" style="accent-color: {{t.accent}}; height: 28px">
+</label>
+<div style="position: relative; height: 30px; border-top: 1px solid {{t.rule}}">
+<sc-for list="{{radTicks}}" as="k" hint-placeholder-count="6">
+<div style="position: absolute; left: {{k.left}}%; top: 0; width: 1px; height: 6px; background: {{t.text2}}"></div>
+<span style="position: absolute; left: {{k.left}}%; top: 8px; transform: translateX(-50%); font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 10px; color: {{t.text2}}">{{k.label}}</span>
+</sc-for>
+<span style="position: absolute; right: 0; top: 18px; font-family: {{t.ui}}; font-size: 11px; color: {{t.text2}}; text-transform: {{t.case}}; letter-spacing: {{t.ls}}">index (rad) — note the bunching below 20</span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" aria-label="Decrease" onClick="{{dec}}" style="height: 32px; min-width: 32px; padding: 0 12px; border: 1px solid {{t.rule}}; background: {{t.panel2}}; color: {{t.text}}; border-radius: {{t.radius}}; font-family: {{t.ui}}; font-size: 13px; cursor: pointer">−</button>
+<label style="display: flex; align-items: center; gap: 6px; flex-grow: 1; height: 32px; padding: 0 10px; border: 1px solid {{t.rule}}; border-radius: {{t.radius}}; background: {{t.field}}">
+<span style="font-family: {{t.ui}}; font-size: 11px; color: {{t.text2}}; text-transform: {{t.case}}; letter-spacing: {{t.ls}}">Type</span>
+<input type="text" value="{{typed}}" onChange="{{onTyped}}" aria-label="Type a value: 0–99, dB or rad" style="flex-grow: 1; border: 0; outline: none; background: transparent; color: {{t.text}}; font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 13px">
+</label>
+<button type="button" aria-label="Increase" onClick="{{inc}}" style="height: 32px; min-width: 32px; padding: 0 12px; border: 1px solid {{t.rule}}; background: {{t.panel2}}; color: {{t.text}}; border-radius: {{t.radius}}; font-family: {{t.ui}}; font-size: 13px; cursor: pointer">+</button>
+</div>
+<p style="margin: 0; font-size: 12px; line-height: 1.5; color: {{t.text2}}">Modulator of operator 1: raising it makes operator 1 brighter. Accepts <span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums">79</span>, <span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums">-15dB</span> or <span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums">2.2rad</span>; {{typedNote}}</p>
+<div style="display: flex; justify-content: flex-end; gap: 8px">
+<button type="button" onClick="{{revert}}" style="height: 32px; min-width: 32px; padding: 0 12px; border: 1px solid {{t.rule}}; background: {{t.panel2}}; color: {{t.text}}; border-radius: {{t.radius}}; font-family: {{t.ui}}; font-size: 13px; cursor: pointer">Revert (Esc)</button>
+<button type="button" style="height: 32px; min-width: 32px; padding: 0 12px; border: 1px solid {{t.rule}}; background: {{t.panel2}}; color: {{t.text}}; border-radius: {{t.radius}}; font-family: {{t.ui}}; font-size: 13px; cursor: pointer; background: {{t.accent}}; color: {{t.ink}}; border-color: {{t.accent}}">Done (Enter)</button>
+</div>
+</section>
+
+<section aria-label="Coarse ratio popover" style="flex-grow: 1; box-sizing: border-box; border: 1px solid {{t.rule}}; border-radius: {{t.radius}}; background: {{t.panel}}; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: {{t.ui}}; font-size: 11px; color: {{t.text2}}; text-transform: {{t.case}}; letter-spacing: {{t.ls}}">Coarse · discrete set</span>
+<div style="display: flex; align-items: baseline; gap: 12px">
+<span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 32px; font-weight: 600">×{{ratio}}</span>
+<span style="font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 13px; color: {{t.text2}}">{{hz}} Hz at A4 · against op 1: {{against}}</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px">
+<sc-for list="{{ratios}}" as="r" hint-placeholder-count="32">
+<button type="button" onClick="{{r.pick}}" aria-pressed="{{r.on}}" style="height: 28px; border: 1px solid {{r.border}}; border-radius: {{t.radius}}; background: {{r.bg}}; color: {{r.fg}}; font-family: {{t.mono}}; font-variant-numeric: tabular-nums; font-size: 12px; cursor: pointer">{{r.label}}</button>
+</sc-for>
+</div>
+<p style="margin: 0; font-size: 12px; line-height: 1.5; color: {{t.text2}}">Integer ratios against the carrier give harmonic spectra; Fine moves off them for inharmonic, bell-like ones. A slider over 32 discrete ratios would be a worse control than this grid.</p>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["membrane", "city-night", "ideal-compute"], "default": "membrane"}, "$preview": {"width": 1000, "height": 600}}'>
+const THEMES = {"membrane": {"name": "membrane", "bg": "#17130F", "panel": "#1F1A15", "panel2": "#29221C", "field": "#211B16", "rule": "#3B322A", "text": "#F1EBE3", "text2": "#B3A698", "accent": "#7FD9B5", "ink": "#10201A", "radius": "2px", "ui": "'IBM Plex Sans', system-ui, sans-serif", "mono": "'IBM Plex Mono', ui-monospace, monospace", "hue3": "#7FD9B5", "hue1": "#F1EBE3", "case": "uppercase", "ls": "0.08em"}, "city-night": {"name": "city-night", "bg": "#0E1322", "panel": "#131A2D", "panel2": "#1A2238", "field": "#111829", "rule": "#2A3452", "text": "#EEF1F8", "text2": "#A3ADC8", "accent": "#F4B76E", "ink": "#241503", "radius": "8px", "ui": "'Manrope', system-ui, sans-serif", "mono": "'DM Mono', ui-monospace, monospace", "hue3": "#8FE3D0", "hue1": "#EEF1F8", "case": "none", "ls": "0"}, "ideal-compute": {"name": "ideal-compute", "bg": "#07090C", "panel": "#0B0F13", "panel2": "#10161C", "field": "#090D11", "rule": "#1E2A33", "text": "#E6F2F0", "text2": "#8FA7A6", "accent": "#3CF0C5", "ink": "#02130E", "radius": "0px", "ui": "'Space Grotesk', system-ui, sans-serif", "mono": "'JetBrains Mono', ui-monospace, monospace", "hue3": "#3CF0C5", "hue1": "#E6F2F0", "case": "uppercase", "ls": "0.08em"}};
+const S = [0,5,9,13,17,20,23,25,27,29,31,33,35,37,39,41,42,43,45,46];
+function sOf(L) { return L < 20 ? S[L] : 28 + L; }
+function tOf(L) { return 4032 + 32 * sOf(L) - 4256; }
+function dbOf(L) { return (tOf(L) - 3840) * 20 * Math.log10(2) / 256; }
+function radOf(L) { return 2 * Math.PI * Math.pow(2, tOf(L) / 256 - 14); }
+function levelForRad(r) {
+  let best = 0, err = Infinity;
+  for (let L = 0; L <= 99; L++) { const e = Math.abs(Math.log(radOf(L)) - Math.log(r)); if (e < err) { err = e; best = L; } }
+  return best;
+}
+function levelForDb(d) {
+  let best = 0, err = Infinity;
+  for (let L = 0; L <= 99; L++) { const e = Math.abs(dbOf(L) - d); if (e < err) { err = e; best = L; } }
+  return best;
+}
+function fmt(x, n) { return x.toFixed(n).replace('-', '−'); }
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { level: 74, levelAtOpen: 74, coarse: 1, typed: '74', typedNote: 'Enter applies the nearest value.', themeName: null };
+  }
+  setLevel(L) {
+    const v = Math.max(0, Math.min(99, Math.round(L)));
+    this.setState({ level: v, typed: String(v) });
+  }
+  renderVals() {
+    const name = this.state.themeName ?? this.props.theme ?? 'membrane';
+    const t = THEMES[name] ?? THEMES.membrane;
+    const L = this.state.level;
+    const ratioList = [0.5].concat(Array.from({ length: 31 }, (_, i) => i + 1));
+    const ratio = ratioList[this.state.coarse];
+    const dxTicks = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99].map((v) => ({ left: v / 99 * 100, label: String(v) }));
+    const radTicks = [0.01, 0.03, 0.1, 0.3, 1, 3, 10].map((r) => ({ left: levelForRad(r) / 99 * 100, label: String(r) }));
+    const fields = [
+      ['Coarse', String(this.state.coarse), 'ratio ' + ratio.toFixed(2)],
+      ['Fine', '0', '+0.0%'],
+      ['Detune', '7', '±0 c'],
+      ['Output', String(L), fmt(radOf(L), 3) + ' rad'],
+      ['Feedback', '5', 'β 0.180'],
+    ].map(([label, dx, phys]) => ({
+      label, dx, phys, open: () => {},
+      border: label === 'Output' ? '2px solid ' + t.accent : '1px solid ' + t.rule,
+    }));
+    const ratios = ratioList.map((r, i) => {
+      const on = i === this.state.coarse;
+      return {
+        label: r === 0.5 ? '0.5' : String(r), on: on ? 'true' : 'false',
+        bg: on ? t.accent : t.field, fg: on ? t.ink : t.text, border: on ? t.accent : t.rule,
+        pick: () => this.setState({ coarse: i }),
+      };
+    });
+    const themes = Object.keys(THEMES).map((k) => ({
+      name: k, bg: k === name ? t.accent : t.panel2, fg: k === name ? t.ink : t.text,
+      pick: () => this.setState({ themeName: k }),
+    }));
+    return {
+      t, themes, fields, ratios, dxTicks, radTicks,
+      level: String(L), levelAtOpen: String(this.state.levelAtOpen),
+      db: fmt(dbOf(L), 2), rad: fmt(radOf(L), 3),
+      deltaDb: (dbOf(L) - dbOf(this.state.levelAtOpen) >= 0 ? '+' : '') + fmt(dbOf(L) - dbOf(this.state.levelAtOpen), 2) + ' dB',
+      ratio: ratio === 0.5 ? '0.50' : ratio.toFixed(2), hz: (440 * ratio).toFixed(1),
+      against: ratio + ' : 1' + (Number.isInteger(ratio) ? ' (harmonic)' : ''),
+      typed: this.state.typed, typedNote: this.state.typedNote,
+      onLevel: (e) => this.setLevel(Number(e.target.value)),
+      inc: () => this.setLevel(L + 1), dec: () => this.setLevel(L - 1),
+      revert: () => this.setLevel(this.state.levelAtOpen),
+      onTyped: (e) => {
+        const raw = e.target.value; const s = raw.trim().toLowerCase().replace('−', '-');
+        let target = null, note = 'Enter applies the nearest value.';
+        const m = s.match(/^(-?[0-9]+(?:\.[0-9]+)?)\s*(db|rad)?$/);
+        if (m) {
+          const x = Number(m[1]);
+          if (m[2] === 'db') target = levelForDb(x);
+          else if (m[2] === 'rad') target = x > 0 ? levelForRad(x) : null;
+          else target = x;
+          if (target !== null) note = 'nearest DX value: ' + Math.max(0, Math.min(99, Math.round(target))) + '.';
+        } else if (s.length) { note = 'not a value yet.'; }
+        if (target !== null) this.setState({ level: Math.max(0, Math.min(99, Math.round(target))), typed: raw, typedNote: note });
+        else this.setState({ typed: raw, typedNote: note });
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

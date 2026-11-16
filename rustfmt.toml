@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# Lines of up to 120 columns, as in the Python of the project and the C and C++
+# to come.
+max_width = 120

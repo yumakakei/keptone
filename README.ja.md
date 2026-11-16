@@ -1,0 +1,75 @@
+<!--
+SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+SPDX-License-Identifier: GPL-3.0-or-later
+
+このファイルは README.md の日本語版で，Keptone の一部です．SPDX の行は，著作権者とライセンスを REUSE 仕様の機械可読な形式で示しています：GNU General Public License バージョン 3 またはそれ以降のバージョン（LICENSES/GPL-3.0-or-later.txt）．
+-->
+
+# Keptone
+開発中の 6 オペレータ FM シンセサイザプラグインです．Yamaha DX7 のパッチを読み込んで演奏・編集でき，その音を「理想 DX7」として計算します．すなわち，パッチのパラメータが記述する連続時間信号を，ホストのサンプルレートで binary64 により計算し，エイリアシングを抑え，1983 年のハードウェアに由来する量子化とノイズを取り除きます．CLAP にネイティブに対応し，VST3，AUv2 およびスタンドアロン版は [clap-wrapper](https://github.com/free-audio/clap-wrapper) を通して提供します．対象は Linux，Windows，macOS です．
+
+[English](README.md) | 日本語
+
+![設計中のエディタ（既定のテーマ）：中央にアルゴリズムのグラフ，右に選択中のオペレータのインスペクタ，その下にオペレータごとの行，最下部に出力のスコープとスペクトラム](docs/mockups/editor-membrane.png)
+
+*設計中のエディタです（[docs/UI.md](docs/UI.md)，[docs/mockups/](docs/mockups/README.md)）．まだ実装していません．*
+
+## 目指すもの
+
+- **パッチの意味に忠実．** DX7 のパッチは，エンベロープ，キーボードスケーリング，モジュレーション，フィードバック，アルゴリズムをそのまま保ちます．DX7 の法則とテーブルは残し，ハードウェアに由来するアーティファクトは取り除きます．12 ビット DAC，log-sine ROM と指数 ROM の量子化，エンベロープのクロックごとの増分，有限長の位相アキュムレータ，49,096 Hz でのサンプリングとそのエイリアシングがこれにあたります（[docs/MATH.md](docs/MATH.md) §15）．
+- **クリーンな出力．** エイリアシング，ジッパーノイズ，量子化ノイズを測定し，プロジェクトが定める閾値より下に抑えます．位相変調は正弦波の ADAA（antiderivative antialiasing）により閉形式でアンチエイリアシングし，内部オーバーサンプリングを設定として備えます（MATH §10，§11）．
+- **フィードバックを方程式として解く．** ループゲインが 1 未満であれば，サンプルレートを上げるにつれて，DX7 の遅延を含むフィードバックループはケプラー方程式 Θ − β sin Θ = Φ の解に近づきます．これは Tomisawa の特許（[US 4,249,447](https://patents.google.com/patent/US4249447A/en)）がオペレータを記述している形そのものです．Keptone はこれをサンプルごとに解き，ほかのオペレータから変調を受けないオペレータについては，その厳密なフーリエ級数であるカプタイン級数をナイキスト周波数まで足し合わせます．遅延のない極限を持たないゲイン 1 以上の場合は，設定で選んだモデルを使います（MATH §9）．名前はここから来ています：Kepler と tone です．
+- **自由．** 挙動を変える選択はすべて，既定値を文書化した設定です（MATH §17）．ボイス数，オペレータ数，オーバーサンプリング，許容誤差，テーブルサイズは，メモリ以外による上限を持ちません．
+- **安全でリアルタイム．** パッチファイル，SysEx，ホストが保存した状態，チューニングファイルは，どのようなバイト列に対しても値かエラーを返すパーサで型付きの値に変換します．そのため，悪意のある入力であっても，メモリ安全性の破壊，オーディオスレッドでのパニック，非有限の出力を引き起こすことはありません．オーディオスレッドは，メモリの確保と解放，ロック，システムコールを一切行いません．
+- **正確で再現可能．** 各カーネルは，高精度の参照値に対して明示した誤差上限（accuracy contract）を満たします．同じビルド，同じカーネルの選択，同じ設定，同じ入力からは，ホストが時間をどのようなブロックに区切っても，ビット単位で同一の出力が得られます（MATH §0）．
+
+## 現状
+
+計画（[docs/DESIGN.md](docs/DESIGN.md) §16）のマイルストーン M0，ワークスペースの段階です．プロジェクトの lint 設定を適用した 13 のクレート（中身はまだ空です），ツールチェーンの設定ファイル，Windows・Ubuntu・macOS での CI，そして仕様があります．まだ音は出ません．
+
+| クレート | 実装する内容 | マイルストーン |
+| --- | --- | --- |
+| `keptone-math` | binary64 の参照関数：turn 単位の位相の正弦，sinc，指数関数，ADAA，ケプラー方程式のソルバとカプタイン級数のテーブル | M1 |
+| `keptone-model` | 型付きのパッチモデルと，DX7 の SysEx・`.syx` ファイル，ネイティブの状態，Scala のチューニングのパーサ | M2 |
+| `keptone-engine` | ボイス，エンベロープ，LFO，オペレータのグラフ，フィードバック，オーバーサンプリング，ミックス | M3，M4 |
+| `keptone-tools` | コマンドライン：オフラインレンダリングと参照レンダリング，エイリアスの指標，`.syx` のツール，ベンチマーク | M3 以降 |
+| `keptone-rt` | オーディオスレッドとほかのスレッドの間の wait-free なキュー | M5 |
+| `keptone-host` | プラグイン形式に依存しないプロセッサ：パラメータ，イベント，スレッド，状態 | M5 |
+| `keptone-clap` | CLAP プラグイン（ABI は手で宣言） | M5 |
+| `keptone-cpu` | プロセッサの機能と，使用するカーネルのレベル | M7 |
+| `keptone-kernels` | 内側のループをベクトル化したアセンブリ．アーキテクチャと命令セットのレベルごとに用意 | M7 |
+| `keptone-sys` | OS の関数（手で宣言） | 必要に応じて |
+| `keptone-platform` | Win32，AppKit，X11，Wayland 上のエディタのウィンドウ | M8a |
+| `keptone-render` | エディタのシーンとそのレンダラ：CPU（基準），Direct3D 11，Metal，Vulkan | M8a |
+| `keptone-ui` | エディタ | M8b |
+
+clap-wrapper による VST3，AUv2，スタンドアロン版のビルドは M6 で加わります．
+
+## 仕様
+
+- [docs/MATH.md](docs/MATH.md)：モデルと数値計算法を記述した唯一の文書です．コードはこれに従い，挙動の変更はまずこの文書に対して行います．
+- [docs/DESIGN.md](docs/DESIGN.md)：アーキテクチャ，クレート，スレッド，データ形式，方針，マイルストーン，未決事項．
+- [docs/UI.md](docs/UI.md)：エディタ．[docs/mockups/](docs/mockups/README.md) にモックアップが，[assets/themes/](assets/themes/) に 3 つの組み込みテーマがあります．
+- [docs/REFERENCES.md](docs/REFERENCES.md)：出典．文書とコードは [LEVIEN-EG] のようなキーで出典を示します．
+- [docs/VERIFICATION.md](docs/VERIFICATION.md)：暫定的に採用した値の一覧です．それぞれ，その値を使うマイルストーンを閉じる前に独立した出典と照合します．
+- [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)：Keptone が依存するもの，その理由，ライセンス，バージョン．
+
+## ビルドとテスト
+
+最新の stable の Rust と，Clang および LLD を使います．どのシステムでも，リンクは Clang が駆動し LLD が行います（`.cargo/config.toml`）．CI は LLVM 23.1.5 に固定しています（`ci/setup.sh`）．x86-64 向けのビルドは x86-64-v3（AVX2，FMA，BMI2）向けで，AVX-512 向けにコンパイルするコードはすべて 512 ビット幅のベクトルを使います．macOS 向けのビルドは Apple シリコンの macOS 26 以降向けです．
+
+```bash
+cargo build --release --locked
+```
+
+```bash
+bash ci/rust.sh
+```
+
+`ci/rust.sh` はレイアウト，clippy（警告はすべてエラー），ドキュメントを検査し，dev と release の両プロファイルでテストを実行します．`bash ci/targets.sh test` は 512 ビット幅のベクトルを使う x86-64-v4 向けにワークスペースをビルドし，プロセッサが AVX-512 を備えていればテストします．`bash ci/emulated.sh <sde64>` は [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) の下で，Haswell，Alder Lake，Arrow Lake，Skylake-SP，Ice Lake-SP，Sapphire Rapids としてテストを実行します．`bash ci/python.sh` は `scripts/` を ruff で検査し，`reuse lint` はすべてのファイルの著作権とライセンスの表記を検査します．
+
+## ライセンス
+
+Keptone は GNU General Public License バージョン 3 またはそれ以降のバージョン（`LICENSES/GPL-3.0-or-later.txt`）のもとで配布するフリーソフトウェアです．各ファイルは [REUSE](https://reuse.software/) 仕様の形式で著作権者とライセンスを示し，`reuse lint` で検査しています．
+
+リポジトリには Yamaha のファームウェア，ROM のテーブル，ファクトリーボイスを含めません（docs/DESIGN.md §14）．Yamaha および DX7 はヤマハ株式会社の商標または登録商標であり，ここでは Keptone が演奏するパッチの種類を示すためにのみ用いています．Keptone はヤマハ株式会社とは関係がありません．VST は Steinberg Media Technologies GmbH の登録商標です．

@@ -1,0 +1,50 @@
+{
+  "format": 1,
+  "name": "membrane",
+  "title": "Membrane",
+  "variant": "dark",
+  "colors": {
+    "ground": "#17130F",
+    "panel": "#1F1A15",
+    "panel_raised": "#29221C",
+    "field": "#211B16",
+    "canvas": "#17130F",
+    "rule": "#3B322A",
+    "text": "#F1EBE3",
+    "text_secondary": "#B3A698",
+    "accent": "#7FD9B5",
+    "accent_ink": "#10201A",
+    "edge": "#6B5E51",
+    "bus": "#7FD9B5",
+    "node_carrier_fill": "#2A231C",
+    "node_modulator_fill": "#1F1A15",
+    "node_carrier_border": "#8C7D6E",
+    "node_modulator_border": "#6B5E51",
+    "row_selected": "#2A231C",
+    "plot_fill": "#5C5045",
+    "operators": [
+      "#F1EBE3",
+      "#E8C26A",
+      "#7FD9B5",
+      "#8FC1F0",
+      "#E89C8B",
+      "#C5A6F0"
+    ]
+  },
+  "geometry": {
+    "radius": 2,
+    "node_radius": 2,
+    "stroke": 1,
+    "stroke_strong": 2
+  },
+  "type": {
+    "ui": "IBM Plex Sans",
+    "numerals": "IBM Plex Mono"
+  },
+  "style": {
+    "labels": "upper",
+    "canvas": "plain",
+    "numbers": "compact",
+    "meters": "bar"
+  }
+}

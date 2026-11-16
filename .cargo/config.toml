@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# LLD links on every system, as it will the C23 and C++26 of the project:
+# lld-link for Windows, and on the other systems Clang as the linker driver with
+# -fuse-ld=lld (ld.lld on Linux, ld64.lld on macOS). macOS builds are for macOS
+# 26.0 and later, on Apple silicon.
+#
+# On x86-64 the builds are for x86-64-v3 (AVX2, FMA, BMI1, BMI2, F16C, LZCNT and
+# MOVBE; docs/DESIGN.md §10.1). With FMA in hardware f64::mul_add is one
+# instruction, so the portable form of every kernel is fast, and with
+# engine.kernels = portable it gives the same bits on every processor
+# (docs/MATH.md §0.2); every x86-64 machine a DAW runs on in 2026 has it. Forms
+# for AVX-512 are to be taken at run time where the processor has them, and
+# ci/targets.sh builds the same code for x86-64-v4 as well. AArch64 always has
+# NEON, with FMA.
+#
+# Wherever code is compiled for AVX-512, it takes vectors of 512 bits: LLVM
+# keeps to 256 bits for x86-64-v4 and for Intel's processors of AVX-512 unless
+# told otherwise, which -prefer-256-bit turned off does, for code compiled for
+# AVX-512 within a build and for the whole of a build for x86-64-v4. It changes
+# nothing where AVX-512 is not enabled. rustc passes the feature to LLVM and
+# warns that it does not know it; the warning is expected
+# (rust-lang/rust#162235, ci/targets.sh).
+
+[target.x86_64-pc-windows-msvc]
+linker = "lld-link"
+rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "target-feature=-prefer-256-bit"]
+
+[target.aarch64-pc-windows-msvc]
+linker = "lld-link"
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=x86-64-v3", "-C", "target-feature=-prefer-256-bit"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-apple-darwin]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[env]
+MACOSX_DEPLOYMENT_TARGET = "26.0"
