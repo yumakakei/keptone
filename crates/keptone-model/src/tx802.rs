@@ -19,10 +19,10 @@
 //! offset, and a [`SystemSetup`]: the channels and switches of its reception,
 //! its device number, its banks, its master tune, the table that assigns the
 //! controllers' numbers, and that of the programs that select its
-//! performances. What each does is for the TX802's emulation and the host to
-//! say (docs/DESIGN.md §15); these types hold them, each number a [`Value`] of
-//! its scale or an [`Index`] that names a thing, each choice an enumeration and
-//! each switch a `bool`.
+//! performances. What each does is Keptone's own, for the engine and the host
+//! to say (docs/DESIGN.md §6.4); these types hold them, each number a
+//! [`Value`] of its scale or an [`Index`] that names a thing, each choice an
+//! enumeration and each switch a `bool`.
 //!
 //! [`PerformanceParameter`] numbers a performance's parameters as its edit
 //! buffer and its parameter changes do, 0 to 115, and [`SystemParameter`] the

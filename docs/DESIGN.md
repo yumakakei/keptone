@@ -10,11 +10,13 @@ specification: the GNU General Public License, version 3 or any later version
 
 # The design of Keptone
 
-Keptone (the name: §14.1) is a six-operator FM synthesizer plugin. It plays and edits Yamaha DX7 patches and computes them as an **ideal DX7**:
+Keptone (the name: §14.1) is a six-operator FM synthesizer plugin. It asks what the DX series would be, made today as a plugin with none of its hardware's constraints: it imitates no hardware and is not limited to the DX7, yet it never strays from the clean sound of the DX series. It plays and edits Yamaha DX7 patches and computes them as an **ideal DX7**:
 
 - The continuous-time signal the patch parameters describe, computed in binary64 at the host's sample rate.
 - Antialiased.
 - Free of the 1983 hardware's quantisation and noise.
+
+It is to offer, in time, the features of the DX7's family as well: two voices layered or split, function data for each voice, supplements of voices, performances, pan, micro tunings, fractional scalings and more tone generators, from the DX1, the TX7, the DX7II, the DX7s and the TX802 (§6.4). It reproduces none of these instruments, the DX7 among them: it computes what their data means, and takes their features as its own.
 
 `docs/MATH.md` defines that signal. This document defines the software around it. `docs/REFERENCES.md` lists the sources.
 
@@ -33,12 +35,14 @@ Keptone (the name: §14.1) is a six-operator FM synthesizer plugin. It plays and
    - `engine.kernels = portable` extends that to every supported processor (MATH §0.2–0.3).
    - Vector forms are free to reorder within their contracts, so optimisation is not tied to the reference's operation order.
 7. **Portable**: Linux, Windows and macOS. CLAP, VST3, AUv2 and standalone. Linux is the primary platform.
+8. **Family-wide**: the features the DX7's family adds to the DX7 (§6.4) are Keptone's own, at the family's level, all of them together if the user wishes. An instrument's data becomes Keptone's, and Keptone's becomes the instrument's again as far as its data can hold it.
 
 ### Non-goals
 
-- Bit-accurate emulation of the YM21280/YM21290 and the firmware. That exists (VDX7, Plogue OPS7) and is a different product.
+- Reproducing an instrument. Keptone is never a copy of the DX7 or of any of its family: not of their chips (the YM21280/YM21290) and firmware bit for bit, which VDX7 and Plogue OPS7 emulate and which is a different product, nor of their limits, such as their polyphony and their outputs.
 - Bundling Yamaha ROMs or factory voices (§14).
 - A sampler, effects suite or arpeggiator. Effects belong to the host.
+- More outputs than a stereo pair, such as the TX802's individual ones: the host's tracks give them, each with an instance of its own (§6.4).
 
 ## 2. What is designed out
 
@@ -100,9 +104,9 @@ assets/themes/      the built-in themes (*.keptone-theme), embedded in keptone-u
 | keptone-math | Reference functions (MATH §9, §10, §12), all `#[inline]`, all scalar binary64 with `mul_add`. | forbid | — |
 | keptone-kernels | Vector forms, one module per architecture (§10). Each call into assembly is one `unsafe` block whose comment says what was checked. | per-arch modules only | keptone-cpu, keptone-math |
 | keptone-model | Typed patch model with range types; DX7 codecs (1-voice, 32-voice packed, the DX7II's supplements, performances, system set-up, micro tunings and fractional scalings, the TX802's performances and system set-up, the DX1's and the TX7's performances, parameter change incl. function group 2, the DX7's panel switches, the DX7II's switch remote and supplements, and the TX7's changes, request messages); native state (docs/STATE-FORMAT.md); `.scl` and `.kbm`. | forbid | keptone-math (checksums need nothing else) |
-| keptone-engine | MATH §1–§14. Owns no threads and allocates only in `prepare()`. | forbid | keptone-math, keptone-kernels, keptone-model |
+| keptone-engine | MATH §1–§14, parts among them (§6.4). Owns no threads and allocates only in `prepare()`. | forbid | keptone-math, keptone-kernels, keptone-model |
 | keptone-rt | SPSC ring, triple-buffer mailbox, drop-queue. | yes (atomics + `UnsafeCell`), each block one operation | std |
-| keptone-host | Processor/main/worker split (§5), parameter table and smoothing, event decoding (CLAP events, MIDI 1.0, MIDI 2.0 UMP, SysEx), state save/load. | forbid | engine, model, rt |
+| keptone-host | Processor/main/worker split (§5), parameter table and smoothing, event decoding (CLAP events, MIDI 1.0, MIDI 2.0 UMP, SysEx), the parts' channels, the family's performances and system set-ups as parts (§6.4), state save/load. | forbid | engine, model, rt |
 | keptone-clap | `#[repr(C)]` declarations of the CLAP structs and function tables, written by hand from `thirdparty/clap`; the entry, factory and extensions. | yes (FFI) | host |
 | keptone-platform | `win32.rs`, `appkit.rs`, `x11.rs`, `wayland.rs`: window creation as a child of the host's window (or floating), input, DPI, surfaces, timers. System functions are declared by hand. | yes (FFI) | sys |
 | keptone-render | The scene type and one backend per file: `cpu.rs` (reference rasteriser), `d3d11.rs`, `metal.rs`, `vulkan.rs`; shaders per backend; device sharing and fallback (§8.2–8.4). | yes, in backend files only | platform |
@@ -124,9 +128,9 @@ The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbi
   main ◄── ring(Retired objects to drop) ◄──────────────────────────────────┘
 ```
 
-- **Ownership only moves; it is never shared.** A `CompiledPatch` is built on the main thread and published through a triple-buffer mailbox (latest wins). The audio thread takes it at a block boundary or at the event's sample, and returns the previous one through the retire ring. Memory is freed on the main thread.
+- **Ownership only moves; it is never shared.** A `CompiledPatch` is built on the main thread and published through a triple-buffer mailbox (latest wins), one for each part (§6.4). The audio thread takes it at a block boundary or at the event's sample, and returns the previous one through the retire ring. Memory is freed on the main thread.
 - **Commands** (note events from the GUI keyboard, settings that need no reallocation) go through a bounded SPSC ring. A full ring is reported, never waited on.
-- **Reallocation** (voice count, oversampling, operator count) needs CLAP's `deactivate`/`activate`. Changing these settings asks the host to restart the plugin (`clap_host.request_restart`).
+- **Reallocation** (voice count, part count, the output's channels, oversampling, operator count) needs CLAP's `deactivate`/`activate`. Changing these settings asks the host to restart the plugin (`clap_host.request_restart`).
 - **Host SysEx and MIDI** arrive on the audio thread inside `process`. They are copied raw into a bounded ring (no parsing), decoded on the main thread, and come back as a `CompiledPatch` or `Command`. Real-time notes and controllers are handled on the audio thread from fixed-size events.
 - **ADLplug-Next's rule** carries over: if the audio thread ever has to touch something the main thread may be rebuilding, it *tries* the lock and plays silence for that block if it cannot get it. The design aims to need no lock at all. Any `try_lock` that remains carries a comment giving its reason (cf. ADLplug-Next `sources/utility/realtime.h`).
 
@@ -134,7 +138,7 @@ The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbi
 
 ### 6.1 Compile step (main thread)
 
-`CompiledPatch::new(&Patch, &Settings) -> CompiledPatch` is total.
+`CompiledPatch::new(&Patch, &Settings) -> CompiledPatch` is total. A patch is what a part plays (§6.4): a DX7 voice, with the DX7II's supplement and fractional scaling where it has them. Each part's patch is compiled by itself, with the part's own parameters, so that a change to one part recompiles that part alone.
 
 - Every table lookup of MATH §2–§7 is resolved into binary64 coefficients.
 - The algorithm graph is reduced to SCCs, an evaluation order, ADAA offsets $`s_k`$ (MATH §10.5) and delay-line requirements.
@@ -142,7 +146,7 @@ The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbi
 
 ### 6.2 Render loop (audio thread)
 
-For each engine sample, voices are processed in **structure-of-arrays** form, with the lanes holding voices: L = 4 on AVX2, 8 on AVX-512, 2 on NEON.
+For each engine sample, voices are processed in **structure-of-arrays** form, with the lanes holding voices, those of every part alike: L = 4 on AVX2, 8 on AVX-512, 2 on NEON.
 
 1. Advance the control laws in closed form: EG levels, pitch, the LFO, and gains at the times MATH §10.4 asks for.
 2. Evaluate the SCCs in order: feedback solves (MATH §9) and ADAA operators (MATH §10).
@@ -150,9 +154,33 @@ For each engine sample, voices are processed in **structure-of-arrays** form, wi
 
 Lanes are independent and each lane runs the same instruction sequence. A voice's result therefore does not depend on which lane it lands in or how many voices are active, which reproducibility needs: there must be no "scalar tail" path that rounds differently from the vector body. Sums across voices happen after the lanes, in voice order. Events split the block at their sample offsets.
 
+Each voice holds the compiled patch of its part, so voices of different parts share the lanes. A batch of lanes runs one instruction sequence, so it holds voices of one graph: voices are grouped by their graph, their part's algorithm or user graph (MATH §8.3, §8.4), when one starts or ends or a part's patch changes, at that event's sample. A voice's result does not depend on its lane, so the grouping changes nothing but the speed. Each part sums its voices in voice order, and the output adds the parts in the order of their indices (MATH §14).
+
 ### 6.3 Determinism
 
 Nothing in the engine reads time, thread identity or the address of an allocation. Random sources are SplitMix64 streams seeded from settings and the voice's start sample.
+
+### 6.4 Parts and the family
+
+The DX7's family adds to the DX7 what a second voice, performances and more tone generators give. Keptone takes those of its features that suit a plugin, as its own: it never reproduces the instruments, and leaves to the host what a host does better, such as outputs beyond a stereo pair (§1). Its engine is built for them from the start: it plays **parts** (MATH §13.5).
+
+- The family is the DX7's, of six operators: the DX7, the TX7, the DX1, the DX7II, the DX7s and the TX802. The four-operator instruments of the time are not of it. The eight waveforms of the TX81Z and the instruments after it would each need antiderivatives of their own (MATH §10), and would leave the feedback's equation, which is the sine's (MATH §9). The envelopes of all of them, those of the DX21, the DX27 and the DX100, which have the sine alone, among them, follow a law of attack, two decays and release, not MATH §4's rates and levels. A graph of four operators remains the user's to make (MATH §8.4).
+- A part plays one patch on the notes it takes: those of its MIDI channel, or of every channel, within its range of keys and through its key filter, shifted by its note shift. It has its own detune, volume, tuning (§11.4), note limit, alternate group and function data, whose place a supplement in its patch takes as the DX7II's does (MATH §13.5), and its pan, its place in the stereo output (MATH §14).
+- Every part takes its voices from one pool of `voice.count` (MATH §13.1), and the voices of every part share the lanes (§6.2). A note that two parts take starts a voice in each: the parts are layered.
+- `part.count`, default 2, the A and B of the DX1 and the DX7II, is fixed at activation (§5). Two parts layer or split one performance within one instance, which parts alone can do; more instruments on more channels, as the TX802's, are another instance on another track, or a larger `part.count`. With the first part alone on, as it is by default, the engine is the DX7's as MATH writes it.
+- Parts are Keptone's own, and the native state holds them, binary64 like every value (§11.1). An instrument's performance and system set-up are a way in and out, for compatibility, as `.syx` is for a voice (§11.2): they read into parts as far as Keptone's features take them, and what those do not take is kept with the parts as it came, so that the parts become the instrument's data again byte for byte; what parts hold that the instrument's data cannot is reported, as the writers of §11.2 report it. What each instrument's data gives the parts:
+
+| Instrument | Parts | What its data gives them |
+| --- | --- | --- |
+| DX7 | one | the function data (MATH §7) |
+| TX7 | one | the function data of each of its voices, and of those of a DX7 played with it, which its function memories hold [TX7-MANUAL] |
+| DX1 | two, A and B | single, dual or split, the split point and the dual detune; each side's function data, key shift, output attenuation and sustain pedal; its outputs A, B and P, read as pans [DX1-MANUAL] [TX7-MANUAL] |
+| DX7II | two, A and B | single, dual or split, the split point, the dual detune, the balance and the total volume; each side's channel, note shift, sustain, foot switch and sliders; the micro tuning, the key filter and the pan; each voice's supplement and fractional scaling [DX7II-MANUAL] |
+| DX7s | one | the DX7II's, for one voice [DX7S-MANUAL] |
+| TX802 | one to eight | each instrument's tone generators, two notes each, as a note limit; its channel, keys, note shift, detune, volume, outputs I and II read as a pan, micro tuning, EG forced damp and alternate assign; the tables of program and control changes [TX802-MANUAL] [TX802-SYSEX] |
+
+- No setting ties Keptone to one instrument; what it does follows from the data. A message's format says whose data it holds, and a panel switch's number whose panel it presses. A performance of the DX1 or the TX7 becomes parts A and B as its key assign mode says, single playing the side its voice select names, the side one part alone takes, and selects the voice its first byte names (§11.2); a program change selects as the system set-up's tables and channels say. An instrument is named only where data leaves Keptone for it: a writer, or the librarian sending to an instrument connected to it (§11.2), is told which instrument's data to write. The one message whose meaning depends on its sender, the operator select, which the TX7 numbers from OP6 and the DX7II from OP1, is read only from an instrument the librarian knows to be connected, and is otherwise kept and passed over (§11.2).
+- What the features do to the sound, a supplement's, a fractional scaling's and a pan's among them, is written in MATH as Keptone's own with the milestones that give it (§16), keeping what a voice's data means (§1). Until then a part plays its patch as a DX7 voice, its supplement and fractional scaling held but not heard.
 
 ## 7. Plugin formats
 
@@ -162,8 +190,8 @@ Nothing in the engine reads time, thread identity or the address of an allocatio
 
 - `tests/layout/` compiles C23 programs against `thirdparty/clap/include` that `static_assert` every offset, size and alignment. The expected values come from a table generated from the Rust definitions. The two can never drift.
 - Extensions implemented:
-  - params (with polyphonic modulation per note id), state, note-ports (CLAP + MIDI 1.0 + MIDI 2.0 dialects);
-  - audio-ports with `CLAP_AUDIO_PORT_SUPPORTS_64BITS` and `CLAP_AUDIO_PORT_PREFERS_64BITS`;
+  - params (with polyphonic modulation per note id), state, note-ports (CLAP + MIDI 1.0 + MIDI 2.0 dialects), whose channels, MIDI 2.0's groups among them, reach the parts that receive them (§6.4);
+  - audio-ports with `CLAP_AUDIO_PORT_SUPPORTS_64BITS` and `CLAP_AUDIO_PORT_PREFERS_64BITS`: one output port, stereo, or mono as `output.channels` says (MATH §14);
   - latency, tail, voice-info, note-name, thread-check, render (offline/realtime hint), gui (§8), timer-support/posix-fd-support where the platform layer needs them, and preset-load later.
 
 ### 7.2 VST3, AUv2 and standalone via clap-wrapper
@@ -182,12 +210,13 @@ LV2: not planned (CLAP and VST3 cover the Linux hosts in use). AAX: no. AUv3: on
 
 - MPE (MIDI 1.0 zones), CLAP note expressions (tuning, pressure, brightness, volume, pan, vibrato) and MIDI 2.0 per-note controllers map to per-voice destinations (MATH §7.1).
 - Per-note pitch is a real-valued note into the tuning (MATH §2.1).
+- A part that receives an MPE zone takes the notes of all of its channels (§6.4).
 
 ### 7.4 Parameters
 
-- One host parameter per voice parameter (155) and per function parameter (14). Settings that suit automation (MATH §17) get one too.
+- Each part has one host parameter for each voice parameter (155), function parameter (14), parameter of the supplement (49) and parameter of the part's own (§6.4). The system set-up's parameters have one each, and so do the settings that suit automation (MATH §17). A fractional scaling's 246 bytes and a micro tuning's 128 keys are data, edited in the editor and by their parameter changes, not host parameters.
 - Every parameter that is a number is continuous (binary64): a value of the DX7's scale that may lie between its steps (`keptone_model::voice::Value`). The enumerations (the algorithm, the curves of keyboard scaling, the oscillator mode, the LFO's wave) and the switches take only the DX7's steps. The display shows the DX7 grid. Exporting to `.syx` rounds by `syx.export_rounding = nearest | floor`, default `nearest` (a value halfway between two steps to the even one), and the export warns when that loses information, as it does for an operator switched off, which no dump holds.
-- Parameter IDs are stable forever. They are documented in `docs/STATE-FORMAT.md`.
+- Parameter IDs are stable forever. An ID is made of a part's index, an area (the voice, the function data, the supplement, the part, the system set-up, the settings) and a number within the area, so that a part's parameters keep their IDs whatever `part.count` is. The host sees those of `part.count` parts, and rescans them after the restart that changing the count asks for (§5). They are documented in `docs/STATE-FORMAT.md`.
 
 ## 8. Editor (GUI) and rendering
 
@@ -272,7 +301,7 @@ The audio thread: `clap_plugin.process` and everything it calls.
 - No allocation or deallocation.
 - No locks except a documented `try_lock`.
 - No system calls, no I/O, no unbounded loops.
-- Every loop is bounded by the block length, the voice count, `feedback.max_iterations` or a table size fixed at activation.
+- Every loop is bounded by the block length, the voice count, the part count, `feedback.max_iterations` or a table size fixed at activation.
 
 ### 9.2 Checking it
 
@@ -325,20 +354,22 @@ These are listed in expected order of benefit, and are to be measured first:
 Specified in `docs/STATE-FORMAT.md`, which is written in milestone M2.
 
 - A text document in a **subset of JSON**, as planned for ADLplug-Next's successor: UTF-8, no duplicate keys, numbers as decimal binary64 written shortest-round-trip, no NaN or Inf, a nesting depth limit set by the parser (`json.max_depth`, default 64).
-- A format version, every parameter by stable ID, every setting, the current voice, an optional bank, the tuning, and a SHA-256 of the canonical encoding of the voice.
+- A format version; every part, with its patch (a voice with its supplement and fractional scaling) and every parameter by stable ID; the system set-up; every setting; the tunings and micro tunings the parts play in; optional memories, of voices, performances, micro tunings and fractional scalings, from which program changes select; and a SHA-256 of the canonical encoding of each patch.
 - The parser and writer are written by hand, in kiral's practice; there is no serde. The parser, `keptone_model::json`, is kiral's, made to keep the arrays and objects it is in on a stack of its own, so that no depth the limit allows takes the thread's stack, and to give the line and the column of an error; it keeps a number's text beside its binary64, so that a 64-bit integer such as `lfo.seed` reads exactly. `keptone_model::sha256` is kiral's SHA-256.
 - Unknown keys are kept and written back, so newer versions round-trip through older ones.
 - A host state that fails to parse leaves the plugin unchanged and is reported.
 
 ### 11.2 Voices, banks and other messages
 
-- Keptone is upward compatible with the DX7 rather than a copy of it (§15): it reads every message the DX7 reads, and those of its family that the DX7 does not, the DX1's, the TX7's and the DX7II's, and what the DX7's own manual documents where its firmware differs, wherever they mean nothing that conflicts with what the DX7 takes.
+- Keptone's own format is the native state (§11.1), binary64 throughout. `.syx` and the other data of the DX7's family are formats of compatibility: for exchanging data with the instruments, and for reading the patches found elsewhere.
+- Keptone is upward compatible with the DX7 rather than a copy of it: it reads every message the DX7 reads, and those of its family that the DX7 does not, the DX1's, the TX7's and the DX7II's, and what the DX7's own manual documents where its firmware differs, wherever they mean nothing that conflicts with what the DX7 takes.
 - DX7 `.syx` 1-voice and 32-voice dumps are read and written exactly [DEXED-SYSEX] (`keptone_model::syx`). Concatenated and garbage-prefixed files are scanned for every well-formed message, not only the first. A message cut short, by another status byte or by the end of the file, is reported, and the scan goes on from the byte that cut it.
 - Checksum mismatches are reported. The data is loaded only if `syx.accept_bad_checksum` (default `true`) allows it.
-- The DX7II's supplements of voices (`keptone_model::supplement`), the additional parameters of its ACED and AMEM formats, are read and written exactly [DX7II-MANUAL] [DX7S-MANUAL]: the dump of one, 49 bytes, under format 5, the dump of 32, packed into 35 bytes each, under 6, and the parameter changes of group 6 with the group byte's low bits 0. What each parameter does to the sound is for the DX7II's emulation to say (§15).
-- The DX7II's universal bulk dumps (`keptone_model::dx7ii`) are read and written exactly [DX7II-MANUAL] [DX7S-MANUAL]: a group of a byte count, which counts the names, the classification name `LM  ` and a data format name, the data and the checksum of the names and the data, as many groups as a message holds. Read are a group of the performance edit buffer, `8973PE`, 51 bytes; of 32 performances, `8973PM`, one after another; of the system set-up, `8973S `, 102 bytes, of which the master tune is set by the DX performance parameter change's number 64, or the DX7s's 85, which has no place for the 17 bytes of the DX7II's that have no name and keeps the memory protect's byte as a reserved one; of a micro tuning, the edit buffer's, `MCRYE `, or one of the two in memory, `MCRYM` and the memory's number as a byte, two bytes for each of the 128 keys, a step from 0 to 10794 in its high seven bits and its low seven; of a fractional scaling, `FKSYE `, the offset and the levels of 40 groups of keys of each operator from OP6, each a byte sent as two, its high four bits and then its low four, each 0x30 above them [DX7S-MANUAL]; and of a cartridge's micro tunings, `MCRYC `, 64 from the DX7II and 63 from the DX7s, or fractional scalings, `FKSYC `, 32, a group each, as many as 64. The parameter changes of group 6 with the group byte's low bits 1 set a performance's parameters, numbers 0–50, and the system set-up's, 64–83; those with the low bits 0 and the numbers 126 and 127 set a key of the micro tuning, with three bytes of data, and a parameter of the fractional scaling, with four. The offset's byte, which holds the offset in two's complement (§15), is kept as it comes. Where the DX7II's manual and the DX7s's give a parameter different ranges, both are taken. The DX7s's system reset, the switch remote's number 46, is read with its data, which the DX7s ignores.
-- The performances of the DX1 and the TX7 (`keptone_model::performance`) are read and written exactly [TX7-MANUAL]: the dump of one, 94 bytes, under format 1, and under 2 as [DX7-MANUAL] prints it, which is reported and written under 1; and the dump of 64, packed into 64 bytes each, under 2. A performance holds two sides, A and B, each with the function data, its controllers' sensitivities 0–15 where the DX7's ranges are 0–99 (MATH §7.4), and an attenuation; which side an instrument that plays one takes; the key assign mode; a name; and the bytes the TX7's manual leaves unnamed. Each dump holds all of it but one of the last two, and its writer reports what it could not hold. The TX7's condition acknowledge (format 125) is read and written as well.
-- The other messages of the DX7 and its family are read and written by the same module: parameter changes of the voice group (0, parameters 0–155, the number's high bits in the group byte, and 156, the operator select of the TX7 and the DX7II, which number the operators in opposite orders and whose step is kept as it comes) and of the function group (2, parameters 64–77) [DEXED-SYSEX] [DX7-MANUAL] [TX7-MANUAL] [DX7II-MANUAL]; the DX7's panel switch messages, group 2 with numbers 0–41, a button pressed or released [AJXS-ROM]; the DX7II's switch remote, group byte 0x1B with switches 0–45 [DX7II-MANUAL]; the TX7's DX performance parameter change, group 1, and TX function parameter change, group 4 with the group byte's low bits 1 [TX7-MANUAL]; and dump requests of formats 0, 1, 2, 5, 6, 9 and 125, and of a universal bulk dump by its names [DX7II-MANUAL] [TX7-MANUAL]. Every other message is reported as one of a kind not read.
+- The DX7II's supplements of voices (`keptone_model::supplement`), the additional parameters of its ACED and AMEM formats, are read and written exactly [DX7II-MANUAL] [DX7S-MANUAL]: the dump of one, 49 bytes, under format 5, the dump of 32, packed into 35 bytes each, under 6, and the parameter changes of group 6 with the group byte's low bits 0. What each parameter does to the sound is for Keptone to say, keeping what the data means (§6.4).
+- The DX7II's universal bulk dumps (`keptone_model::dx7ii`) are read and written exactly [DX7II-MANUAL] [DX7S-MANUAL]: a group of a byte count, which counts the names, the classification name `LM  ` and a data format name, the data and the checksum of the names and the data, as many groups as a message holds. Read are a group of the performance edit buffer, `8973PE`, 51 bytes; of 32 performances, `8973PM`, one after another; of the system set-up, `8973S `, 102 bytes, of which the master tune is set by the DX performance parameter change's number 64, or the DX7s's 85, which has no place for the 17 bytes of the DX7II's that have no name and keeps the memory protect's byte as a reserved one; of a micro tuning, the edit buffer's, `MCRYE `, or one of the two in memory, `MCRYM` and the memory's number as a byte, two bytes for each of the 128 keys, a step from 0 to 10794 in its high seven bits and its low seven; of a fractional scaling, `FKSYE `, the offset and the levels of 40 groups of keys of each operator from OP6, each a byte sent as two, its high four bits and then its low four, each 0x30 above them [DX7S-MANUAL]; and of a cartridge's micro tunings, `MCRYC `, 64 from the DX7II and 63 from the DX7s, or fractional scalings, `FKSYC `, 32, a group each, as many as 64. The parameter changes of group 6 with the group byte's low bits 1 set a performance's parameters, numbers 0–50, and the system set-up's, 64–83; those with the low bits 0 and the numbers 126 and 127 set a key of the micro tuning, with three bytes of data, and a parameter of the fractional scaling, with four. The offset's byte holds the offset, −128 to +127, in two's complement, which [DX7II-MANUAL] and [DX7S-MANUAL] leave unsaid: dumps of DX7II banks hold 0x00 in the offset of every operator in fractional mode, and 0x00 to 0x74 or 0xFF in the others, 0x00 the most [DX7II-DUMPS], which two's complement reads as −1 to +116, mostly no offset, where 128 above the offset would read them as mostly −128, the far end. The byte is kept as it comes. Where the DX7II's manual and the DX7s's give a parameter different ranges, both are taken. The DX7s's system reset, the switch remote's number 46, is read with its data, which the DX7s ignores.
+- The performances of the DX1 and the TX7 (`keptone_model::performance`) are read and written exactly [TX7-MANUAL]: the dump of one, 94 bytes, under format 1, and under 2 as [DX7-MANUAL] prints it, which is reported and written under 1; and the dump of 64, packed into 64 bytes each, under 2. The DX7's firmware 1.8 takes format 1 and passes a dump under 2 over [AJXS-ROM]. A performance holds two sides, A and B, each with the function data, its controllers' sensitivities 0–15 where the DX7's ranges are 0–99 (MATH §7.4), and an attenuation; which side an instrument that plays one takes; the key assign mode; a name; and the bytes the TX7's manual leaves unnamed. Each dump holds all of it but one of the last two, and its writer reports what it could not hold. The TX7's condition acknowledge (format 125) is read and written as well. The DX7 takes the dump of one as the A side of a DX1's [DX7-MANUAL]: it selects the voice the first byte names and takes the function data, passing the rest over [AJXS-ROM]; the TX7 plays the side its voice select names [TX7-MANUAL].
+- The other messages of the DX7 and its family are read and written by the same module: parameter changes of the voice group (0, parameters 0–155, the number's high bits in the group byte, and 156, the operator select of the TX7 and the DX7II, which number the operators in opposite orders and whose step is kept as it comes, to be read as the instrument that sent it numbers them, where that is known (§6.4)) and of the function group (2, parameters 64–77) [DEXED-SYSEX] [DX7-MANUAL] [TX7-MANUAL] [DX7II-MANUAL]; the DX7's panel switch messages, group 2 with numbers 0–41, a button pressed or released [AJXS-ROM]; the DX7II's switch remote, group byte 0x1B with switches 0–45 [DX7II-MANUAL]; the TX7's DX performance parameter change, group 1, and TX function parameter change, group 4 with the group byte's low bits 1 [TX7-MANUAL]; and dump requests of formats 0, 1, 2, 5, 6, 9 and 125, and of a universal bulk dump by its names [DX7II-MANUAL] [TX7-MANUAL]. Every other message is reported as one of a kind not read.
+- Keptone answers a dump request of a voice, of 32 voices or of the DX7II's other data with that data [DX7II-MANUAL]; the DX7 itself answers none [AJXS-ROM]. Panel switch messages, the DX7's [AJXS-ROM] and the switch remotes of the DX7II [DX7II-MANUAL] and the TX802 [TX802-SYSEX], press the buttons of the front panels (UI.md §2.6). The librarian makes a hardware DX7 dump what it holds by sending it panel switch messages: with SYS INFO AVAIL, a voice button sends that voice, and FUNCTION, button 8 to MIDI transmit and YES send the bank [AJXS-ROM]. `keptone-model` decodes and encodes these messages (M2), and the host answers and acts on them (M5).
 - Out-of-range bytes are reported: a step outside its parameter's range, a packed byte that sets bits its format leaves unused, and a switch's data that is neither 0 (released) nor 127 (pressed). They are mapped by an explicit, documented policy (`syx.out_of_range = clamp | reject`, default `clamp`), not by the ad-hoc scaling Dexed uses: `clamp` takes a step outside the range as the range's nearer end, ignores unused bits and takes a switch's data other than 0 as pressed, as the DX7's firmware does [AJXS-ROM]; `reject` refuses the message. A message is loaded or refused whole.
 - The TX802's own data (`keptone_model::tx802`) is read and written exactly [TX802-SYSEX]: its performance edit buffer, `8952PE`, the twelve parameters of each of its eight tone generators and a name, 116 bytes, each sent as two hexadecimal digits, '0' to '9' and 'A' to 'F'; the 64 performances of its memory, `8952PM`, a group each of 84 packed bytes so sent, the detune in bits 6–3 as the TX802's dumps hold it [TX802-DUMPS], where Yamaha's table draws three bits; and its system set-up, `8952S `, 263 bytes of seven bits. A performance's group counts its data alone, the names not counted, unlike every other universal bulk dump's, and its checksum is of the names and the data. A byte that is no hexadecimal digit is reported, and taken as the digit it most likely stands for. The parameter changes of group 6 with the group byte's low bits 2 set a performance's parameters, numbers 0–115, the voice's and the micro tuning table's with two bytes of data; the switch remote's numbers 64–96 are the TX802's panel switches. Its voices, supplements, micro tunings and fractional scalings are the DX7II's.
 - Later: user graphs in the native format.
@@ -357,6 +388,8 @@ Specified in `docs/STATE-FORMAT.md`, which is written in milestone M2.
 - read a pitch that holds a period as cents, `-?[0-9]+\.[0-9]*`, and any other as a ratio, `[0-9]+(/[0-9]+)?`, both parts above 0 and within 64 bits, a ratio alone over 1;
 - take a mapping's four keys as MIDI's, 0 to 127, its frequency as `[0-9]+(\.[0-9]*)?` above 0, its entries as integers or `x`, and the keys of its pattern after the last entry as unmapped, and refuse a mapping that leaves its reference key unmapped, as the format says;
 - pass over what follows a scale's last pitch or the last entry that a mapping's size allows, and allocate only as they read, never because a count in the file says so.
+
+A part plays in the tuning that `tuning.source` gives (MATH §2.1), or in a micro tuning of the DX7II's and the TX802's, a step from 0 to 10794 for each of the 128 keys (§11.2). Their eleven preset tunings, equal temperament, pure major and pure minor, mean tone, Pythagorean, Werckmeister, Kirnberger, Vallotti and Young, the equal temperament shifted by a quarter tone, the quarter tone and the eighth tone, the second to the fifth of them in any key [DX7II-MANUAL] [TX802-MANUAL], are computed from the ratios and temperaments they name and checked against the cents that [TX802-MANUAL] prints (its p. 28), never copied from an instrument's memory (§14).
 
 ## 12. Dependencies
 
@@ -423,7 +456,7 @@ GitHub Actions, plain git checkout, no third-party actions:
 - Tables taken from MSFA (Apache-2.0) are cited where they are used.
 - Firmware behaviour is learned from [AJXS-ROM] and written independently. Never translate its code: algorithms are not copyrightable, but a line-by-line translation could be a derivative of Yamaha's firmware.
 - [VDX7] needs a ROM the user owns. It may be used locally to measure timings, never in CI or the product.
-- "DX7" and "Yamaha" appear only descriptively ("compatible with DX7 SysEx"), never in the product name. "VST" is used per Steinberg's rules if at all.
+- "DX7", "Yamaha" and the names of the other instruments appear only descriptively ("compatible with DX7 SysEx"), as text: never in the product name, and never as a logo, the front panels (UI.md §2.6) included. "VST" is used per Steinberg's rules if at all.
 
 (This is engineering hygiene, not legal advice.)
 
@@ -460,19 +493,13 @@ These are recorded here and settled by the author (and GRØVeN where it is their
 4. **The default AA preset**: ADAA-2 + ×2 IIR oversampling + `droop_eq = auto`, to be confirmed against the CPU budget measured in M7.
 5. **GRØVeN's priorities**: which DAW (Logic → AUv2 first?), and whether the librarian or the sound engine matters more to him first.
 6. **GUI**: confirm §8 (renderer architecture) and `docs/UI.md` §9 (its open questions).
-7. ~~Dump requests and panel switches~~ — **decided** (2026-11-17):
-   - Keptone answers a dump request (format 0, one voice, and 9, 32 voices; the DX7II's others with its data) as a DX7II does [DX7II-MANUAL], since the DX7II is to be emulated; the DX7 itself answers none [AJXS-ROM].
-   - The DX7's panel switch messages, parameter changes of the function group with numbers 0–41 that its firmware takes as its buttons pressed (127) or released (0) [AJXS-ROM], and the DX7II's switch remote [DX7II-MANUAL] drive an emulation of the instrument's panel: its modes, buttons and display, in the editor (M8b).
-   - The librarian sends them to a hardware DX7, which answers no request, to make it dump: with SYS INFO AVAIL, a voice button sends that voice, and FUNCTION, button 8 to MIDI transmit and YES send the bank [AJXS-ROM].
-   - A setting may map them to Keptone's own actions instead.
-   - `keptone-model` decodes and encodes all of these messages (M2); the host answers and acts on them (M5).
-8. ~~The DX1's performance~~ — **decided** (2026-11-17): Keptone is upward compatible with the DX7, not a copy of it, and reads what the DX7 and its family send wherever it can (§11.2).
-   - The DX7 receives a dump of one performance in 94 bytes, the A side of a DX1's [DX7-MANUAL], and takes from it the number of a voice, which it selects, and the function data, passing the rest over [AJXS-ROM]. Its manual prints the dump's format number as 2; the TX7's numbers it 1 and gives 2 to the dump of 64 performances [TX7-MANUAL], and firmware 1.8 takes 1 and passes a dump of 2 over [AJXS-ROM]. Keptone reads it under both, and writes it under 1.
-   - It reads the dump of 64 performances and the TX7's other messages as well: the DX performance and TX function parameter changes, the operator select, the condition acknowledge, and the requests of formats 1, 2 and 125.
-   - A performance's sensitivities, 0–15, become the DX7's ranges in proportion by default, or as the firmware has them, as `syx.performance_sensitivity` says (MATH §7.4).
-   - `keptone-model` decodes and encodes them (M2); the host acts on them (M5): which side it takes (the DX7 takes A, and the TX7 the side its voice select names), the voice that byte 0 selects, and the TX7's settings.
-9. ~~The DX7II's data~~ — **decided** (2026-11-17): `keptone-model` reads and writes all of the DX7II's data in M2, before the DX7II's emulation gives it its sound: its supplements of voices, its performances, its system set-up, its micro tunings and its fractional scalings, with their parameter changes [DX7II-MANUAL], which the DX7s shares nearly whole [DX7S-MANUAL]. The TX802's own data, its performances and its system set-up, followed once Yamaha's document of it came to hand [TX802-SYSEX].
-10. ~~The fractional scaling's offset~~ — **decided** (2026-11-17): its byte holds the offset, −128 to +127, in two's complement, which [DX7II-MANUAL] and [DX7S-MANUAL] leave unsaid. Dumps of DX7II banks [DX7II-DUMPS] hold 0x00 in the offset of every operator in fractional mode, and 0x00 to 0x74 or 0xFF in the others, 0x00 the most: two's complement reads them as −1 to +116, mostly no offset, where 128 above the offset would read them as mostly −128, the far end. `keptone-model` keeps the byte as it comes and gives the offset it holds; the DX7II's emulation gives it its sound.
+7. ~~Dump requests and panel switches~~ — **decided** (2026-11-17; §11.2, UI.md §2.6).
+8. ~~The DX1's performance~~ — **decided** (2026-11-17; §6.4, §11.2).
+9. ~~The DX7II's data~~ — **decided** (2026-11-17; §11.2, §16).
+10. ~~The fractional scaling's offset~~ — **decided: two's complement** (2026-11-17; §11.2).
+11. ~~How far the family reaches~~ — **decided: the DX7's six-operator family** (2026-11-17; §6.4).
+12. ~~How many parts by default~~ — **decided: 2** (2026-11-17; §6.4).
+13. ~~The function data or the supplement~~ — **decided: the supplement, as the DX7II** (2026-11-17; MATH §13.5).
 
 ## 16. Milestones
 
@@ -483,11 +510,13 @@ Each milestone ends with its tests green in CI and its docs updated. An item tag
 | M0 | Scaffold: workspace, lints, toolchain files, REUSE, CI skeleton, docs in place. | CI green on three OSes with empty crates. |
 | M1 | `keptone-math`: sin2pi, cos2pi, sinc, sinc′, exp2; ADAA-1/2 closed forms; Kepler solver; Kapteyn DFT tables and bounds. `scripts/` reference vectors. | MATH §16 rows for these pass. |
 | M2 | `keptone-model`: typed patch and function data, `.syx` codecs of the DX7's and its family's data (§11.2), parameter-change and request messages, native state format with docs/STATE-FORMAT.md, `.scl`/`.kbm`. Fuzz targets and mutation tests with regressions. | Round trips byte-identical; fuzzing clean for a CI day. |
-| M3 | `keptone-engine` headless, point-sampled (`adaa.order = 0`, M = 1): pitch, levels, EG, PEG, LFO, controllers, graph, implicit feedback, voices. `keptone-tools render`. | Rate and block independence; EG tests; algorithm-data test of three sources. |
+| M3 | `keptone-engine` headless, point-sampled (`adaa.order = 0`, M = 1): pitch, levels, EG, PEG, LFO, controllers, graph, implicit feedback, voices, parts (MATH §13.5). `keptone-tools render`. | Rate and block independence; EG tests; algorithm-data test of three sources; a part's output, with voices to spare, the same whatever the other parts play. |
 | M4 | Antialiasing: ADAA-1/2 with delay alignment, droop EQ, the Kapteyn series, oversampling with IIR/FIR halfbands; the reference renderer and alias metric; baselines. | Alias metric baselines recorded; series ≡ point where both apply. |
-| M5 | `keptone-host` + `keptone-clap`: params with polyphonic modulation, state, notes, MIDI 1.0/2.0, SysEx, expressions, tuning, 64-bit audio, latency/tail/voice-info; RTSan. | clap-validator clean; RTSan clean on random sessions. |
+| M5 | `keptone-host` + `keptone-clap`: params with polyphonic modulation, state, notes, MIDI 1.0/2.0, SysEx, expressions, tuning, 64-bit audio, latency/tail/voice-info; the parts' channels, and the family's performances and system set-ups as parts (§6.4); RTSan. | clap-validator clean; RTSan clean on random sessions; the family's performances and system set-ups become parts and come back byte for byte. |
 | M6 | `wrappers/`: VST3, AUv2, standalone. | pluginval 10 and auval pass. |
 | M7 | `keptone-kernels`: measured vector forms (§10.4), dispatch, SDE tests; CPU budget report. | Contracts met at all levels; engine-level agreement and reproducibility tests pass; measured speedups recorded. |
 | M8a | `keptone-platform` + `keptone-render`: windows on four systems; `cpu.rs`, then `d3d11.rs`, `metal.rs`, `vulkan.rs`; device sharing, loss and fallback. | Scene-equivalence tests pass against `cpu.rs`; a test editor opens in Bitwig, REAPER, Logic and Ardour (X11) and as a Wayland floating window; an idle editor draws no frames. |
-| M8b | `keptone-ui`: the editor of `docs/UI.md`, including the graph editor and user graphs (MATH §8.4). | UI.md §8 tests pass; event-sequence fuzzing clean; no RTSan reports with the editor open. |
-| M9 | Extensions: MTS-ESP, per-voice algorithms, DX7II/TX802 data, adaptive oversampling, cubic-interpolation ADAA. | Each behind its setting, with tests. |
+| M8b | `keptone-ui`: the editor of `docs/UI.md`, including the graph editor, user graphs (MATH §8.4) and the front panels of the family (UI.md §2.6). | UI.md §8 tests pass; event-sequence fuzzing clean; no RTSan reports with the editor open. |
+| M9a | Voices of the family: what a voice's supplement does (amplitude modulation sensitivity 0–7, the pitch EG's range, velocity switch and rate scaling, the LFO's key trigger, unison and its detune, random pitch, the pitch bend's modes, portamento's steps, the controllers and their biases), fractional scaling and micro tuning, each a law of Keptone's own that keeps what a voice's data means (§6.4). | Every law in MATH with its source, its verify items resolved in `docs/VERIFICATION.md`. |
+| M9b | Parts at the family's level: detune, volume, pan and what moves it, note limits and EG forced damp, alternate groups, the foot switch's functions, the key filter, and the tables of program and control changes. | Every law in MATH; the family's performances and system set-ups play through parts as far as Keptone's features take them. |
+| M10 | Extensions: MTS-ESP, per-voice algorithms, adaptive oversampling, cubic-interpolation ADAA. | Each behind its setting, with tests. |

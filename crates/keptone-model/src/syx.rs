@@ -39,7 +39,7 @@
 //!   and the TX7's, of a performance's parameter, of one of its own settings and
 //!   of the operator its panel edits;
 //! - the dump requests of the DX7II and the TX7, which the DX7 itself does not
-//!   answer, and Keptone does (docs/DESIGN.md §15).
+//!   answer, and Keptone does (docs/DESIGN.md §11.2).
 //!
 //! [`read`] finds every message in a file, not only the first: a file may hold
 //! several, one after another, with bytes that belong to no message before,
@@ -1243,8 +1243,8 @@ impl PerformanceStep {
 /// The operator a panel edits, by the step of voice parameter 156, 0 to 5. The
 /// TX7 numbers the operators from OP6, 0, to OP1, 5 \[TX7-MANUAL\], and the
 /// DX7II the other way, from OP1 to OP6 \[DX7II-MANUAL\]: the step is kept as
-/// it comes, for the instrument emulated to take as its own (docs/DESIGN.md
-/// §11.2).
+/// it comes, to be read as the instrument that sent it numbers them, where
+/// that is known (docs/DESIGN.md §6.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OperatorSelect(u8);
 

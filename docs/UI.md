@@ -160,6 +160,15 @@ Nothing is cached at the old scale.
 - Line weights are 1 or 2 logical px.
 - Targets are at least 24 logical px.
 
+### 2.6 Front panels of the family
+
+A **front panel** plays an instrument of the DX7's family the way its own panel does: its buttons, its modes and its display (DESIGN §11.2). It is not where Keptone is edited, which is the main view (§2.1), but a view of its own, for those who know the instrument and for the panel switch messages it answers.
+
+- It opens from the header at any time, before any message has come, on the panel chosen in it, and a list in the view switches it to the panel of any other instrument of the family. Each panel keeps its own mode and place while another is shown.
+- It is drawn inside the editor's window, as the operator panels are (§2.3), and follows the instrument's panel: its buttons, display and lamps where the instrument has them. Its name is written as text, and no logo is drawn (DESIGN §14).
+- Its display shows Keptone's state as the instrument's display would, a value between steps as the nearest step, and its buttons change Keptone's state as the instrument's own change the instrument's, as far as the instrument's panel reaches.
+- A panel switch message presses the button its number names on the panel of the instrument it comes from (DESIGN §6.4), shown or not. `ui.front_panel.follow = on | off` (default off) brings that panel into view when one comes.
+
 ## 3. The graph canvas
 
 ### 3.1 What is drawn
@@ -385,7 +394,7 @@ The editor takes the principle, not the look. The 2026 equivalent of "no knobs" 
 - square geometry;
 - numerals in a monospaced face with tabular figures.
 
-No DX7 artwork, logo, panel layout or exact colour is reproduced (DESIGN §14).
+In the main view, no DX7 artwork, panel layout or exact colour is reproduced; the front panels (§2.6) follow the instruments' panels. No logo is drawn anywhere: a name is written as text, descriptively (DESIGN §14).
 
 Three directions are mocked up at full size with the same layout and the same patch, in `docs/mockups/` (HTML and PNG; its README says what is binding). The patch's levels, dB, modulation indices and β come from MATH §3 and §9. The scope and spectrum come from a render of that patch.
 
@@ -504,3 +513,4 @@ That is a small addition if the UI is built on themes from the start. It would b
 1. Which built-in theme is the default (§6b; `membrane` for now).
 2. Languages beyond English and Japanese.
 3. Whether the operator table or the global strip should be visible by default on small screens.
+4. How the editor shows parts (DESIGN §6.4): which part it edits, where a performance's settings and its parts' keys, channels and pans go, and which parts a front panel (§2.6) acts on.

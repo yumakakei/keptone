@@ -302,7 +302,7 @@ Let $`a = 99 - \text{DELAY}`$. If $`a = 99`$, then $`w \equiv 1`$. Otherwise [MS
 ### 6.5 Sync and scope
 
 - LFO SYNC = 1 resets the phase at key-on.
-- The DX7 has one LFO shared by all voices. `lfo.scope = global | voice`, default `global`. With `global`, the key-on sync resets the shared LFO.
+- The DX7 has one LFO shared by all voices, and each part has one shared by its voices (§13.5). `lfo.scope = part | voice`, default `part`. With `part`, the key-on sync resets the part's LFO.
 
 ## 7. Controllers and amplitude modulation (`keptone-engine::control`)
 
@@ -602,7 +602,7 @@ $`\exp_2(z)`$: split $`z = k + r`$ with $`r \in [-1/2, 1/2]`$, evaluate a minima
 
 ### 13.1 Polyphony
 
-`voice.count`, default 16, from 1 up to what memory allows. Voices are allocated at activation and never on the audio thread.
+`voice.count`, default 16, from 1 up to what memory allows. Voices are allocated at activation and never on the audio thread. Every part takes its voices from this one pool (§13.5).
 
 ### 13.2 Allocation and stealing
 
@@ -623,6 +623,18 @@ No recursive state is allowed to decay into subnormals:
 - The relaxation state of §9.6 and every decimator state are set to exact zero when their voice or the whole engine has been silent for `engine.idle_s` (default 0.5 s).
 - In addition, at each block boundary every IIR state whose magnitude is below $`2^{-500}`$ is set to zero. The rule is a deterministic function of the state, so block independence (§0.3) still holds: the check runs at fixed sample multiples of 64 at the engine rate, not at host block boundaries.
 
+### 13.5 Parts
+
+A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.count` of them, default 2, the A and B of the DX1 and the DX7II, fixed at activation. With the first part alone on, as it is by default, this document reads as it is written for the DX7.
+
+- **The notes a part takes.** A note event goes to every part that takes it: the part receives the event's channel, or every channel; the key lies between the part's lowest key and its highest, both included; and the part's key filter, every key, the odd ones or the even ones [DX7II-MANUAL], lets it through. The part plays the key shifted by its note shift, −24 to +24, which adds to the patch's transpose (§2.1) [TX802-MANUAL]. A part that is off takes no note, as a tone generator of the TX802 switched off takes none [TX802-MANUAL]; the first part is on by default, and every other off. The DX7II's split is two parts on one channel whose ranges meet at the split point, and its dual two parts on every key.
+- **Alternate groups.** The parts of an alternate group, adjacent and on one channel, take its notes in turn, each new note the next part's, within the range of the group's first part [TX802-MANUAL].
+- **Voices.** Every part takes its voices from the one pool of §13.1. A part's note limit, where it has one (by default it has none), caps how many of them it holds; a note beyond it takes the voice of the part's own that §13.2 picks. A note that several parts take starts a voice in each.
+- **What a part's voices share**: the LFO (§6.5), the portamento and the mono or poly state (§7.3), and the controllers (§7.1). Parts on one channel hear the same controller messages.
+- **The function data and the supplement.** A supplement holds for its voice what the function data holds for the instrument: the poly or mono, the pitch bend, the portamento and the controllers [DX7II-MANUAL]. Where a part's patch has one, the part plays the supplement's, as the DX7II does; with `part.function_source = part`, it plays its own function data. `part.function_source = patch | part`, default `patch`.
+- **Output.** A part sums its voices as §14 sums them, scales the sum by its volume, 1 by default, and its pan, the centre by default, places it in the output (§14).
+- The rest of a part's laws, its detune and pan, EG forced damp, and what a supplement, unison and micro tunings do, are written here as Keptone's own, with the milestones that give them sound (DESIGN §16). Until then a part plays its patch as a DX7 voice, at the centre.
+
 ## 14. Output (`keptone-engine::mix`)
 
 ```math
@@ -631,7 +643,7 @@ No recursive state is allowed to decay into subnormals:
 
 - `output.gain` defaults to 0.5, which puts one full-scale carrier at 0 dBFS.
 - `output.carrier_normalization = none | count | sqrt-count`, default `none` (DX7).
-- The output is mono, duplicated to stereo. Per-voice and per-operator pan (DX7II) is a later setting.
+- The sum above is one part's, and mono (§13.5). The output is one port. With `output.channels = stereo`, the default, it has two channels, and each part's sum, scaled by its volume, goes to both, placed by the part's pan: at the centre, its default, the same on both. With `mono` it has one channel, which takes every part's sum, scaled by its volume, without its pan. The port adds the parts in the order of their indices. The pan's law and per-operator pan are later settings; outputs beyond these are the host's, another instance on another track (DESIGN §1).
 - When the host offers 64-bit ports, the output stays binary64. Otherwise it is rounded to nearest binary32 with no dither: the signal's own floor is far below binary32's resolution.
 - There is no limiter or soft clip; that is the host's business.
 
@@ -697,7 +709,7 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `eg.zero_level` | silence | silence / dx7 | 4.6 |
 | `eg.end_db` | −200 | < 0 | 4.6 |
 | `param.level_glide_s` | 0.002 | ≥ 0 | 4.7 |
-| `lfo.scope` | global | global / voice | 6.5 |
+| `lfo.scope` | part | part / voice | 6.5 |
 | `lfo.seed` | 0 | u64 | 6.3 |
 | `lfo.sh_source` | splitmix | splitmix / dx7-lcg | 6.3 |
 | `am.max_steps` | 2048 (provisional) | ≥ 0 | 7.2 |
@@ -725,8 +737,11 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `voice.steal` | dx7 | dx7 / oldest / quietest / released-first | 13.2 |
 | `voice.retrigger` | same-voice | same-voice / new-voice | 13.2 |
 | `engine.idle_s` | 0.5 | ≥ 0 | 13.4 |
+| `part.count` | 2 | ≥ 1 | 13.5 |
+| `part.function_source` | patch | patch / part | 13.5 |
 | `output.gain` | 0.5 | ≥ 0 | 14 |
 | `output.carrier_normalization` | none | none / count / sqrt-count | 14 |
+| `output.channels` | stereo | stereo / mono | 14 |
 | `syx.accept_bad_checksum` | true | bool | DESIGN §11.2 |
 | `syx.out_of_range` | clamp | clamp / reject | DESIGN §11.2 |
 | `syx.export_rounding` | nearest | nearest / floor | DESIGN §7.4 |

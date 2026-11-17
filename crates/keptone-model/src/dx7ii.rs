@@ -19,8 +19,8 @@
 //! table, its cartridge banks, its memory protect and its master tune. A
 //! [`MicroTuning`] gives each of the 128 keys its pitch, and a
 //! [`FractionalScaling`] gives each operator a level for each of 40 groups of
-//! keys, in place of the DX7's level scaling. What each does is for the
-//! DX7II's emulation and the host to say (docs/DESIGN.md §15); these types
+//! keys, in place of the DX7's level scaling. What each does is Keptone's
+//! own, for the engine and the host to say (docs/DESIGN.md §6.4); these types
 //! hold them, each number a [`Value`] of its scale, a [`KeyPitch`] or an
 //! [`Index`] that names a thing, each choice an enumeration and each switch a
 //! `bool`, and the offset of a fractional scaling its byte, which holds it in
@@ -875,9 +875,9 @@ impl fmt::Display for SystemParameter {
 /// seven.
 ///
 /// The DX7II knows only the scale's steps, the integers 0 to 10794. A value may
-/// lie between them; the pitch a value gives is for the DX7II's emulation to
-/// say (docs/DESIGN.md §15). A value is never NaN, never below 0 and never
-/// above 10794, nor ever −0.
+/// lie between them; the pitch a value gives is for the engine to say
+/// (docs/DESIGN.md §6.4). A value is never NaN, never below 0 and never above
+/// 10794, nor ever −0.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct KeyPitch(f64);
 
@@ -947,14 +947,14 @@ impl MicroTuning {
 
 /// The offset of an operator's fractional scaling: the byte that the dumps and
 /// the parameter change send for it, any of 0 to 255, which holds the offset,
-/// −128 to +127, in two's complement (docs/DESIGN.md §15).
+/// −128 to +127, in two's complement (docs/DESIGN.md §11.2).
 ///
 /// \[DX7II-MANUAL\] and \[DX7S-MANUAL\] give the offset as −128 to +127 and do
 /// not say how its byte holds it. Dumps of DX7II banks hold 0x00 in the offset
 /// of every operator in fractional mode \[DX7II-DUMPS\], which two's complement
 /// reads as no offset. The byte is kept as it comes, so that a dump comes back
-/// byte for byte; what the offset does to the sound is for the DX7II's
-/// emulation to say.
+/// byte for byte; what the offset does to the sound is for the engine to say
+/// (docs/DESIGN.md §6.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Offset(u8);
 

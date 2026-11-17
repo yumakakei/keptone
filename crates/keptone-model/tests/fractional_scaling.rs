@@ -141,7 +141,7 @@ fn dumps_come_back_byte_for_byte() {
 
 #[test]
 fn offsets_in_twos_complement() {
-    // The offset's byte holds it in two's complement (docs/DESIGN.md §15).
+    // The offset's byte holds it in two's complement (docs/DESIGN.md §11.2).
     let offsets = [
         (0x00, 0.0),
         (0x01, 1.0),

@@ -19,10 +19,10 @@
 //! time; and the ranges by which the modulation wheel, the two foot
 //! controllers, the breath controller, the aftertouch and a MIDI controller
 //! modulate the pitch and the amplitude and bias the envelopes, with a volume
-//! for some and a pitch bias for others. What each does to the sound is the
-//! DX7II's emulation's to say (docs/DESIGN.md §15); the supplement holds them,
-//! each number a [`Value`] of its scale that may lie between its steps, each
-//! choice an enumeration and each switch a `bool`.
+//! for some and a pitch bias for others. What each does to the sound is for
+//! the engine to say, keeping what the data means (docs/DESIGN.md §6.4); the
+//! supplement holds them, each number a [`Value`] of its scale that may lie
+//! between its steps, each choice an enumeration and each switch a `bool`.
 //!
 //! [`SupplementParameter`] numbers the parameters as the DX7II's parameter
 //! changes of the supplement do: 0 to 38, and 64 to 73.
