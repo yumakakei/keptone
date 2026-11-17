@@ -454,6 +454,12 @@ These are recorded here and settled by the author (and GRØVeN where it is their
 4. **The default AA preset**: ADAA-2 + ×2 IIR oversampling + `droop_eq = auto`, to be confirmed against the CPU budget measured in M7.
 5. **GRØVeN's priorities**: which DAW (Logic → AUv2 first?), and whether the librarian or the sound engine matters more to him first.
 6. **GUI**: confirm §8 (renderer architecture) and `docs/UI.md` §9 (its open questions).
+7. ~~Dump requests and panel switches~~ — **decided** (2026-11-17):
+   - Keptone answers a dump request (format 0, one voice, and 9, 32 voices; the DX7II's others with its data) as a DX7II does [DX7II-MANUAL], since the DX7II is to be emulated; the DX7 itself answers none [AJXS-ROM].
+   - The DX7's panel switch messages, parameter changes of the function group with numbers 0–41 that its firmware takes as its buttons pressed (127) or released (0) [AJXS-ROM], and the DX7II's switch remote [DX7II-MANUAL] drive an emulation of the instrument's panel: its modes, buttons and display, in the editor (M8b).
+   - The librarian sends them to a hardware DX7, which answers no request, to make it dump: with SYS INFO AVAIL, a voice button sends that voice, and FUNCTION, button 8 to MIDI transmit and YES send the bank [AJXS-ROM].
+   - A setting may map them to Keptone's own actions instead.
+   - `keptone-model` decodes and encodes all of these messages (M2); the host answers and acts on them (M5).
 
 ## 16. Milestones
 
