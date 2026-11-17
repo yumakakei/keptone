@@ -96,25 +96,45 @@ pub enum Rounding {
 }
 
 impl Rounding {
-    /// The step that a value of [0, 127] rounds to.
+    /// The step that a value of [0, 255] rounds to.
     pub(crate) fn apply(self, value: f64) -> u8 {
-        let step = match self {
+        small_integer(self.integer(value))
+    }
+
+    /// The step that a value of [0, 65535] rounds to.
+    pub(crate) fn apply_wide(self, value: f64) -> u16 {
+        wide_integer(self.integer(value))
+    }
+
+    /// The integer that a value rounds to.
+    fn integer(self, value: f64) -> f64 {
+        match self {
             Self::Nearest => value.round_ties_even(),
             Self::Floor => value.floor(),
-        };
-        small_integer(step)
+        }
     }
 }
 
-/// An integer of [0, 127] as a byte.
+/// An integer of [0, 255] as a byte.
 #[expect(
     clippy::as_conversions,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "an integer of [0, 127] converts exactly"
+    reason = "an integer of [0, 255] converts exactly"
 )]
 fn small_integer(integer: f64) -> u8 {
     integer as u8
+}
+
+/// An integer of [0, 65535] as sixteen bits.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "an integer of [0, 65535] converts exactly"
+)]
+fn wide_integer(integer: f64) -> u16 {
+    integer as u16
 }
 
 /// The curve of keyboard level scaling on one side of the break point (MATH

@@ -18,17 +18,19 @@ none, and a dump whose checksum is wrong and some of whose bytes are out of rang
 (docs/DESIGN.md §14). Beside them, the dumps of the performances of the DX1 and the TX7, of one and of 64, laid out as
 [TX7-MANUAL] lays them out, and the DX7II's dumps of supplements of voices, of one and of 32, laid out as [DX7II-MANUAL]
 lays them out, and its universal bulk dumps of a performance, of 32 and of its system set-up, and the DX7s's of its
-system set-up [DX7S-MANUAL], all of random steps; and a file of the DX7's other messages and its family's: parameter
-changes of voice parameters, of the operators' switches and of every function parameter, the presses of the DX7's panel
-buttons that make it send its bank [AJXS-ROM], switches of the DX7II's switch remote, the TX7's changes of a
-performance, of its own settings and of its operator select, the DX7II's changes of a supplement, a performance and the
-system set-up, the DX7s's system reset, dump requests [DX7II-MANUAL] [TX7-MANUAL], a performance under format number 2
-and a condition acknowledge, with some out of range and some of no kind read. fuzz/seeds/json/ holds JSON texts of the
-subset that the native state is to be written in: an object of settings and values nested a few levels, with an integer
-of 64 bits; strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a
-few levels; and numbers at the ends of binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard
-mappings of Scala's: equal steps in cents, just intonation in ratios, the three ends of a line, ISO 8859-1, a linear
-mapping and keys left unmapped. The script writes the same bytes every time.
+system set-up [DX7S-MANUAL], and of its micro tunings and its fractional scalings, the edit buffer's, a memory's and
+cartridges', all of random steps, with the changes of a key of the one and of a parameter of the other; and a file of
+the DX7's other messages and its family's: parameter changes of voice parameters, of the operators' switches and of
+every function parameter, the presses of the DX7's panel buttons that make it send its bank [AJXS-ROM], switches of the
+DX7II's switch remote, the TX7's changes of a performance, of its own settings and of its operator select, the DX7II's
+changes of a supplement, a performance and the system set-up, the DX7s's system reset, dump requests [DX7II-MANUAL]
+[TX7-MANUAL], a performance under format number 2 and a condition acknowledge, with some out of range and some of no
+kind read. fuzz/seeds/json/ holds JSON texts of the subset that the native state is to be written in: an object of
+settings and values nested a few levels, with an integer of 64 bits; strings with every escape, a surrogate pair and
+characters of several scripts; arrays and objects nested a few levels; and numbers at the ends of binary64's range.
+fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard mappings of Scala's: equal steps in cents, just intonation
+in ratios, the three ends of a line, ISO 8859-1, a linear mapping and keys left unmapped. The script writes the same
+bytes every time.
 """
 
 import sys
@@ -164,6 +166,16 @@ def main() -> int:
     system = universal(14, b"LM  8973S ", random_system_setup(numbers))
     dx7s = random_system_setup(numbers)
     system_dx7s = universal(14, b"LM  8973S ", dx7s[:20] + dx7s[37:])
+    # Its micro tunings, the edit buffer's, a memory's and a cartridge's of three, and its fractional scalings, the edit
+    # buffer's and a cartridge's of two; the changes of a key of the one and of a parameter of the other, each of a
+    # step in range and of one beyond it.
+    tunings = [random_micro_tuning(numbers) for _ in range(5)]
+    scalings = [random_scaling(numbers) for _ in range(3)]
+    keys = universal(14, b"LM  MCRYE ", tunings[0]) + universal(14, b"LM  MCRYM\x01", tunings[1])
+    keys += universal_groups(14, b"LM  MCRYC ", tunings[2:])
+    keys += universal(14, b"LM  FKSYE ", scalings[0]) + universal_groups(14, b"LM  FKSYC ", scalings[1:])
+    keys += bytes([0xF0, 0x43, 0x1E, 0x18, 0x7E, 60, 42, 85, 0xF7, 0xF0, 0x43, 0x1E, 0x18, 0x7E, 61, 85, 0, 0xF7])
+    keys += bytes([0xF0, 0x43, 0x1E, 0x18, 0x7F, 2, 17, 1, 35, 0xF7, 0xF0, 0x43, 0x1E, 0x18, 0x7F, 5, 40, 2, 0, 0xF7])
     seeds = {
         "voice.syx": voice,
         "bank.syx": bank,
@@ -176,6 +188,7 @@ def main() -> int:
         "supplement.syx": supplement,
         "supplements.syx": supplements,
         "dx7ii.syx": performance_edit + performance_memory + system + system_dx7s,
+        "keys.syx": keys,
     }
     write(SEEDS / "syx", seeds)
     write(SEEDS / "json", json_seeds())
@@ -359,6 +372,32 @@ def universal(channel: int, names: bytes, data: list[int]) -> bytes:
     count = len(counted)
     checksum = -sum(counted) & 0x7F
     return bytes([0xF0, 0x43, channel, 0x7E, count >> 7, count & 0x7F, *counted, checksum, 0xF7])
+
+
+def universal_groups(channel: int, names: bytes, groups: list[list[int]]) -> bytes:
+    """A universal bulk dump of a group for each of `groups`' data, each as `universal` writes it."""
+    message = bytes([0xF0, 0x43, channel, 0x7E])
+    for data in groups:
+        message += universal(channel, names, data)[4:-1]
+    return message + bytes([0xF7])
+
+
+# The largest step of a key of a micro tuning: 84 · 128 + 42 [DX7II-MANUAL].
+MICRO_TUNING_LARGEST = 10794
+
+
+def random_micro_tuning(numbers: Iterator[int]) -> list[int]:
+    """The 256 bytes of a micro tuning of random steps, each no more than 10794: each step's high seven bits, then its
+    low seven."""
+    steps = [next(numbers) % (MICRO_TUNING_LARGEST + 1) for _ in range(128)]
+    return [half for step in steps for half in (step >> 7, step & 0x7F)]
+
+
+def random_scaling(numbers: Iterator[int]) -> list[int]:
+    """The 492 bytes of a fractional scaling of 246 random bytes: each byte's high four bits and then its low four,
+    each sent as the byte 0x30 above them [DX7S-MANUAL]."""
+    data = [next(numbers) % 256 for _ in range(246)]
+    return [0x30 + half for byte in data for half in (byte >> 4, byte & 0x0F)]
 
 
 def random_dx7ii_performance(numbers: Iterator[int]) -> list[int]:

@@ -140,6 +140,31 @@ fn written_again(dump: &Dump) -> Vec<u8> {
             assert_eq!(lost, []);
             written
         }
+        Content::MicroTuning(tuning) => {
+            let (written, rounded) = syx::write_micro_tuning(tuning, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::MicroTuningMemory { memory, tuning } => {
+            let (written, rounded) = syx::write_micro_tuning_memory(*memory, tuning, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::MicroTunings(tunings) => {
+            let (written, rounded) = syx::write_micro_tunings(tunings, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::FractionalScaling(scaling) => {
+            let (written, rounded) = syx::write_fractional_scaling(scaling, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::FractionalScalings(scalings) => {
+            let (written, rounded) = syx::write_fractional_scalings(scalings, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
     }
 }
 

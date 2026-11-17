@@ -18,7 +18,9 @@
 # its model name [TX7-MANUAL]; and the headers of the DX7II's dumps of
 # supplements, the group bytes of its supplement's, performance's and system
 # set-up's parameter changes, its universal bulk dump's header and names, and
-# the DX7s's system reset.
+# the DX7s's system reset; the names of its micro tunings and fractional
+# scalings, their groups' byte counts, the headers of their parameter changes,
+# and the bytes that send four bits of a fractional scaling at their ends.
 
 start="\xF0"
 end="\xF7"
@@ -52,6 +54,16 @@ performance_edit="LM  8973PE"
 performance_memory="LM  8973PM"
 system_setup="LM  8973S "
 system_reset="\x1B\x2E"
+micro_tuning_edit="LM  MCRYE "
+micro_tuning_memory="LM  MCRYM"
+micro_tuning_cartridge="LM  MCRYC "
+scaling_edit="LM  FKSYE "
+scaling_cartridge="LM  FKSYC "
+micro_tuning_count="\x02\x0A"
+scaling_count="\x03\x76"
+micro_tuning_change="\xF0\x43\x10\x18\x7E"
+scaling_change="\xF0\x43\x10\x18\x7F"
+nibble_zero="\x30"
 note_on="\x90"
 largest_level="\x63"
 beyond_level="\x64"

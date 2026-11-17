@@ -23,14 +23,17 @@
 //!   number 1, and under 2, which \[DX7-MANUAL\] prints for it, and 64
 //!   performances packed into 64 bytes each; the TX7's condition acknowledge,
 //!   which says what it is and how it is set; and the DX7II's universal bulk
-//!   dumps of its performances and its system set-up, and the DX7s's of its
-//!   system set-up ([`crate::dx7ii`]);
+//!   dumps of its performances, its system set-up, its micro tunings and its
+//!   fractional scalings, a cartridge's in as many groups as it holds, and the
+//!   DX7s's of its system set-up ([`crate::dx7ii`]);
 //! - the parameter changes: of a voice parameter, of a function parameter, of a
 //!   button of the DX7's panel, which its firmware takes as pressed or released
 //!   \[AJXS-ROM\], of a switch of the DX7II's panel by its switch remote, of a
-//!   parameter of its supplement, its performance and its system set-up, and
-//!   the DX7s's system reset, and the TX7's, of a performance's parameter, of
-//!   one of its own settings and of the operator its panel edits;
+//!   parameter of its supplement, its performance and its system set-up, of a
+//!   key of its micro tuning and of a parameter of its fractional scaling,
+//!   with three bytes of data and four, and the DX7s's system reset, and the
+//!   TX7's, of a performance's parameter, of one of its own settings and of the
+//!   operator its panel edits;
 //! - the dump requests of the DX7II and the TX7, which the DX7 itself does not
 //!   answer, and Keptone does (docs/DESIGN.md §15).
 //!
@@ -41,32 +44,39 @@
 //! not. A dump's checksum is checked: a wrong one is reported, and the dump
 //! decoded all the same only if `syx.accept_bad_checksum` allows it. Every byte
 //! is checked against the range of its parameter, a packed byte for bits its
-//! format leaves unused, and a switch's data for 0 or 127: what is not as it
-//! should be is reported, and either taken as the nearer end of the range, the
-//! bits ignored and the switch pressed, or the message refused, as
+//! format leaves unused, a byte of a fractional scaling's dump for one of the
+//! sixteen that send four bits, and a switch's data for 0 or 127: what is not as
+//! it should be is reported, and either taken as the nearer end of the range,
+//! the bits ignored and the switch pressed, or the message refused, as
 //! `syx.out_of_range` says (docs/MATH.md §17). A message is decoded whole or
 //! refused whole.
 //!
 //! [`write_voice`], [`write_bank`], [`write_supplement`], [`write_supplements`],
 //! [`write_performance`], [`write_performances`], [`write_condition`],
 //! [`write_dx7ii_performance`], [`write_dx7ii_performances`],
-//! [`write_system_setup`], [`write_dx7s_system_setup`], [`write_change`] and
-//! [`write_request`] write the messages, each value rounded to a step as
-//! `syx.export_rounding` says; the dumps say what they could not hold of what
-//! they were written from. A message that is valid -- its checksum right, every
-//! byte in range, no unused bit set and a switch's data 0 or 127 -- comes back
-//! from them byte for byte as it was read (MATH §16), but for a performance
-//! under format 2, which they write under 1.
+//! [`write_system_setup`], [`write_dx7s_system_setup`],
+//! [`write_micro_tuning`], [`write_micro_tuning_memory`],
+//! [`write_micro_tunings`], [`write_fractional_scaling`],
+//! [`write_fractional_scalings`], [`write_change`] and [`write_request`] write
+//! the messages, each value rounded to a step as `syx.export_rounding` says;
+//! the dumps say what they could not hold of what they were written from. A
+//! message that is valid -- its checksum right, every byte in range, no unused
+//! bit set and a switch's data 0 or 127 -- comes back from them byte for byte
+//! as it was read (MATH §16), but for a performance under format 2, which they
+//! write under 1.
 //!
 //! Every function here takes any bytes and gives a value or an error, never a
 //! panic, and allocates in proportion to the bytes it is given: [`read`] goes
 //! through a file a message at a time, and a dump decoded takes no more than
 //! ten times the bytes of its message, 1056 for each voice, 280 for each
-//! performance and 344 for each supplement on a 64-bit system.
+//! performance, 344 for each supplement, 1024 for each micro tuning and 1968
+//! for each fractional scaling on a 64-bit system.
 
 use std::fmt;
 
-use crate::dx7ii::{self, SystemParameter, SystemSetup};
+use crate::dx7ii::{
+    self, FractionalScaling, Index, KeyPitch, MicroTuning, ScalingParameter, SystemParameter, SystemSetup,
+};
 use crate::function::{Function, FunctionParameter};
 use crate::performance::{DxPerformanceParameter, KeyAssign, Performance, PerformanceParameter, Unnamed};
 use crate::supplement::{Supplement, SupplementParameter};
@@ -169,6 +179,51 @@ const SYSTEM_SETUP_BYTES: usize = 102;
 /// The bytes of the DX7s's system set-up, which has no place for the 17 of the
 /// DX7II's that have no name \[DX7S-MANUAL\] p. Add-4.
 const DX7S_SYSTEM_SETUP_BYTES: usize = 85;
+
+/// The data format name of the DX7II's micro tuning edit buffer.
+const MICRO_TUNING_EDIT: [u8; 6] = *b"MCRYE ";
+
+/// The first five bytes of the data format name of one of the two micro
+/// tunings in the DX7II's memory, whose sixth is the memory's number, 0 or 1,
+/// as a byte rather than a letter \[DX7II-MANUAL\] p. Add-4.
+const MICRO_TUNING_MEMORY: [u8; 5] = *b"MCRYM";
+
+/// The data format name of a cartridge's micro tunings, one a group.
+const MICRO_TUNING_CARTRIDGE: [u8; 6] = *b"MCRYC ";
+
+/// The data format name of the DX7II's fractional scaling edit buffer.
+const SCALING_EDIT: [u8; 6] = *b"FKSYE ";
+
+/// The data format name of a cartridge's fractional scalings, one a group.
+const SCALING_CARTRIDGE: [u8; 6] = *b"FKSYC ";
+
+/// The bytes of a micro tuning: two for each of the 128 keys, the step's high
+/// seven bits and its low seven \[DX7II-MANUAL\] p. Add-14.
+const MICRO_TUNING_BYTES: usize = 256;
+
+/// The bytes of a fractional scaling: two for each of its 246 parameters, the
+/// step's high four bits and then its low four, each sent as the byte 0x30
+/// above them \[DX7S-MANUAL\] p. Add-4, as dumps of DX7II banks bear out
+/// \[DX7II-DUMPS\].
+const SCALING_BYTES: usize = 492;
+
+/// The byte that sends four bits of 0 in a fractional scaling's dump; the
+/// fifteen after it send 1 to 15.
+const NIBBLE_ZERO: u8 = 0x30;
+
+/// The most groups that `decode` takes of a cartridge's dump of micro tunings
+/// or of fractional scalings: 64, as many micro tunings as the DX7II's
+/// cartridge holds, the DX7s's holding 63, and as many fractional scalings as
+/// the DX7s's, whose dump sends 32 \[DX7II-MANUAL\] \[DX7S-MANUAL\].
+const CARTRIDGE_GROUPS: usize = 64;
+
+/// The group byte and the number of the parameter change of a key of the micro
+/// tuning, the supplement's group with the number 126 \[DX7II-MANUAL\] p. Add-2.
+const MICRO_TUNING_CHANGE: [u8; 2] = [DX7II_GROUP << 2, 126];
+
+/// The group byte and the number of the parameter change of a fractional
+/// scaling, the supplement's group with the number 127.
+const SCALING_CHANGE: [u8; 2] = [DX7II_GROUP << 2, 127];
 
 /// The group byte of the DX7II's switch remote, group 6 with its low bits 3
 /// \[DX7II-MANUAL\].
@@ -530,6 +585,35 @@ pub enum Finding {
         /// The bits it set that are unused.
         bits: u8,
     },
+    /// A step of a key of a micro tuning beyond 10794 ([`KeyPitch::LARGEST`]).
+    MicroTuningOutOfRange {
+        /// The place of the micro tuning: 0 in the dump of the edit buffer or
+        /// of a memory or in a parameter change, 0 to 63 in a cartridge's.
+        tuning: u8,
+        /// The key.
+        key: Index<127>,
+        /// The step it held.
+        step: u16,
+    },
+    /// A byte of the dump of a fractional scaling that is not one of the
+    /// sixteen that send four bits, 0x30 to 0x3F \[DX7S-MANUAL\] p. Add-4.
+    ScalingByte {
+        /// The place of the fractional scaling: 0 in the dump of the edit
+        /// buffer, 0 to 63 in a cartridge's.
+        scaling: u8,
+        /// The parameter that the byte sends half of.
+        parameter: ScalingParameter,
+        /// The byte.
+        byte: u8,
+    },
+    /// A step of a fractional scaling's parameter beyond 255 in a parameter
+    /// change, its high byte more than 1.
+    ScalingOutOfRange {
+        /// The parameter.
+        parameter: ScalingParameter,
+        /// The step it held.
+        step: u16,
+    },
 }
 
 impl fmt::Display for Finding {
@@ -565,7 +649,7 @@ impl fmt::Display for Finding {
 
 impl Finding {
     /// The description of a finding of a message of the DX7's family that the
-    /// DX7 does not read: the TX7's and the DX7II's.
+    /// DX7 does not read: the TX7's and the DX1's, the DX7II's apart.
     fn fmt_family(self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PerformanceOutOfRange {
@@ -612,6 +696,18 @@ impl Finding {
             Self::ConditionChannel { channel } => {
                 write!(formatter, "the receive channel is {channel}, beyond its largest, 15")
             }
+            Self::Checksum { .. }
+            | Self::OutOfRange { .. }
+            | Self::UnusedBits { .. }
+            | Self::FunctionOutOfRange { .. }
+            | Self::SwitchData { .. } => fmt::Display::fmt(&self, formatter),
+            _ => self.fmt_dx7ii(formatter),
+        }
+    }
+
+    /// The description of a finding of a message of the DX7II and the DX7s.
+    fn fmt_dx7ii(self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             Self::SupplementOutOfRange {
                 supplement,
                 parameter,
@@ -648,11 +744,38 @@ impl Finding {
                 "supplement {}: byte {byte} sets unused bits {bits:#04x}",
                 u16::from(supplement) + 1
             ),
+            Self::MicroTuningOutOfRange { tuning, key, step } => write!(
+                formatter,
+                "micro tuning {}: key {} is {step}, beyond its largest, {}",
+                u16::from(tuning) + 1,
+                key.get(),
+                KeyPitch::LARGEST
+            ),
+            Self::ScalingByte {
+                scaling,
+                parameter,
+                byte,
+            } => write!(
+                formatter,
+                "fractional scaling {}: {parameter} is sent as the byte {byte:#04x}, not one of 0x30 to 0x3f",
+                u16::from(scaling) + 1
+            ),
+            Self::ScalingOutOfRange { parameter, step } => {
+                write!(formatter, "{parameter} is {step}, beyond its largest, 255")
+            }
             Self::Checksum { .. }
             | Self::OutOfRange { .. }
             | Self::UnusedBits { .. }
             | Self::FunctionOutOfRange { .. }
-            | Self::SwitchData { .. } => fmt::Display::fmt(&self, formatter),
+            | Self::SwitchData { .. }
+            | Self::PerformanceOutOfRange { .. }
+            | Self::KeyAssignOutOfRange { .. }
+            | Self::PerformanceUnusedBits { .. }
+            | Self::PerformanceFormat
+            | Self::DxPerformanceOutOfRange { .. }
+            | Self::TxFunctionOutOfRange { .. }
+            | Self::OperatorSelectOutOfRange { .. }
+            | Self::ConditionChannel { .. } => fmt::Display::fmt(&self, formatter),
         }
     }
 }
@@ -669,7 +792,9 @@ pub enum Error {
     /// A message that this reader does not take: another maker's, or one of
     /// Yamaha's of another sub-status, of another format of dump or request,
     /// of another parameter group, or of a parameter or switch beyond those
-    /// that the DX7, the DX7II's switch remote and the TX7 number.
+    /// that the DX7, the DX7II and the TX7 number; or a universal bulk dump of
+    /// groups of different names, or of more groups than its kind holds, one
+    /// but for a cartridge's 64.
     Unsupported,
     /// A message whose byte count or length is not its kind's: a single-voice
     /// dump holds 155 bytes of data in a message of 163, a 32-voice dump 4096
@@ -677,9 +802,11 @@ pub enum Error {
     /// 1128, the dump of one performance 94 in 102, the dump of 64 4096 in
     /// 4104, the condition acknowledge 16 in 24, a universal bulk dump's group
     /// the 10 bytes of its names and the data its names give, a DX7II
-    /// performance 51 bytes, 32 of them 1632 and its system set-up 102, the
-    /// DX7s's 85, a parameter change one byte of data in 7, and a dump request
-    /// is of 5 bytes, or 15 for a universal bulk dump's.
+    /// performance 51 bytes, 32 of them 1632, its system set-up 102, the
+    /// DX7s's 85, a micro tuning 256 and a fractional scaling 492, a parameter
+    /// change one byte of data in 7, three in 9 for a key of a micro tuning
+    /// and four in 10 for a fractional scaling, and a dump request is of 5
+    /// bytes, or 15 for a universal bulk dump's.
     Length,
     /// A message refused for what it held, as the options have it: a wrong
     /// checksum if `syx.accept_bad_checksum` is false, or, if `syx.out_of_range`
@@ -744,6 +871,25 @@ pub enum Content {
     /// The DX7s's universal bulk dump of its system set-up, of 85 bytes, whose
     /// bytes that have no name, which the dump does not hold, are 0.
     Dx7sSystemSetup(Box<SystemSetup>),
+    /// The DX7II's universal bulk dump of its micro tuning edit buffer.
+    MicroTuning(Box<MicroTuning>),
+    /// The DX7II's universal bulk dump of one of the two micro tunings in its
+    /// memory.
+    MicroTuningMemory {
+        /// The memory's number, 0 or 1.
+        memory: Index<1>,
+        /// The micro tuning.
+        tuning: Box<MicroTuning>,
+    },
+    /// The universal bulk dump of the micro tunings of a cartridge, a group
+    /// each, 64 from the DX7II and 63 from the DX7s, in the order of their
+    /// places.
+    MicroTunings(Vec<MicroTuning>),
+    /// The DX7II's universal bulk dump of its fractional scaling edit buffer.
+    FractionalScaling(Box<FractionalScaling>),
+    /// The universal bulk dump of the fractional scalings of a cartridge, a
+    /// group each, 32 from the DX7II, in the order of their places.
+    FractionalScalings(Vec<FractionalScaling>),
 }
 
 /// A button of the DX7's panel, by the number that a panel switch message
@@ -1197,6 +1343,87 @@ impl SystemStep {
     }
 }
 
+/// A key of a micro tuning and a step of its pitch, no more than 10794: what a
+/// parameter change of the micro tuning sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MicroTuningStep {
+    /// The key.
+    key: Index<127>,
+    /// The step, no more than 10794.
+    step: u16,
+}
+
+impl MicroTuningStep {
+    /// The key and step, if the step is no more than 10794.
+    #[must_use]
+    pub fn new(key: Index<127>, step: u16) -> Option<Self> {
+        (step <= KeyPitch::LARGEST).then_some(Self { key, step })
+    }
+
+    /// A key of a micro tuning and its step, its pitch rounded by `rounding`.
+    #[must_use]
+    pub fn of(tuning: &MicroTuning, key: Index<127>, rounding: Rounding) -> Self {
+        Self {
+            key,
+            step: tuning.keys[usize::from(key.get())]
+                .step(rounding)
+                .min(KeyPitch::LARGEST),
+        }
+    }
+
+    /// The key.
+    #[must_use]
+    pub const fn key(self) -> Index<127> {
+        self.key
+    }
+
+    /// The step.
+    #[must_use]
+    pub const fn step(self) -> u16 {
+        self.step
+    }
+}
+
+/// A parameter of a fractional scaling and a step, which every byte is: what a
+/// parameter change of the fractional scaling sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ScalingStep {
+    /// The parameter.
+    parameter: ScalingParameter,
+    /// The step.
+    step: u8,
+}
+
+impl ScalingStep {
+    /// The parameter and step.
+    #[must_use]
+    pub const fn new(parameter: ScalingParameter, step: u8) -> Self {
+        Self { parameter, step }
+    }
+
+    /// A parameter of a fractional scaling and its step, its value rounded by
+    /// `rounding`.
+    #[must_use]
+    pub fn of(scaling: &FractionalScaling, parameter: ScalingParameter, rounding: Rounding) -> Self {
+        Self {
+            parameter,
+            step: scaling.step(parameter, rounding),
+        }
+    }
+
+    /// The parameter.
+    #[must_use]
+    pub const fn parameter(self) -> ScalingParameter {
+        self.parameter
+    }
+
+    /// The step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        self.step
+    }
+}
+
 /// A parameter of the DX7II's supplement and a step within its range: what a
 /// parameter change of the supplement sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1312,6 +1539,15 @@ pub enum Change {
     /// by the switch remote's number 46 \[DX7S-MANUAL\]: the data, which the
     /// DX7s ignores, kept as it comes.
     SystemReset(Byte),
+    /// A key of the DX7II's micro tuning, of group 6 with the group byte's low
+    /// bits 0 and the number 126, whose three bytes of data are the key and
+    /// the step's high seven bits and its low seven \[DX7II-MANUAL\] p. Add-2.
+    MicroTuning(MicroTuningStep),
+    /// A parameter of the DX7II's fractional scaling, of the number 127, whose
+    /// four bytes of data are the operator's number, 0 for OP6 to 5 for OP1,
+    /// the group's, 0 for the offset, and the step's high bit and its low seven
+    /// \[DX7S-MANUAL\] p. Add-3.
+    FractionalScaling(ScalingStep),
 }
 
 /// A parameter change, decoded.
@@ -1571,99 +1807,84 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
     })
 }
 
-/// The groups of a universal bulk dump's bytes after its format: each its byte
-/// count, the 10 bytes of its classification and data format names and its
-/// data, which the count counts, 61 for the 51 bytes of a performance
-/// \[DX7II-MANUAL\] p. Add-4, and its checksum, which, as in every dump, is of
-/// the bytes the count counts; as many groups as the message holds.
-fn groups_of(mut rest: &[u8]) -> Result<Vec<(&[u8], u8)>, Error> {
+/// A group of a universal bulk dump: its byte count, the 10 bytes of its
+/// classification and data format names and its data, which the count counts,
+/// 61 for the 51 bytes of a performance \[DX7II-MANUAL\] p. Add-4, and its
+/// checksum, which, as in every dump, is of the bytes the count counts
+/// \[DX7II-DUMPS\].
+struct Group<'a> {
+    /// The names.
+    names: [u8; 10],
+    /// The names and the data: the bytes the count counts.
+    counted: &'a [u8],
+    /// The data.
+    data: &'a [u8],
+    /// The checksum it ends with.
+    checksum: u8,
+}
+
+/// The groups of a universal bulk dump's bytes after its format, as many as
+/// the message holds.
+fn groups_of(mut rest: &[u8]) -> Result<Vec<Group<'_>>, Error> {
     let mut groups = Vec::new();
     while !rest.is_empty() {
         let &[high, low, ref after @ ..] = rest else {
             return Err(Error::Length);
         };
         let count = usize::from(high) << 7 | usize::from(low);
-        if count < 10 || after.len() < count {
-            return Err(Error::Length);
-        }
-        let (counted, after) = after.split_at(count);
-        let Some((&checksum, after)) = after.split_first() else {
+        let (Some(counted), Some((&checksum, after))) =
+            (after.get(..count), after.get(count..).and_then(<[u8]>::split_first))
+        else {
             return Err(Error::Length);
         };
-        groups.push((counted, checksum));
+        let Some((&names, data)) = counted.split_first_chunk::<10>() else {
+            return Err(Error::Length);
+        };
+        groups.push(Group {
+            names,
+            counted,
+            data,
+            checksum,
+        });
         rest = after;
     }
     Ok(groups)
 }
 
 /// The dump of a universal bulk dump's bytes after its format: one group of a
-/// performance edit buffer, 32 performances or a system set-up of the DX7II,
-/// or of a system set-up of the DX7s.
+/// performance edit buffer, 32 performances, a system set-up, a micro tuning,
+/// the edit buffer's or one of the memory's, or a fractional scaling of the
+/// DX7II, or of a system set-up of the DX7s; or a cartridge's micro tunings or
+/// fractional scalings, a group each, as many as 64.
 fn universal_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Error> {
     let groups = groups_of(rest)?;
-    let &[(counted, checksum)] = groups.as_slice() else {
-        return Err(if groups.is_empty() {
-            Error::Length
-        } else {
-            Error::Unsupported
-        });
-    };
-    let (names, data) = counted.split_at(10);
-    let Ok(&[c0, c1, c2, c3, f0, f1, f2, f3, f4, f5]) = <&[u8; 10]>::try_from(names) else {
+    let Some(first) = groups.first() else {
         return Err(Error::Length);
     };
-    let kind = match ([c0, c1, c2, c3], [f0, f1, f2, f3, f4, f5]) {
-        (LM, PERFORMANCE_EDIT) => UniversalKind::Performance,
-        (LM, PERFORMANCE_MEMORY) => UniversalKind::Performances,
-        (LM, SYSTEM_SETUP) => UniversalKind::SystemSetup,
-        _ => return Err(Error::Unsupported),
+    let kind = universal_kind(first.names)?;
+    let most = match kind {
+        UniversalKind::MicroTunings | UniversalKind::Scalings => CARTRIDGE_GROUPS,
+        _ => 1,
     };
-    let mut findings = Vec::new();
-    let expected = checksum_of(counted);
-    if checksum != expected {
-        let finding = Finding::UniversalChecksum {
-            group: 0,
-            expected,
-            found: checksum,
-        };
-        if !options.accept_bad_checksum {
-            return Err(Error::Refused(finding));
-        }
-        findings.push(finding);
+    if groups.len() > most || groups.iter().any(|group| group.names != first.names) {
+        return Err(Error::Unsupported);
     }
-    let content = match kind {
-        UniversalKind::Performance => {
-            let Ok(steps) = <&[u8; DX7II_PERFORMANCE_BYTES]>::try_from(data) else {
-                return Err(Error::Length);
+    let mut findings = Vec::new();
+    for (place, group) in (0..).zip(&groups) {
+        let expected = checksum_of(group.counted);
+        if group.checksum != expected {
+            let finding = Finding::UniversalChecksum {
+                group: place,
+                expected,
+                found: group.checksum,
             };
-            Content::Dx7iiPerformance(Box::new(dx7ii_performance_of(steps, 0, options, &mut findings)?))
+            if !options.accept_bad_checksum {
+                return Err(Error::Refused(finding));
+            }
+            findings.push(finding);
         }
-        UniversalKind::Performances => {
-            let Ok(data) = <&[u8; DX7II_PERFORMANCES_BYTES]>::try_from(data) else {
-                return Err(Error::Length);
-            };
-            let (steps, _) = data.as_chunks::<DX7II_PERFORMANCE_BYTES>();
-            let mut performances = Vec::with_capacity(32);
-            for (place, steps) in (0..).zip(steps) {
-                performances.push(dx7ii_performance_of(steps, place, options, &mut findings)?);
-            }
-            let Ok(performances) = <Box<[dx7ii::Performance; 32]>>::try_from(performances.into_boxed_slice()) else {
-                return Err(Error::Length);
-            };
-            Content::Dx7iiPerformances(performances)
-        }
-        UniversalKind::SystemSetup => match data.len() {
-            SYSTEM_SETUP_BYTES => {
-                let setup = system_setup_of(data, SystemParameter::all(), options, &mut findings)?;
-                Content::SystemSetup(Box::new(setup))
-            }
-            DX7S_SYSTEM_SETUP_BYTES => {
-                let setup = system_setup_of(data, SystemParameter::in_dx7s_dump(), options, &mut findings)?;
-                Content::Dx7sSystemSetup(Box::new(setup))
-            }
-            _ => return Err(Error::Length),
-        },
-    };
+    }
+    let content = universal_content(kind, first.data, &groups, options, &mut findings)?;
     Ok(Dump {
         channel,
         content,
@@ -1677,6 +1898,167 @@ enum UniversalKind {
     Performance,
     Performances,
     SystemSetup,
+    MicroTuning,
+    MicroTuningMemory(Index<1>),
+    MicroTunings,
+    Scaling,
+    Scalings,
+}
+
+/// What a universal bulk dump's group holds, by its names, if it is of a kind
+/// this reader takes.
+fn universal_kind(names: [u8; 10]) -> Result<UniversalKind, Error> {
+    let [c0, c1, c2, c3, f0, f1, f2, f3, f4, f5] = names;
+    if [c0, c1, c2, c3] != LM {
+        return Err(Error::Unsupported);
+    }
+    Ok(match [f0, f1, f2, f3, f4, f5] {
+        PERFORMANCE_EDIT => UniversalKind::Performance,
+        PERFORMANCE_MEMORY => UniversalKind::Performances,
+        SYSTEM_SETUP => UniversalKind::SystemSetup,
+        MICRO_TUNING_EDIT => UniversalKind::MicroTuning,
+        MICRO_TUNING_CARTRIDGE => UniversalKind::MicroTunings,
+        SCALING_EDIT => UniversalKind::Scaling,
+        SCALING_CARTRIDGE => UniversalKind::Scalings,
+        [m0, m1, m2, m3, m4, memory] if [m0, m1, m2, m3, m4] == MICRO_TUNING_MEMORY => {
+            UniversalKind::MicroTuningMemory(Index::new(memory).ok_or(Error::Unsupported)?)
+        }
+        _ => return Err(Error::Unsupported),
+    })
+}
+
+/// What a universal bulk dump of a kind holds, of the data of its first group
+/// and of its groups, each byte checked as the options say.
+fn universal_content(
+    kind: UniversalKind,
+    data: &[u8],
+    groups: &[Group<'_>],
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<Content, Error> {
+    Ok(match kind {
+        UniversalKind::Performance => {
+            let Ok(steps) = <&[u8; DX7II_PERFORMANCE_BYTES]>::try_from(data) else {
+                return Err(Error::Length);
+            };
+            Content::Dx7iiPerformance(Box::new(dx7ii_performance_of(steps, 0, options, findings)?))
+        }
+        UniversalKind::Performances => {
+            let Ok(data) = <&[u8; DX7II_PERFORMANCES_BYTES]>::try_from(data) else {
+                return Err(Error::Length);
+            };
+            let (steps, _) = data.as_chunks::<DX7II_PERFORMANCE_BYTES>();
+            let mut performances = Vec::with_capacity(32);
+            for (place, steps) in (0..).zip(steps) {
+                performances.push(dx7ii_performance_of(steps, place, options, findings)?);
+            }
+            let Ok(performances) = <Box<[dx7ii::Performance; 32]>>::try_from(performances.into_boxed_slice()) else {
+                return Err(Error::Length);
+            };
+            Content::Dx7iiPerformances(performances)
+        }
+        UniversalKind::SystemSetup => match data.len() {
+            SYSTEM_SETUP_BYTES => {
+                let setup = system_setup_of(data, SystemParameter::all(), options, findings)?;
+                Content::SystemSetup(Box::new(setup))
+            }
+            DX7S_SYSTEM_SETUP_BYTES => {
+                let setup = system_setup_of(data, SystemParameter::in_dx7s_dump(), options, findings)?;
+                Content::Dx7sSystemSetup(Box::new(setup))
+            }
+            _ => return Err(Error::Length),
+        },
+        UniversalKind::MicroTuning => Content::MicroTuning(Box::new(micro_tuning_of(data, 0, options, findings)?)),
+        UniversalKind::MicroTuningMemory(memory) => Content::MicroTuningMemory {
+            memory,
+            tuning: Box::new(micro_tuning_of(data, 0, options, findings)?),
+        },
+        UniversalKind::MicroTunings => {
+            let mut tunings = Vec::with_capacity(groups.len());
+            for (place, group) in (0..).zip(groups) {
+                tunings.push(micro_tuning_of(group.data, place, options, findings)?);
+            }
+            Content::MicroTunings(tunings)
+        }
+        UniversalKind::Scaling => Content::FractionalScaling(Box::new(scaling_of(data, 0, options, findings)?)),
+        UniversalKind::Scalings => {
+            let mut scalings = Vec::with_capacity(groups.len());
+            for (place, group) in (0..).zip(groups) {
+                scalings.push(scaling_of(group.data, place, options, findings)?);
+            }
+            Content::FractionalScalings(scalings)
+        }
+    })
+}
+
+/// The micro tuning of a group's data, two bytes for each key, the step's high
+/// seven bits and its low seven, each step checked against its range.
+fn micro_tuning_of(
+    data: &[u8],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<MicroTuning, Error> {
+    let Ok(data) = <&[u8; MICRO_TUNING_BYTES]>::try_from(data) else {
+        return Err(Error::Length);
+    };
+    let (pairs, _) = data.as_chunks::<2>();
+    let mut tuning = MicroTuning::zero();
+    for (key, &[high, low]) in Index::all().zip(pairs) {
+        let step = u16::from(high) << 7 | u16::from(low);
+        if !tuning.set_step(key, step) {
+            let finding = Finding::MicroTuningOutOfRange {
+                tuning: place,
+                key,
+                step,
+            };
+            note(finding, options, findings)?;
+        }
+    }
+    Ok(tuning)
+}
+
+/// The fractional scaling of a group's data, two bytes for each parameter,
+/// the step's high four bits and then its low four, each sent as the byte 0x30
+/// above them, which is checked.
+fn scaling_of(
+    data: &[u8],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<FractionalScaling, Error> {
+    let Ok(data) = <&[u8; SCALING_BYTES]>::try_from(data) else {
+        return Err(Error::Length);
+    };
+    let (pairs, _) = data.as_chunks::<2>();
+    let mut scaling = FractionalScaling::zero();
+    for (parameter, &[high, low]) in ScalingParameter::all().zip(pairs) {
+        let high = nibble_of(high, place, parameter, options, findings)?;
+        let low = nibble_of(low, place, parameter, options, findings)?;
+        scaling.set_step(parameter, high << 4 | low);
+    }
+    Ok(scaling)
+}
+
+/// The four bits that a byte of a fractional scaling's dump sends, 0x30 above
+/// them: a byte below 0x30 or above 0x3F is reported, and taken as the nearer
+/// end, 0 or 15.
+fn nibble_of(
+    byte: u8,
+    place: u8,
+    parameter: ScalingParameter,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<u8, Error> {
+    if !(NIBBLE_ZERO..=NIBBLE_ZERO + 0x0f).contains(&byte) {
+        let finding = Finding::ScalingByte {
+            scaling: place,
+            parameter,
+            byte,
+        };
+        note(finding, options, findings)?;
+    }
+    Ok(byte.saturating_sub(NIBBLE_ZERO).min(0x0f))
 }
 
 /// The DX7II performance of its 51 bytes, each checked against its
@@ -1719,25 +2101,31 @@ fn system_setup_of(
     Ok(setup)
 }
 
-/// A universal bulk dump of one group, on a channel: its names, its data, and
-/// their checksum.
-fn universal_message(channel: Channel, format: [u8; 6], data: &[u8]) -> Vec<u8> {
-    let mut counted = Vec::with_capacity(10 + data.len());
-    counted.extend_from_slice(&LM);
-    counted.extend_from_slice(&format);
-    counted.extend_from_slice(data);
-    let count = counted.len();
-    let mut message = Vec::with_capacity(count + 7);
-    message.extend_from_slice(&[START, YAMAHA, DUMP << 4 | channel.0, UNIVERSAL_FORMAT]);
-    // A count below 2^14, as every group's is.
-    message.extend_from_slice(&[
-        u8::try_from(count >> 7 & 0x7f).unwrap_or(0x7f),
-        u8::try_from(count & 0x7f).unwrap_or(0x7f),
-    ]);
-    message.extend_from_slice(&counted);
-    message.push(checksum_of(&counted));
+/// A universal bulk dump on a channel of a group for each of `groups`' data:
+/// its count, its names, its data, and their checksum.
+fn universal_message<'a>(channel: Channel, format: [u8; 6], groups: impl IntoIterator<Item = &'a [u8]>) -> Vec<u8> {
+    let mut message = vec![START, YAMAHA, DUMP << 4 | channel.0, UNIVERSAL_FORMAT];
+    for data in groups {
+        let mut counted = Vec::with_capacity(10 + data.len());
+        counted.extend_from_slice(&LM);
+        counted.extend_from_slice(&format);
+        counted.extend_from_slice(data);
+        // A count below 2^14, as every group's is.
+        let count = u16::try_from(counted.len()).unwrap_or(u16::MAX);
+        message.extend_from_slice(&seven_bits(count));
+        message.extend_from_slice(&counted);
+        message.push(checksum_of(&counted));
+    }
     message.push(END);
     message
+}
+
+/// A number below 2^14 as two bytes, its high seven bits and its low seven.
+fn seven_bits(number: u16) -> [u8; 2] {
+    [
+        u8::try_from(number >> 7 & 0x7f).unwrap_or(0x7f),
+        u8::try_from(number & 0x7f).unwrap_or(0x7f),
+    ]
 }
 
 /// What a dump of a kind holds, of its data, each byte checked as the options
@@ -1821,11 +2209,18 @@ fn change_of(channel: Channel, rest: &[u8], options: Options) -> Result<Paramete
     let &[group, number, ref data @ ..] = rest else {
         return Err(Error::Length);
     };
-    let target = target_of(group, number).ok_or(Error::Unsupported)?;
-    let &[data] = data else {
-        return Err(Error::Length);
+    let (change, finding) = match ([group, number], data) {
+        (MICRO_TUNING_CHANGE, &[key, high, low]) => micro_tuning_change(key, high, low),
+        (SCALING_CHANGE, &[operator, key_group, high, low]) => scaling_change(operator, key_group, high, low)?,
+        (MICRO_TUNING_CHANGE | SCALING_CHANGE, _) => return Err(Error::Length),
+        _ => {
+            let target = target_of(group, number).ok_or(Error::Unsupported)?;
+            let &[data] = data else {
+                return Err(Error::Length);
+            };
+            target.change(data)
+        }
     };
-    let (change, finding) = target.change(data);
     if let Some(finding) = finding
         && options.out_of_range == OutOfRange::Reject
     {
@@ -1981,6 +2376,36 @@ impl Target {
     }
 }
 
+/// The change of a key of the micro tuning, of its three bytes of data: the
+/// key, and the step's high seven bits and its low seven. A step beyond 10794
+/// is reported, and taken as 10794.
+fn micro_tuning_change(key: u8, high: u8, low: u8) -> (Change, Option<Finding>) {
+    // The key is a byte of a message, below 128.
+    let key = Index::saturating(key);
+    let step = u16::from(high) << 7 | u16::from(low);
+    let finding = (step > KeyPitch::LARGEST).then_some(Finding::MicroTuningOutOfRange { tuning: 0, key, step });
+    let step = MicroTuningStep {
+        key,
+        step: step.min(KeyPitch::LARGEST),
+    };
+    (Change::MicroTuning(step), finding)
+}
+
+/// The change of a parameter of the fractional scaling, of its four bytes of
+/// data: the operator's number, the group's, and the step's high bit and its
+/// low seven. A step beyond 255 is reported, and taken as 255; numbers that
+/// name no parameter make a message this reader does not take.
+fn scaling_change(operator: u8, group: u8, high: u8, low: u8) -> Result<(Change, Option<Finding>), Error> {
+    let parameter = ScalingParameter::of(operator, group).ok_or(Error::Unsupported)?;
+    let step = u16::from(high) << 7 | u16::from(low);
+    let finding = (step > 0xff).then_some(Finding::ScalingOutOfRange { parameter, step });
+    let step = ScalingStep {
+        parameter,
+        step: u8::try_from(step).unwrap_or(u8::MAX),
+    };
+    Ok((Change::FractionalScaling(step), finding))
+}
+
 /// The finding of a switch's data, if it is neither 0 nor 127.
 fn switch_finding(data: u8) -> Option<Finding> {
     (data != 0 && data != PRESSED).then_some(Finding::SwitchData { data })
@@ -2089,7 +2514,7 @@ pub fn write_dx7ii_performance(
 ) -> (Vec<u8>, Vec<(u8, dx7ii::PerformanceParameter)>) {
     let mut rounded = Vec::new();
     let steps = steps_of_dx7ii_performance(performance, 0, rounding, &mut rounded);
-    (universal_message(channel, PERFORMANCE_EDIT, &steps), rounded)
+    (universal_message(channel, PERFORMANCE_EDIT, [&steps[..]]), rounded)
 }
 
 /// The DX7II's universal bulk dump of 32 performances, on a channel: a
@@ -2107,7 +2532,7 @@ pub fn write_dx7ii_performances(
     for (place, performance) in (0..).zip(performances) {
         data.extend_from_slice(&steps_of_dx7ii_performance(performance, place, rounding, &mut rounded));
     }
-    (universal_message(channel, PERFORMANCE_MEMORY, &data), rounded)
+    (universal_message(channel, PERFORMANCE_MEMORY, [&data[..]]), rounded)
 }
 
 /// The DX7II's universal bulk dump of its system set-up, on a channel: a
@@ -2125,7 +2550,7 @@ pub fn write_system_setup(
     let rounded = SystemParameter::all()
         .filter(|&parameter| !setup.is_step(parameter))
         .collect();
-    (universal_message(channel, SYSTEM_SETUP, &steps), rounded)
+    (universal_message(channel, SYSTEM_SETUP, [&steps[..]]), rounded)
 }
 
 /// The DX7s's universal bulk dump of its system set-up, on a channel: a
@@ -2148,7 +2573,124 @@ pub fn write_dx7s_system_setup(
             _ => !setup.is_step(parameter),
         })
         .collect();
-    (universal_message(channel, SYSTEM_SETUP, &steps), lost)
+    (universal_message(channel, SYSTEM_SETUP, [&steps[..]]), lost)
+}
+
+/// The DX7II's universal bulk dump of its micro tuning edit buffer, on a
+/// channel: a message of 274 bytes. Each pitch is rounded to a step by
+/// `rounding`, and the keys whose pitches lay between steps are given beside
+/// it.
+#[must_use]
+pub fn write_micro_tuning(tuning: &MicroTuning, channel: Channel, rounding: Rounding) -> (Vec<u8>, Vec<Index<127>>) {
+    let (data, rounded) = data_of_micro_tuning(tuning, rounding);
+    (universal_message(channel, MICRO_TUNING_EDIT, [&data[..]]), rounded)
+}
+
+/// The DX7II's universal bulk dump of one of the two micro tunings in its
+/// memory, on a channel: a message of 274 bytes. Each pitch is rounded to a
+/// step by `rounding`, and the keys whose pitches lay between steps are given
+/// beside it.
+#[must_use]
+pub fn write_micro_tuning_memory(
+    memory: Index<1>,
+    tuning: &MicroTuning,
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<Index<127>>) {
+    let [m0, m1, m2, m3, m4] = MICRO_TUNING_MEMORY;
+    let (data, rounded) = data_of_micro_tuning(tuning, rounding);
+    let format = [m0, m1, m2, m3, m4, memory.get()];
+    (universal_message(channel, format, [&data[..]]), rounded)
+}
+
+/// The universal bulk dump of a cartridge's micro tunings, on a channel: a
+/// group of 269 bytes for each of the first 64, as many as a cartridge holds,
+/// in a message of 5 more. Each pitch is rounded to a step by `rounding`, and
+/// the keys whose pitches lay between steps are given beside it, by the place
+/// of their micro tuning. Of no micro tuning, the message has no group, and
+/// [`decode`] does not take it.
+#[must_use]
+pub fn write_micro_tunings(
+    tunings: &[MicroTuning],
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<(u8, Index<127>)>) {
+    let mut rounded = Vec::new();
+    let mut groups = Vec::with_capacity(tunings.len().min(CARTRIDGE_GROUPS));
+    for (place, tuning) in (0..).zip(tunings.iter().take(CARTRIDGE_GROUPS)) {
+        let (data, keys) = data_of_micro_tuning(tuning, rounding);
+        rounded.extend(keys.into_iter().map(|key| (place, key)));
+        groups.push(data);
+    }
+    let message = universal_message(channel, MICRO_TUNING_CARTRIDGE, groups.iter().map(Vec::as_slice));
+    (message, rounded)
+}
+
+/// The 256 bytes of a micro tuning, each pitch rounded to a step by
+/// `rounding`, and the keys whose pitches lay between steps.
+fn data_of_micro_tuning(tuning: &MicroTuning, rounding: Rounding) -> (Vec<u8>, Vec<Index<127>>) {
+    let mut data = Vec::with_capacity(MICRO_TUNING_BYTES);
+    let mut rounded = Vec::new();
+    for (key, pitch) in Index::all().zip(&tuning.keys) {
+        data.extend_from_slice(&seven_bits(pitch.step(rounding)));
+        if pitch.get().fract() != 0.0 {
+            rounded.push(key);
+        }
+    }
+    (data, rounded)
+}
+
+/// The DX7II's universal bulk dump of its fractional scaling edit buffer, on a
+/// channel: a message of 510 bytes. Each level is rounded to a step by
+/// `rounding`, and the parameters whose values lay between steps are given
+/// beside it.
+#[must_use]
+pub fn write_fractional_scaling(
+    scaling: &FractionalScaling,
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<ScalingParameter>) {
+    let (data, rounded) = data_of_scaling(scaling, rounding);
+    (universal_message(channel, SCALING_EDIT, [&data[..]]), rounded)
+}
+
+/// The universal bulk dump of a cartridge's fractional scalings, on a channel:
+/// a group of 505 bytes for each of the first 64, as many as a cartridge holds,
+/// in a message of 5 more. Each level is rounded to a step by `rounding`, and
+/// the parameters whose values lay between steps are given beside it, by the
+/// place of their fractional scaling. Of no fractional scaling, the message has
+/// no group, and [`decode`] does not take it.
+#[must_use]
+pub fn write_fractional_scalings(
+    scalings: &[FractionalScaling],
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<(u8, ScalingParameter)>) {
+    let mut rounded = Vec::new();
+    let mut groups = Vec::with_capacity(scalings.len().min(CARTRIDGE_GROUPS));
+    for (place, scaling) in (0..).zip(scalings.iter().take(CARTRIDGE_GROUPS)) {
+        let (data, parameters) = data_of_scaling(scaling, rounding);
+        rounded.extend(parameters.into_iter().map(|parameter| (place, parameter)));
+        groups.push(data);
+    }
+    let message = universal_message(channel, SCALING_CARTRIDGE, groups.iter().map(Vec::as_slice));
+    (message, rounded)
+}
+
+/// The 492 bytes of a fractional scaling, each step's high four bits and then
+/// its low four, each as the byte 0x30 above them, each level rounded to a step
+/// by `rounding`; and the parameters whose values lay between steps.
+fn data_of_scaling(scaling: &FractionalScaling, rounding: Rounding) -> (Vec<u8>, Vec<ScalingParameter>) {
+    let mut data = Vec::with_capacity(SCALING_BYTES);
+    let mut rounded = Vec::new();
+    for parameter in ScalingParameter::all() {
+        let step = scaling.step(parameter, rounding);
+        data.extend_from_slice(&[NIBBLE_ZERO + (step >> 4), NIBBLE_ZERO + (step & 0x0f)]);
+        if !scaling.is_step(parameter) {
+            rounded.push(parameter);
+        }
+    }
+    (data, rounded)
 }
 
 /// The steps of a DX7II performance's parameters, and the parameters whose
@@ -2225,7 +2767,8 @@ pub fn write_condition(condition: &Condition, channel: Channel) -> Vec<u8> {
     message(channel, CONDITION_FORMAT, CONDITION_COUNT, &data)
 }
 
-/// A parameter change on a channel: a message of 7 bytes.
+/// A parameter change on a channel: a message of 7 bytes, 9 for a key of a
+/// micro tuning and 10 for a parameter of a fractional scaling.
 #[must_use]
 pub fn write_change(channel: Channel, change: Change) -> Vec<u8> {
     let (group, number, data) = match change {
@@ -2250,6 +2793,39 @@ pub fn write_change(channel: Channel, change: Change) -> Vec<u8> {
             step.step,
         ),
         Change::SystemReset(data) => (SWITCH_REMOTE, SYSTEM_RESET, data.0),
+        Change::MicroTuning(step) => {
+            let [group, number] = MICRO_TUNING_CHANGE;
+            let [high, low] = seven_bits(step.step);
+            let key = step.key.get();
+            return vec![
+                START,
+                YAMAHA,
+                CHANGE << 4 | channel.0,
+                group,
+                number,
+                key,
+                high,
+                low,
+                END,
+            ];
+        }
+        Change::FractionalScaling(step) => {
+            let [group, number] = SCALING_CHANGE;
+            let (operator, key_group) = (step.parameter.operator(), step.parameter.group());
+            let (high, low) = (step.step >> 7, step.step & 0x7f);
+            return vec![
+                START,
+                YAMAHA,
+                CHANGE << 4 | channel.0,
+                group,
+                number,
+                operator,
+                key_group,
+                high,
+                low,
+                END,
+            ];
+        }
     };
     vec![START, YAMAHA, CHANGE << 4 | channel.0, group, number, data, END]
 }

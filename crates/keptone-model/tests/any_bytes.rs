@@ -21,8 +21,10 @@ mod properties;
 use std::path::Path;
 
 use common::{
-    SplitMix64, dump, random_bank, random_dx7ii_performance, random_dx7s_system_setup, random_performance_steps,
-    random_performances, random_supplement_steps, random_supplements, random_system_setup, random_voice, universal,
+    SplitMix64, dump, micro_tuning_bytes, random_bank, random_dx7ii_performance, random_dx7s_system_setup,
+    random_micro_tuning_steps, random_performance_steps, random_performances, random_scaling_bytes,
+    random_supplement_steps, random_supplements, random_system_setup, random_voice, scaling_bytes, universal,
+    universal_groups,
 };
 use keptone_model::json;
 use keptone_model::scala;
@@ -75,9 +77,10 @@ fn regressions(parser: &str) -> Vec<Vec<u8>> {
 
 /// What the mutations of `syx_takes_any_bytes` put into its inputs: the bytes
 /// that start and end a message, the headers of the dumps and of the parameter
-/// changes and requests of several groups, a universal bulk dump's names, and
-/// the steps at the ends of the ranges.
-const SYX_TOKENS: [&[u8]; 24] = [
+/// changes and requests of several groups, a universal bulk dump's names, the
+/// steps at the ends of the ranges, and the bytes that send four bits of a
+/// fractional scaling at their ends.
+const SYX_TOKENS: [&[u8]; 30] = [
     &[0xf0],
     &[0xf7],
     &[0xf0, 0x43, 0x00, 0x00, 0x01, 0x1b],
@@ -92,6 +95,12 @@ const SYX_TOKENS: [&[u8]; 24] = [
     &[0xf0, 0x43, 0x00, 0x7e],
     b"LM  8973P",
     b"LM  8973S ",
+    b"LM  MCRY",
+    b"LM  FKSY",
+    &[0xf0, 0x43, 0x10, 0x18, 0x7e],
+    &[0xf0, 0x43, 0x10, 0x18, 0x7f],
+    &[0x30],
+    &[0x3f],
     &[0xf0, 0x43, 0x10, 0x04],
     &[0xf0, 0x43, 0x10, 0x08],
     &[0xf0, 0x43, 0x10, 0x11],
@@ -121,8 +130,9 @@ fn syx_takes_any_bytes() {
     .concat();
     // Parameter changes of a voice parameter, the operators' switches, a
     // function parameter, a button of the DX7's panel, a switch of the DX7II's,
-    // and the TX7's of a performance's parameter, of its own settings and of
-    // its operator select; and dump requests, a universal one among them.
+    // a key of its micro tuning and a parameter of its fractional scaling, and
+    // the TX7's of a performance's parameter, of its own settings and of its
+    // operator select; and dump requests, a universal one among them.
     let short = [
         &[0xf0, 0x43, 0x10, 0x01, 0x10, 0x05, 0xf7][..],
         &[0xf0, 0x43, 0x11, 0x01, 0x1b, 0x3f, 0xf7],
@@ -139,6 +149,8 @@ fn syx_takes_any_bytes() {
         &[0xf0, 0x43, 0x19, 0x19, 0x12, 0x6d, 0xf7],
         &[0xf0, 0x43, 0x19, 0x19, 0x45, 0x09, 0xf7],
         &[0xf0, 0x43, 0x1a, 0x1b, 0x2e, 0x00, 0xf7],
+        &[0xf0, 0x43, 0x1b, 0x18, 0x7e, 0x3c, 0x2a, 0x55, 0xf7],
+        &[0xf0, 0x43, 0x1b, 0x18, 0x7f, 0x02, 0x11, 0x01, 0x23, 0xf7],
         &[0xf0, 0x43, 0x25, 0x00, 0xf7],
         &[0xf0, 0x43, 0x26, 0x09, 0xf7],
         &[0xf0, 0x43, 0x28, 0x01, 0xf7],
@@ -170,6 +182,23 @@ fn syx_takes_any_bytes() {
         universal(10, b"LM  8973S ", &random_dx7s_system_setup(&mut random)),
     ]
     .concat();
+    // Its micro tunings, the edit buffer's, a memory's and a cartridge's of
+    // three, and its fractional scalings, the edit buffer's and a cartridge's of
+    // two.
+    let tunings: Vec<Vec<u8>> = (0..5)
+        .map(|_| micro_tuning_bytes(&random_micro_tuning_steps(&mut random)))
+        .collect();
+    let scalings: Vec<Vec<u8>> = (0..3)
+        .map(|_| scaling_bytes(&random_scaling_bytes(&mut random)))
+        .collect();
+    let keys = [
+        universal(11, b"LM  MCRYE ", &tunings[0]),
+        universal(12, b"LM  MCRYM\x01", &tunings[1]),
+        universal_groups(13, b"LM  MCRYC ", &tunings[2..]),
+        universal(14, b"LM  FKSYE ", &scalings[0]),
+        universal_groups(15, b"LM  FKSYC ", &scalings[1..]),
+    ]
+    .concat();
     for seed in [
         &voice[..],
         &bank,
@@ -179,6 +208,7 @@ fn syx_takes_any_bytes() {
         &performances,
         &supplements,
         &dx7ii,
+        &keys,
     ] {
         assert!(
             syx::read(seed, Options::default()).any(|message| message.result.is_ok()),

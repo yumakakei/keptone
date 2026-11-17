@@ -553,3 +553,57 @@ pub fn random_dx7s_system_setup(random: &mut SplitMix64) -> Vec<u8> {
     let steps = random_system_setup(random);
     [&steps[..20], &steps[37..]].concat()
 }
+
+/// A universal bulk dump of a group for each of `groups`, on a channel, each
+/// group as [`universal`] writes it: its count, the names, its data and the
+/// checksum of the names and the data \[DX7II-MANUAL\] p. Add-4.
+pub fn universal_groups(channel: u8, names: &[u8; 10], groups: &[Vec<u8>]) -> Vec<u8> {
+    let mut message = vec![0xf0, 0x43, channel, 0x7e];
+    for data in groups {
+        let one = universal(channel, names, data);
+        // A group is what lies between the header's four bytes and F7.
+        message.extend_from_slice(&one[4..one.len() - 1]);
+    }
+    message.push(0xf7);
+    message
+}
+
+/// The largest step of a key of a micro tuning: 84 · 128 + 42
+/// \[DX7II-MANUAL\] p. Add-14.
+pub const MICRO_TUNING_LARGEST: u16 = 10794;
+
+/// The 256 bytes of a micro tuning of the 128 keys' steps: each step's high
+/// seven bits, then its low seven.
+pub fn micro_tuning_bytes(steps: &[u16; 128]) -> Vec<u8> {
+    steps
+        .iter()
+        .flat_map(|&step| {
+            [
+                u8::try_from(step >> 7).expect("a step below 2^14"),
+                u8::try_from(step & 0x7f).expect("seven bits"),
+            ]
+        })
+        .collect()
+}
+
+/// The steps of a micro tuning's 128 keys at random, each no more than 10794.
+pub fn random_micro_tuning_steps(random: &mut SplitMix64) -> [u16; 128] {
+    std::array::from_fn(|_| u16::try_from(random.below(usize::from(MICRO_TUNING_LARGEST) + 1)).expect("below 10795"))
+}
+
+/// The 492 bytes of a fractional scaling of its 246 bytes, in the order of the
+/// dump: each byte's high four bits and then its low four, each sent as the
+/// byte 0x30 above them \[DX7S-MANUAL\] p. Add-4.
+pub fn scaling_bytes(bytes: &[u8; 246]) -> Vec<u8> {
+    bytes
+        .iter()
+        .flat_map(|&byte| [0x30 + (byte >> 4), 0x30 + (byte & 0x0f)])
+        .collect()
+}
+
+/// The 246 bytes of a fractional scaling at random: for each operator from
+/// OP6, its offset's byte and the levels of its 40 groups of keys, any byte
+/// each \[DX7II-MANUAL\] p. Add-15.
+pub fn random_scaling_bytes(random: &mut SplitMix64) -> [u8; 246] {
+    std::array::from_fn(|_| random.byte())
+}

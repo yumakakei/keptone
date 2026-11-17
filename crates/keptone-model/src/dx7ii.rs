@@ -6,8 +6,8 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! The DX7II's performances and its system set-up, every parameter of which is
-//! a range type.
+//! The DX7II's performances, its system set-up, its micro tunings and its
+//! fractional scalings, every parameter of which is a range type.
 //!
 //! A [`Performance`] is the DX7II's way of playing its voices, the PCED and
 //! PMEM formats of \[DX7II-MANUAL\]: one voice, or two, A and B, together or
@@ -16,19 +16,24 @@
 //! the pan with its envelope; and a name of twenty letters. The DX7s plays one
 //! voice only \[DX7S-MANUAL\]. The [`SystemSetup`] is how the instrument talks
 //! MIDI: its channels, its controllers' numbers, its program changes and their
-//! table, its cartridge banks, its memory protect and its master tune. What
-//! each does is for the DX7II's emulation and the host to say (docs/DESIGN.md
-//! §15); these types hold them, each number a [`Value`] of its scale or an
+//! table, its cartridge banks, its memory protect and its master tune. A
+//! [`MicroTuning`] gives each of the 128 keys its pitch, and a
+//! [`FractionalScaling`] gives each operator a level for each of 40 groups of
+//! keys, in place of the DX7's level scaling. What each does is for the
+//! DX7II's emulation and the host to say (docs/DESIGN.md §15); these types
+//! hold them, each number a [`Value`] of its scale, a [`KeyPitch`] or an
 //! [`Index`] that names a thing, each choice an enumeration and each switch a
-//! `bool`. Where the DX7II's manual and the DX7s's give a parameter different
-//! ranges, it takes them both.
+//! `bool`, and the offset of a fractional scaling its byte, which holds it in
+//! two's complement. Where the DX7II's manual and the DX7s's give a
+//! parameter different ranges, it takes them both.
 //!
 //! [`PerformanceParameter`] numbers a performance's parameters as the
 //! parameter changes of the performance do, 0 to 50, and [`SystemParameter`]
 //! the system set-up's bytes, 0 to 101, of which 0 to 19 are the system
 //! set-up's parameter changes' 64 to 83. The DX7s's dump of its system set-up
 //! is of 85 bytes, without the 17 that have no name
-//! ([`SystemParameter::in_dx7s_dump`]).
+//! ([`SystemParameter::in_dx7s_dump`]). [`ScalingParameter`] numbers a
+//! fractional scaling's parameters as its dumps place them, 0 to 245.
 
 use std::fmt;
 
@@ -47,7 +52,7 @@ impl<const MAX: u8> Index<MAX> {
     }
 
     /// The index of a number, or `MAX` if the number is more.
-    const fn saturating(number: u8) -> Self {
+    pub(crate) const fn saturating(number: u8) -> Self {
         Self(if number > MAX { MAX } else { number })
     }
 
@@ -55,6 +60,11 @@ impl<const MAX: u8> Index<MAX> {
     #[must_use]
     pub const fn get(self) -> u8 {
         self.0
+    }
+
+    /// Every index, from 0 to `MAX`.
+    pub fn all() -> impl Iterator<Item = Self> {
+        (0..=MAX).map(Self)
     }
 }
 
@@ -855,6 +865,250 @@ impl fmt::Display for SystemParameter {
             20..=36 => write!(formatter, "system byte {}", self.0),
             37 => formatter.write_str("master tune"),
             number => write!(formatter, "program change table entry {}", number - 37),
+        }
+    }
+}
+
+/// A key's pitch in a micro tuning: a number from 0 to 10794 on the DX7II's
+/// scale of them \[DX7II-MANUAL\] p. Add-14, which its dumps and its parameter
+/// change send as two bytes, the high seven bits, no more than 84, and the low
+/// seven.
+///
+/// The DX7II knows only the scale's steps, the integers 0 to 10794. A value may
+/// lie between them; the pitch a value gives is for the DX7II's emulation to
+/// say (docs/DESIGN.md §15). A value is never NaN, never below 0 and never
+/// above 10794, nor ever −0.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct KeyPitch(f64);
+
+impl KeyPitch {
+    /// The largest step: 10794, 84 · 128 + 42.
+    pub const LARGEST: u16 = 10794;
+
+    /// The value, if it is a number from 0 to 10794.
+    #[must_use]
+    pub fn new(value: f64) -> Option<Self> {
+        // Adding +0 takes −0 to +0 and leaves every other number as it is.
+        (0.0..=f64::from(Self::LARGEST))
+            .contains(&value)
+            .then_some(Self(value + 0.0))
+    }
+
+    /// The value of a step, if the step is no more than 10794.
+    #[must_use]
+    pub fn from_step(step: u16) -> Option<Self> {
+        (step <= Self::LARGEST).then_some(Self(f64::from(step)))
+    }
+
+    /// The value of a step, or 10794 if the step is more.
+    fn saturating(step: u16) -> Self {
+        Self(f64::from(step.min(Self::LARGEST)))
+    }
+
+    /// The value.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+
+    /// The step the value rounds to by `rounding`, from 0 to 10794.
+    #[must_use]
+    pub fn step(self, rounding: Rounding) -> u16 {
+        rounding.apply_wide(self.0)
+    }
+}
+
+/// A micro tuning of the DX7II: the pitch of each of its 128 keys
+/// \[DX7II-MANUAL\] p. Add-14, as its dumps hold it, the edit buffer's, those
+/// of the two micro tunings in its memory and those of a cartridge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MicroTuning {
+    /// The keys' pitches, by the keys' MIDI numbers, C-2 at 0 to G8 at 127.
+    pub keys: [KeyPitch; 128],
+}
+
+impl MicroTuning {
+    /// A micro tuning of every key at 0: the start of one whose every key a
+    /// codec sets.
+    pub(crate) const fn zero() -> Self {
+        Self {
+            keys: [KeyPitch(0.0); 128],
+        }
+    }
+
+    /// Sets a key to a step. If the step is no more than 10794, the key takes
+    /// it and the result is true; if it is more, the key takes 10794 and the
+    /// result is false.
+    pub fn set_step(&mut self, key: Index<127>, step: u16) -> bool {
+        self.keys[usize::from(key.0)] = KeyPitch::saturating(step);
+        step <= KeyPitch::LARGEST
+    }
+}
+
+/// The offset of an operator's fractional scaling: the byte that the dumps and
+/// the parameter change send for it, any of 0 to 255, which holds the offset,
+/// −128 to +127, in two's complement (docs/DESIGN.md §15).
+///
+/// \[DX7II-MANUAL\] and \[DX7S-MANUAL\] give the offset as −128 to +127 and do
+/// not say how its byte holds it. Dumps of DX7II banks hold 0x00 in the offset
+/// of every operator in fractional mode \[DX7II-DUMPS\], which two's complement
+/// reads as no offset. The byte is kept as it comes, so that a dump comes back
+/// byte for byte; what the offset does to the sound is for the DX7II's
+/// emulation to say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Offset(u8);
+
+impl Offset {
+    /// The offset of a byte.
+    #[must_use]
+    pub const fn new(byte: u8) -> Self {
+        Self(byte)
+    }
+
+    /// Its byte.
+    #[must_use]
+    pub const fn byte(self) -> u8 {
+        self.0
+    }
+
+    /// The offset that its byte holds, −128 to +127: the byte in two's
+    /// complement.
+    #[must_use]
+    pub fn value(self) -> f64 {
+        f64::from(self.0.cast_signed())
+    }
+}
+
+/// One operator's fractional scaling \[DX7II-MANUAL\] p. Add-15: an offset, and
+/// a level from 0 to 255 for each of 40 groups of keys, the first C-2 to C-1,
+/// the next 38 three keys each, from C#-1 to F#8, and the last G8 alone. An
+/// operator whose scaling mode is fractional takes it in place of the DX7's
+/// level scaling ([`crate::supplement::ScalingMode`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperatorScaling {
+    /// The offset.
+    pub offset: Offset,
+    /// The groups' levels, from the lowest group.
+    pub levels: [Value<255>; 40],
+}
+
+/// A fractional scaling of the DX7II: the scaling of each operator
+/// \[DX7II-MANUAL\] p. Add-15, as its dumps hold it, the edit buffer's and
+/// those of a cartridge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FractionalScaling {
+    /// The operators' scalings, OP1 first, as in a voice; the dumps and the
+    /// parameter change give them from OP6.
+    pub operators: [OperatorScaling; 6],
+}
+
+impl FractionalScaling {
+    /// A fractional scaling of every byte 0: the start of one whose every
+    /// parameter a codec sets.
+    pub(crate) fn zero() -> Self {
+        Self {
+            operators: std::array::from_fn(|_| OperatorScaling {
+                offset: Offset(0),
+                levels: [Value::ZERO; 40],
+            }),
+        }
+    }
+
+    /// A parameter's value: the offset's byte, or a group's level.
+    #[must_use]
+    pub fn value(&self, parameter: ScalingParameter) -> f64 {
+        let scaling = &self.operators[parameter.place()];
+        match parameter.group() {
+            0 => f64::from(scaling.offset.0),
+            group => scaling.levels[usize::from(group - 1)].get(),
+        }
+    }
+
+    /// The step of a parameter, as a dump or a parameter change carries it: its
+    /// value rounded by `rounding`.
+    #[must_use]
+    pub fn step(&self, parameter: ScalingParameter, rounding: Rounding) -> u8 {
+        rounding.apply(self.value(parameter))
+    }
+
+    /// Whether a parameter's value is a step, which a dump holds exactly.
+    #[must_use]
+    pub fn is_step(&self, parameter: ScalingParameter) -> bool {
+        self.value(parameter).fract() == 0.0
+    }
+
+    /// Sets a parameter to a step, which every byte is.
+    pub fn set_step(&mut self, parameter: ScalingParameter, step: u8) {
+        let scaling = &mut self.operators[parameter.place()];
+        match parameter.group() {
+            0 => scaling.offset = Offset(step),
+            group => scaling.levels[usize::from(group - 1)] = Value::saturating(step),
+        }
+    }
+}
+
+/// A parameter of a fractional scaling, by its place in the dumps, 0 to 245
+/// \[DX7II-MANUAL\] p. Add-15: 41 for each operator from OP6, its offset and
+/// then the levels of its 40 groups of keys from the lowest. A parameter change
+/// gives it by the operator's number, 0 for OP6 to 5 for OP1, and the group's,
+/// 0 for the offset and 1 to 40 for the groups of keys \[DX7S-MANUAL\] p. Add-3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ScalingParameter(u8);
+
+impl ScalingParameter {
+    /// The number of parameters: 246.
+    pub const COUNT: u8 = 246;
+
+    /// The parameter of a place, if the place is below 246.
+    #[must_use]
+    pub fn new(place: u8) -> Option<Self> {
+        (place < Self::COUNT).then_some(Self(place))
+    }
+
+    /// The parameter of an operator's number, 0 for OP6 to 5 for OP1, and a
+    /// group's, 0 for the offset and 1 to 40 for the groups of keys, if they
+    /// name one.
+    #[must_use]
+    pub fn of(operator: u8, group: u8) -> Option<Self> {
+        (operator < 6 && group < 41).then(|| Self(operator * 41 + group))
+    }
+
+    /// Its place in the dumps.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// The number of its operator, 0 for OP6 to 5 for OP1.
+    #[must_use]
+    pub const fn operator(self) -> u8 {
+        self.0 / 41
+    }
+
+    /// Its group: 0 for the offset, 1 to 40 for the groups of keys from the
+    /// lowest.
+    #[must_use]
+    pub const fn group(self) -> u8 {
+        self.0 % 41
+    }
+
+    /// The place of its operator in [`FractionalScaling::operators`].
+    fn place(self) -> usize {
+        usize::from(5 - self.operator())
+    }
+
+    /// Every parameter, in the order of the dumps.
+    pub fn all() -> impl Iterator<Item = Self> {
+        (0..Self::COUNT).map(Self)
+    }
+}
+
+impl fmt::Display for ScalingParameter {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let operator = 6 - self.operator();
+        match self.group() {
+            0 => write!(formatter, "OP{operator} offset"),
+            group => write!(formatter, "OP{operator} key group {group}"),
         }
     }
 }
