@@ -324,9 +324,9 @@ These are listed in expected order of benefit, and are to be measured first:
 
 Specified in `docs/STATE-FORMAT.md`, which is written in milestone M2.
 
-- A text document in a **subset of JSON**, as planned for ADLplug-Next's successor: UTF-8, no duplicate keys, numbers as decimal binary64 written shortest-round-trip, no NaN or Inf, a nesting depth limit set by the parser (a setting, default 64).
+- A text document in a **subset of JSON**, as planned for ADLplug-Next's successor: UTF-8, no duplicate keys, numbers as decimal binary64 written shortest-round-trip, no NaN or Inf, a nesting depth limit set by the parser (`json.max_depth`, default 64).
 - A format version, every parameter by stable ID, every setting, the current voice, an optional bank, the tuning, and a SHA-256 of the canonical encoding of the voice.
-- The parser and writer are written by hand, in kiral's practice; there is no serde.
+- The parser and writer are written by hand, in kiral's practice; there is no serde. The parser, `keptone_model::json`, is kiral's, made to keep the arrays and objects it is in on a stack of its own, so that no depth the limit allows takes the thread's stack, and to give the line and the column of an error; it keeps a number's text beside its binary64, so that a 64-bit integer such as `lfo.seed` reads exactly. `keptone_model::sha256` is kiral's SHA-256.
 - Unknown keys are kept and written back, so newer versions round-trip through older ones.
 - A host state that fails to parse leaves the plugin unchanged and is reported.
 

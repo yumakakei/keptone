@@ -17,7 +17,11 @@
 //!   the DX7 gives its parameters;
 //! - [`syx`]: the DX7's dumps of one voice and of 32, read from `.syx` files
 //!   and SysEx messages, however many a file holds, and written back byte for
-//!   byte.
+//!   byte;
+//! - [`json`]: the subset of JSON that the native state and the themes are
+//!   written in, read by hand, nested as deep as `json.max_depth` lets it be
+//!   without taking the thread's stack;
+//! - [`sha256`]: the digest the native state carries of its voice.
 //!
 //! The function data, the parameter changes and requests, the native state and
 //! Scala's `.scl` and `.kbm` files come later in the milestone. Every parser is
@@ -25,5 +29,7 @@
 //! unbounded allocation.
 #![forbid(unsafe_code)]
 
+pub mod json;
+pub mod sha256;
 pub mod syx;
 pub mod voice;

@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# What libFuzzer may put into the inputs of the `json` target (-dict): JSON's
+# punctuation, words and escapes, numbers at the ends of binary64's range and of
+# 64-bit integers, a surrogate pair and a lone surrogate, a byte order mark, and
+# bytes that are not UTF-8.
+
+open_object="{"
+close_object="}"
+open_array="["
+close_array="]"
+quote="\""
+colon=":"
+comma=","
+true="true"
+false="false"
+null="null"
+escape_unicode="\\u"
+escape_quote="\\\""
+escape_backslash="\\\\"
+escape_solidus="\\/"
+escape_newline="\\n"
+surrogate_pair="\\ud83d\\ude00"
+lone_high_surrogate="\\ud800"
+lone_low_surrogate="\\udc00"
+negative_zero="-0"
+exponent="e+308"
+overflow="1e400"
+underflow="2.5e-324"
+largest_u64="18446744073709551615"
+beyond_u64="18446744073709551616"
+byte_order_mark="\xEF\xBB\xBF"
+lone_continuation="\x80"
+lead_without_continuation="\xC3"

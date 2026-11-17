@@ -720,3 +720,4 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `syx.accept_bad_checksum` | true | bool | DESIGN §11.2 |
 | `syx.out_of_range` | clamp | clamp / reject | DESIGN §11.2 |
 | `syx.export_rounding` | nearest | nearest / floor | DESIGN §7.4 |
+| `json.max_depth` | 64 | ≥ 0 | DESIGN §11.1 |

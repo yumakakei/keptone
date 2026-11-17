@@ -13,6 +13,9 @@
 //! take this file by its path, on what libFuzzer makes up: the two check the
 //! same.
 
+#![allow(dead_code, reason = "each fuzz target takes the property of its own parser")]
+
+use keptone_model::json::{self, DEFAULT_MAX_DEPTH, Value};
 use keptone_model::syx::{self, Content, Loss, Options, OutOfRange};
 use keptone_model::voice::Rounding;
 
@@ -50,4 +53,72 @@ pub fn read_syx(input: &[u8]) {
             }
         }
     }
+}
+
+/// A text read with no limit to its nesting, with the default limit and with
+/// a limit of one level. Whatever reads within a limit reads the same with no
+/// limit, and what does not read with no limit reads with none; a value
+/// nests no deeper than its limit and gives no name twice in an object; and
+/// an error lies within the text.
+pub fn read_json(input: &[u8]) {
+    let unlimited = json::parse(input, usize::MAX);
+    let limited = json::parse(input, DEFAULT_MAX_DEPTH);
+    let flat = json::parse(input, 1);
+    if let Ok(value) = &limited {
+        assert!(depth(value) <= DEFAULT_MAX_DEPTH);
+        assert!(names_once(value));
+        assert_eq!(unlimited.as_ref().ok(), Some(value));
+    }
+    if let Ok(value) = &flat {
+        assert!(depth(value) <= 1);
+        assert_eq!(limited.as_ref().ok(), Some(value));
+    }
+    if let Ok(value) = &unlimited {
+        assert!(names_once(value));
+    } else {
+        assert!(limited.is_err() && flat.is_err());
+    }
+    for error in [&unlimited, &limited, &flat]
+        .into_iter()
+        .filter_map(|result| result.as_ref().err())
+    {
+        assert!(error.offset <= input.len() && error.line >= 1 && error.column >= 1);
+    }
+}
+
+/// How deep a value's arrays and objects nest, counted without recursion.
+fn depth(value: &Value) -> usize {
+    let mut deepest = 0;
+    let mut stack = vec![(value, 0)];
+    while let Some((value, level)) = stack.pop() {
+        let within: Vec<&Value> = match value {
+            Value::Array(values) => values.iter().collect(),
+            Value::Object(object) => object.iter().map(|(_, value)| value).collect(),
+            _ => continue,
+        };
+        deepest = deepest.max(level + 1);
+        stack.extend(within.into_iter().map(|value| (value, level + 1)));
+    }
+    deepest
+}
+
+/// Whether no object within a value gives a name twice, checked without
+/// recursion.
+fn names_once(value: &Value) -> bool {
+    let mut stack = vec![value];
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Array(values) => stack.extend(values),
+            Value::Object(object) => {
+                let mut names: Vec<&str> = object.iter().map(|(name, _)| name).collect();
+                names.sort_unstable();
+                if names.windows(2).any(|pair| pair[0] == pair[1]) {
+                    return false;
+                }
+                stack.extend(object.iter().map(|(_, value)| value));
+            }
+            _ => {}
+        }
+    }
+    true
 }

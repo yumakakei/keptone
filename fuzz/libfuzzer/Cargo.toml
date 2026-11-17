@@ -38,6 +38,13 @@ keptone-model = { path = "../../crates/keptone-model" }
 libfuzzer-sys = "=0.4.13"
 
 [[bin]]
+name = "json"
+path = "fuzz_targets/json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "syx"
 path = "fuzz_targets/syx.rs"
 test = false

@@ -20,8 +20,9 @@ mod properties;
 use std::path::Path;
 
 use common::{SplitMix64, random_bank, random_voice};
+use keptone_model::json;
 use keptone_model::syx::{self, Options};
-use properties::read_syx;
+use properties::{read_json, read_syx};
 
 /// How many inputs are made of each seed: fewer in the dev profile, whose
 /// code is some ten times slower.
@@ -103,5 +104,33 @@ fn syx_takes_any_bytes() {
     }
     for input in regressions("syx") {
         read_syx(&input);
+    }
+}
+
+#[test]
+fn json_takes_any_bytes() {
+    let seeds: [&[u8]; 6] = [
+        br#"{"format": 1, "parameters": {"op1.eg.rate1": 99, "op1.output_level": 71.25}, "lfo.seed": 18446744073709551615}"#,
+        "{\"\\u00e3\\u0081\\u00ae\": 240, \"name\": \"E.PIANO 1\", \"ア\": [1, 2]}".as_bytes(),
+        br#"[[[[]]], {"a": [true, false, null]}, -0.5e-3, "\ud83d\ude00", 1e400]"#,
+        br#"{"b": 1, "a": {"c": [{"d": {}}]}}"#,
+        b"  12345678901234567890123  ",
+        b"\"\\\"\\/\\b\\f\\n\\r\\t\"",
+    ];
+    let tokens: [&[u8]; 12] = [
+        b"{", b"}", b"[", b"]", b"\"", b"\\u", b",", b":", b"-0e", b"null", b"\\ud800", b"\xc3",
+    ];
+    let mut random = SplitMix64(12);
+    for seed in seeds {
+        assert!(
+            json::parse(seed, json::DEFAULT_MAX_DEPTH).is_ok(),
+            "a seed that is not JSON"
+        );
+        for _ in 0..MUTATIONS / 5 {
+            read_json(&mutate(&mut random, seed, &tokens));
+        }
+    }
+    for input in regressions("json") {
+        read_json(&input);
     }
 }

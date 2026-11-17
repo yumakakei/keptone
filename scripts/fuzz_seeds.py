@@ -15,7 +15,10 @@ and checksums that a parser checks before anything else. fuzz/seeds/syx/ holds D
 are random numbers, each within the range of its parameter, laid out as [DEXED-SYSEX] lays them out (stated
 again here, apart from keptone-model and its tests): a single-voice dump, a 32-voice dump, a file of several
 messages among bytes that are none, and a dump whose checksum is wrong and some of whose bytes are out of range.
-No voice of Yamaha's is among them (docs/DESIGN.md §14). The script writes the same bytes every time.
+No voice of Yamaha's is among them (docs/DESIGN.md §14). fuzz/seeds/json/ holds JSON texts of the subset that the
+native state is to be written in: an object of settings and values nested a few levels, with an integer of 64 bits;
+strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a few levels;
+and numbers at the ends of binary64's range. The script writes the same bytes every time.
 """
 
 import sys
@@ -142,12 +145,39 @@ def main() -> int:
         "unused.syx": unused,
         "mixed.syx": mixed,
     }
-    directory = SEEDS / "syx"
+    write(SEEDS / "syx", seeds)
+    write(SEEDS / "json", json_seeds())
+    return 0
+
+
+def json_seeds() -> dict[str, bytes]:
+    """The seeds of the json target."""
+    state = (
+        '{"format": 1, "voice": {"name": "SEED 1", "algorithm": 5, "operators": ['
+        '{"rates": [99, 75.5, 30, 60], "levels": [99, 90, 0, 0], "output_level": 71.25}, '
+        '{"rates": [80, 70, 60, 50], "levels": [99, 0, 0, 0], "output_level": 99}]}, '
+        '"settings": {"lfo.seed": 18446744073709551615, "eg.clock_hz": 49096, "adaa.tau2": 0.0009765625, '
+        '"output.gain": 0.5, "voice.count": 16, "eg.end_db": -200}, "bank": null, "unknown": {"kept": [true, false]}}'
+    )
+    escapes = '["\\"\\\\\\/\\b\\f\\n\\r\\t", "\\u00e9\\u3042\\ud83d\\ude00", "かな ア é 😀", ""]'
+    nesting = '{"a": [[[{"b": [[], {}]}]]], "c": {"d": {"e": {"f": [1, [2, [3, [4]]]]}}}}'
+    numbers = (
+        "[0, -0, 1, -1, 0.1, 1e308, 1.7976931348623157e308, 2.2250738585072014e-308, 5e-324, 1E+2, -9007199254740993]"
+    )
+    return {
+        "state.json": state.encode(),
+        "escapes.json": escapes.encode(),
+        "nesting.json": nesting.encode(),
+        "numbers.json": numbers.encode(),
+    }
+
+
+def write(directory: Path, seeds: dict[str, bytes]) -> None:
+    """Write seeds into a directory of their own."""
     directory.mkdir(parents=True, exist_ok=True)
     for name, content in seeds.items():
         (directory / name).write_bytes(content)
         print(f"wrote {directory.relative_to(ROOT) / name}, {len(content)} bytes")
-    return 0
 
 
 if __name__ == "__main__":
