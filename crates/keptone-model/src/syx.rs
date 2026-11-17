@@ -22,18 +22,22 @@
 //!   ([`crate::performance`]): one performance in 94 bytes, under format
 //!   number 1, and under 2, which \[DX7-MANUAL\] prints for it, and 64
 //!   performances packed into 64 bytes each; the TX7's condition acknowledge,
-//!   which says what it is and how it is set; and the DX7II's universal bulk
-//!   dumps of its performances, its system set-up, its micro tunings and its
+//!   which says what it is and how it is set; the DX7II's universal bulk dumps
+//!   of its performances, its system set-up, its micro tunings and its
 //!   fractional scalings, a cartridge's in as many groups as it holds, and the
-//!   DX7s's of its system set-up ([`crate::dx7ii`]);
+//!   DX7s's of its system set-up ([`crate::dx7ii`]); and the TX802's of its
+//!   performance edit buffer, of the 64 performances of its memory, a group
+//!   each, its performances in hexadecimal digits, and of its system set-up
+//!   ([`crate::tx802`]);
 //! - the parameter changes: of a voice parameter, of a function parameter, of a
 //!   button of the DX7's panel, which its firmware takes as pressed or released
 //!   \[AJXS-ROM\], of a switch of the DX7II's panel by its switch remote, of a
 //!   parameter of its supplement, its performance and its system set-up, of a
 //!   key of its micro tuning and of a parameter of its fractional scaling,
-//!   with three bytes of data and four, and the DX7s's system reset, and the
-//!   TX7's, of a performance's parameter, of one of its own settings and of the
-//!   operator its panel edits;
+//!   with three bytes of data and four, and the DX7s's system reset; the
+//!   TX802's, of a parameter of its performance and of a switch of its panel;
+//!   and the TX7's, of a performance's parameter, of one of its own settings and
+//!   of the operator its panel edits;
 //! - the dump requests of the DX7II and the TX7, which the DX7 itself does not
 //!   answer, and Keptone does (docs/DESIGN.md §15).
 //!
@@ -45,11 +49,12 @@
 //! decoded all the same only if `syx.accept_bad_checksum` allows it. Every byte
 //! is checked against the range of its parameter, a packed byte for bits its
 //! format leaves unused, a byte of a fractional scaling's dump for one of the
-//! sixteen that send four bits, and a switch's data for 0 or 127: what is not as
-//! it should be is reported, and either taken as the nearer end of the range,
-//! the bits ignored and the switch pressed, or the message refused, as
-//! `syx.out_of_range` says (docs/MATH.md §17). A message is decoded whole or
-//! refused whole.
+//! sixteen that send four bits, a byte of the TX802's performances for a
+//! hexadecimal digit, and a switch's data for 0 or 127: what is not as it
+//! should be is reported, and either taken as the nearer end of the range, the
+//! bits ignored, the digit read as it most likely stands and the switch
+//! pressed, or the message refused, as `syx.out_of_range` says (docs/MATH.md
+//! §17). A message is decoded whole or refused whole.
 //!
 //! [`write_voice`], [`write_bank`], [`write_supplement`], [`write_supplements`],
 //! [`write_performance`], [`write_performances`], [`write_condition`],
@@ -57,20 +62,22 @@
 //! [`write_system_setup`], [`write_dx7s_system_setup`],
 //! [`write_micro_tuning`], [`write_micro_tuning_memory`],
 //! [`write_micro_tunings`], [`write_fractional_scaling`],
-//! [`write_fractional_scalings`], [`write_change`] and [`write_request`] write
-//! the messages, each value rounded to a step as `syx.export_rounding` says;
-//! the dumps say what they could not hold of what they were written from. A
-//! message that is valid -- its checksum right, every byte in range, no unused
-//! bit set and a switch's data 0 or 127 -- comes back from them byte for byte
-//! as it was read (MATH §16), but for a performance under format 2, which they
-//! write under 1.
+//! [`write_fractional_scalings`], [`write_tx802_performance`],
+//! [`write_tx802_performances`], [`write_tx802_system_setup`], [`write_change`]
+//! and [`write_request`] write the messages, each value rounded to a step as
+//! `syx.export_rounding` says; the dumps say what they could not hold of what
+//! they were written from. A message that is valid -- its checksum right, every
+//! byte in range, no unused bit set, every digit a hexadecimal one and a
+//! switch's data 0 or 127 -- comes back from them byte for byte as it was read
+//! (MATH §16), but for a performance under format 2, which they write under 1.
 //!
 //! Every function here takes any bytes and gives a value or an error, never a
 //! panic, and allocates in proportion to the bytes it is given: [`read`] goes
 //! through a file a message at a time, and a dump decoded takes no more than
 //! ten times the bytes of its message, 1056 for each voice, 280 for each
-//! performance, 344 for each supplement, 1024 for each micro tuning and 1968
-//! for each fractional scaling on a 64-bit system.
+//! performance, 344 for each supplement, 1024 for each micro tuning, 1968
+//! for each fractional scaling and 344 for each of the TX802's performances on
+//! a 64-bit system.
 
 use std::fmt;
 
@@ -80,6 +87,7 @@ use crate::dx7ii::{
 use crate::function::{Function, FunctionParameter};
 use crate::performance::{DxPerformanceParameter, KeyAssign, Performance, PerformanceParameter, Unnamed};
 use crate::supplement::{Supplement, SupplementParameter};
+use crate::tx802;
 use crate::voice::{Parameter, Rounding, Voice};
 
 /// The byte that starts a system-exclusive message.
@@ -211,11 +219,12 @@ const SCALING_BYTES: usize = 492;
 /// fifteen after it send 1 to 15.
 const NIBBLE_ZERO: u8 = 0x30;
 
-/// The most groups that `decode` takes of a cartridge's dump of micro tunings
-/// or of fractional scalings: 64, as many micro tunings as the DX7II's
-/// cartridge holds, the DX7s's holding 63, and as many fractional scalings as
-/// the DX7s's, whose dump sends 32 \[DX7II-MANUAL\] \[DX7S-MANUAL\].
-const CARTRIDGE_GROUPS: usize = 64;
+/// The most groups that `decode` takes of a dump of several: 64, as many micro
+/// tunings as the DX7II's cartridge holds, the DX7s's holding 63, as many
+/// fractional scalings as the DX7s's, whose dump sends 32, and as many
+/// performances as the TX802's memory \[DX7II-MANUAL\] \[DX7S-MANUAL\]
+/// \[TX802-SYSEX\].
+const MOST_GROUPS: usize = 64;
 
 /// The group byte and the number of the parameter change of a key of the micro
 /// tuning, the supplement's group with the number 126 \[DX7II-MANUAL\] p. Add-2.
@@ -224,6 +233,32 @@ const MICRO_TUNING_CHANGE: [u8; 2] = [DX7II_GROUP << 2, 126];
 /// The group byte and the number of the parameter change of a fractional
 /// scaling, the supplement's group with the number 127.
 const SCALING_CHANGE: [u8; 2] = [DX7II_GROUP << 2, 127];
+
+/// The data format name of the TX802's performance edit buffer
+/// \[TX802-SYSEX\].
+const TX802_PERFORMANCE_EDIT: [u8; 6] = *b"8952PE";
+
+/// The data format name of the 64 performances of the TX802's memory, one a
+/// group.
+const TX802_PERFORMANCE_MEMORY: [u8; 6] = *b"8952PM";
+
+/// The data format name of the TX802's system set-up.
+const TX802_SYSTEM_SETUP: [u8; 6] = *b"8952S ";
+
+/// The bytes of the TX802's performance edit buffer: two hexadecimal digits
+/// for each of its 116 parameters.
+const TX802_PERFORMANCE_BYTES: usize = 232;
+
+/// The bytes of a performance of the TX802's memory: two hexadecimal digits for
+/// each of its 84 packed bytes.
+const TX802_PACKED_BYTES: usize = 168;
+
+/// The bytes of the TX802's system set-up.
+const TX802_SYSTEM_BYTES: usize = 263;
+
+/// The group byte of the parameter changes of the TX802's performance, group 6
+/// with its low bits 2 \[TX802-SYSEX\].
+const TX802_PERFORMANCE_GROUP: u8 = DX7II_GROUP << 2 | 2;
 
 /// The group byte of the DX7II's switch remote, group 6 with its low bits 3
 /// \[DX7II-MANUAL\].
@@ -614,6 +649,47 @@ pub enum Finding {
         /// The step it held.
         step: u16,
     },
+    /// A step of a parameter of the TX802's performance beyond its range
+    /// ([`tx802::PerformanceParameter::largest`]).
+    Tx802PerformanceOutOfRange {
+        /// The place of the performance: 0 in the edit buffer or a parameter
+        /// change, 0 to 63 in the dump of the memory.
+        performance: u8,
+        /// The parameter.
+        parameter: tx802::PerformanceParameter,
+        /// The step it held, of two bytes in a parameter change of the voice or
+        /// the micro tuning table.
+        step: u16,
+    },
+    /// A byte of the TX802's performances that is not one of the sixteen
+    /// hexadecimal digits, '0' to '9' and 'A' to 'F' \[TX802-SYSEX\].
+    Tx802Digit {
+        /// The place of the performance.
+        performance: u8,
+        /// The place of the byte whose half it sends, among the edit buffer's
+        /// 116 or a packed performance's 84.
+        value: u8,
+        /// The byte.
+        byte: u8,
+    },
+    /// A byte of a packed performance of the TX802's memory that sets its high
+    /// bit, which the format leaves unused.
+    Tx802UnusedBits {
+        /// The place of the performance, 0 to 63.
+        performance: u8,
+        /// The place of the byte among the performance's 84.
+        byte: u8,
+        /// The bits it set that are unused.
+        bits: u8,
+    },
+    /// A step of a parameter of the TX802's system set-up that the parameter
+    /// does not take.
+    Tx802SystemOutOfRange {
+        /// The parameter.
+        parameter: tx802::SystemParameter,
+        /// The step it held.
+        step: u8,
+    },
 }
 
 impl fmt::Display for Finding {
@@ -649,7 +725,8 @@ impl fmt::Display for Finding {
 
 impl Finding {
     /// The description of a finding of a message of the DX7's family that the
-    /// DX7 does not read: the TX7's and the DX1's, the DX7II's apart.
+    /// DX7 does not read: the TX7's, the DX1's and the TX802's, the DX7II's
+    /// apart.
     fn fmt_family(self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PerformanceOutOfRange {
@@ -668,6 +745,11 @@ impl Finding {
                 u16::from(performance) + 1
             ),
             Self::PerformanceUnusedBits {
+                performance,
+                byte,
+                bits,
+            }
+            | Self::Tx802UnusedBits {
                 performance,
                 byte,
                 bits,
@@ -695,6 +777,28 @@ impl Finding {
             }
             Self::ConditionChannel { channel } => {
                 write!(formatter, "the receive channel is {channel}, beyond its largest, 15")
+            }
+            Self::Tx802PerformanceOutOfRange {
+                performance,
+                parameter,
+                step,
+            } => write!(
+                formatter,
+                "performance {}: {parameter} is {step}, beyond its largest, {}",
+                u16::from(performance) + 1,
+                parameter.largest()
+            ),
+            Self::Tx802Digit {
+                performance,
+                value,
+                byte,
+            } => write!(
+                formatter,
+                "performance {}: byte {value} is sent with {byte:#04x}, not a hexadecimal digit",
+                u16::from(performance) + 1
+            ),
+            Self::Tx802SystemOutOfRange { parameter, step } => {
+                write!(formatter, "{parameter} is {step}, which it does not take")
             }
             Self::Checksum { .. }
             | Self::OutOfRange { .. }
@@ -775,7 +879,11 @@ impl Finding {
             | Self::DxPerformanceOutOfRange { .. }
             | Self::TxFunctionOutOfRange { .. }
             | Self::OperatorSelectOutOfRange { .. }
-            | Self::ConditionChannel { .. } => fmt::Display::fmt(&self, formatter),
+            | Self::ConditionChannel { .. }
+            | Self::Tx802PerformanceOutOfRange { .. }
+            | Self::Tx802Digit { .. }
+            | Self::Tx802UnusedBits { .. }
+            | Self::Tx802SystemOutOfRange { .. } => fmt::Display::fmt(&self, formatter),
         }
     }
 }
@@ -803,10 +911,12 @@ pub enum Error {
     /// 4104, the condition acknowledge 16 in 24, a universal bulk dump's group
     /// the 10 bytes of its names and the data its names give, a DX7II
     /// performance 51 bytes, 32 of them 1632, its system set-up 102, the
-    /// DX7s's 85, a micro tuning 256 and a fractional scaling 492, a parameter
-    /// change one byte of data in 7, three in 9 for a key of a micro tuning
-    /// and four in 10 for a fractional scaling, and a dump request is of 5
-    /// bytes, or 15 for a universal bulk dump's.
+    /// DX7s's 85, a micro tuning 256, a fractional scaling 492, the TX802's
+    /// performance 232, a packed one 168 and its system set-up 263, a
+    /// parameter change one byte of data in 7, two in 8 for the TX802's voice
+    /// and micro tuning table, three in 9 for a key of a micro tuning and four
+    /// in 10 for a fractional scaling, and a dump request is of 5 bytes, or 15
+    /// for a universal bulk dump's.
     Length,
     /// A message refused for what it held, as the options have it: a wrong
     /// checksum if `syx.accept_bad_checksum` is false, or, if `syx.out_of_range`
@@ -890,6 +1000,13 @@ pub enum Content {
     /// The universal bulk dump of the fractional scalings of a cartridge, a
     /// group each, 32 from the DX7II, in the order of their places.
     FractionalScalings(Vec<FractionalScaling>),
+    /// The TX802's universal bulk dump of its performance edit buffer.
+    Tx802Performance(Box<tx802::Performance>),
+    /// The TX802's universal bulk dump of the 64 performances of its memory, a
+    /// group each, in the order of their places.
+    Tx802Performances(Vec<tx802::Performance>),
+    /// The TX802's universal bulk dump of its system set-up.
+    Tx802SystemSetup(Box<tx802::SystemSetup>),
 }
 
 /// A button of the DX7's panel, by the number that a panel switch message
@@ -1424,6 +1541,70 @@ impl ScalingStep {
     }
 }
 
+/// A parameter of the TX802's performance and a step within its range: what a
+/// parameter change of the performance sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Tx802PerformanceStep {
+    /// The parameter.
+    parameter: tx802::PerformanceParameter,
+    /// The step, no more than the parameter's largest, and below 128 but for
+    /// the voice and the micro tuning table.
+    step: u8,
+}
+
+impl Tx802PerformanceStep {
+    /// The parameter and step, if the step is within the parameter's range and
+    /// a parameter change carries it: below 128, but for the voice and the
+    /// micro tuning table, whose changes carry two bytes of data.
+    #[must_use]
+    pub fn new(parameter: tx802::PerformanceParameter, step: u8) -> Option<Self> {
+        (step <= parameter.largest() && (step < 0x80 || parameter.is_wide())).then_some(Self { parameter, step })
+    }
+
+    /// A parameter of a performance and its step, its value rounded by
+    /// `rounding`, and no more than a parameter change carries.
+    #[must_use]
+    pub fn of(performance: &tx802::Performance, parameter: tx802::PerformanceParameter, rounding: Rounding) -> Self {
+        let most = if parameter.is_wide() { parameter.largest() } else { 0x7f };
+        Self {
+            parameter,
+            step: performance.step(parameter, rounding).min(most),
+        }
+    }
+
+    /// The parameter.
+    #[must_use]
+    pub const fn parameter(self) -> tx802::PerformanceParameter {
+        self.parameter
+    }
+
+    /// The step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        self.step
+    }
+}
+
+/// A switch of the TX802's panel, by the number its switch remote gives it,
+/// 64 to 96 \[TX802-SYSEX\] Table 4: from 64, power on, to 96, the eighth
+/// tone generator on and off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Tx802Switch(u8);
+
+impl Tx802Switch {
+    /// The switch of a number, if the number is 64 to 96.
+    #[must_use]
+    pub fn new(number: u8) -> Option<Self> {
+        (64..=96).contains(&number).then_some(Self(number))
+    }
+
+    /// Its number.
+    #[must_use]
+    pub const fn number(self) -> u8 {
+        self.0
+    }
+}
+
 /// A parameter of the DX7II's supplement and a step within its range: what a
 /// parameter change of the supplement sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1548,6 +1729,15 @@ pub enum Change {
     /// the group's, 0 for the offset, and the step's high bit and its low seven
     /// \[DX7S-MANUAL\] p. Add-3.
     FractionalScaling(ScalingStep),
+    /// A parameter of the TX802's performance, of group 6 with the group byte's
+    /// low bits 2 and numbers 0 to 115, the voice's and the micro tuning
+    /// table's changes with two bytes of data, the step's high seven bits and
+    /// its low seven \[TX802-SYSEX\] Table 3.
+    Tx802Performance(Tx802PerformanceStep),
+    /// A switch of the TX802's panel by its switch remote, the group byte 0x1B
+    /// with numbers 64 to 96: the data, which the TX802 does not look at, kept
+    /// as it comes \[TX802-SYSEX\] Table 4.
+    Tx802Switch(Tx802Switch, Byte),
 }
 
 /// A parameter change, decoded.
@@ -1807,15 +1997,16 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
     })
 }
 
-/// A group of a universal bulk dump: its byte count, the 10 bytes of its
-/// classification and data format names and its data, which the count counts,
-/// 61 for the 51 bytes of a performance \[DX7II-MANUAL\] p. Add-4, and its
-/// checksum, which, as in every dump, is of the bytes the count counts
-/// \[DX7II-DUMPS\].
+/// A group of a universal bulk dump: its byte count; the 10 bytes of its
+/// classification and data format names; its data, which the count counts with
+/// the names, 61 for the 51 bytes of the DX7II's performance \[DX7II-MANUAL\]
+/// p. Add-4, but alone for the TX802's performances \[TX802-SYSEX\] Fig. 1;
+/// and the checksum of the names and the data \[DX7II-DUMPS\]
+/// \[TX802-DUMPS\].
 struct Group<'a> {
     /// The names.
     names: [u8; 10],
-    /// The names and the data: the bytes the count counts.
+    /// The names and the data, which the checksum is of.
     counted: &'a [u8],
     /// The data.
     data: &'a [u8],
@@ -1832,9 +2023,14 @@ fn groups_of(mut rest: &[u8]) -> Result<Vec<Group<'_>>, Error> {
             return Err(Error::Length);
         };
         let count = usize::from(high) << 7 | usize::from(low);
-        let (Some(counted), Some((&checksum, after))) =
-            (after.get(..count), after.get(count..).and_then(<[u8]>::split_first))
-        else {
+        let counted_length = match after.first_chunk::<10>() {
+            Some(&names) if counts_data_alone(names) => count + 10,
+            _ => count,
+        };
+        let (Some(counted), Some((&checksum, after))) = (
+            after.get(..counted_length),
+            after.get(counted_length..).and_then(<[u8]>::split_first),
+        ) else {
             return Err(Error::Length);
         };
         let Some((&names, data)) = counted.split_first_chunk::<10>() else {
@@ -1851,11 +2047,24 @@ fn groups_of(mut rest: &[u8]) -> Result<Vec<Group<'_>>, Error> {
     Ok(groups)
 }
 
+/// Whether a universal bulk dump's group of these names counts its data alone:
+/// the TX802's performances' do, where every other's counts the names as well
+/// \[TX802-SYSEX\] Fig. 1.
+fn counts_data_alone(names: [u8; 10]) -> bool {
+    let [c0, c1, c2, c3, f0, f1, f2, f3, f4, f5] = names;
+    [c0, c1, c2, c3] == LM
+        && matches!(
+            [f0, f1, f2, f3, f4, f5],
+            TX802_PERFORMANCE_EDIT | TX802_PERFORMANCE_MEMORY
+        )
+}
+
 /// The dump of a universal bulk dump's bytes after its format: one group of a
 /// performance edit buffer, 32 performances, a system set-up, a micro tuning,
 /// the edit buffer's or one of the memory's, or a fractional scaling of the
-/// DX7II, or of a system set-up of the DX7s; or a cartridge's micro tunings or
-/// fractional scalings, a group each, as many as 64.
+/// DX7II, of a system set-up of the DX7s, or of the TX802's performance edit
+/// buffer or system set-up; or a cartridge's micro tunings or fractional
+/// scalings, or the TX802's performances, a group each, as many as 64.
 fn universal_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Error> {
     let groups = groups_of(rest)?;
     let Some(first) = groups.first() else {
@@ -1863,7 +2072,7 @@ fn universal_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump,
     };
     let kind = universal_kind(first.names)?;
     let most = match kind {
-        UniversalKind::MicroTunings | UniversalKind::Scalings => CARTRIDGE_GROUPS,
+        UniversalKind::MicroTunings | UniversalKind::Scalings | UniversalKind::Tx802Performances => MOST_GROUPS,
         _ => 1,
     };
     if groups.len() > most || groups.iter().any(|group| group.names != first.names) {
@@ -1903,6 +2112,9 @@ enum UniversalKind {
     MicroTunings,
     Scaling,
     Scalings,
+    Tx802Performance,
+    Tx802Performances,
+    Tx802SystemSetup,
 }
 
 /// What a universal bulk dump's group holds, by its names, if it is of a kind
@@ -1920,6 +2132,9 @@ fn universal_kind(names: [u8; 10]) -> Result<UniversalKind, Error> {
         MICRO_TUNING_CARTRIDGE => UniversalKind::MicroTunings,
         SCALING_EDIT => UniversalKind::Scaling,
         SCALING_CARTRIDGE => UniversalKind::Scalings,
+        TX802_PERFORMANCE_EDIT => UniversalKind::Tx802Performance,
+        TX802_PERFORMANCE_MEMORY => UniversalKind::Tx802Performances,
+        TX802_SYSTEM_SETUP => UniversalKind::Tx802SystemSetup,
         [m0, m1, m2, m3, m4, memory] if [m0, m1, m2, m3, m4] == MICRO_TUNING_MEMORY => {
             UniversalKind::MicroTuningMemory(Index::new(memory).ok_or(Error::Unsupported)?)
         }
@@ -1988,7 +2203,188 @@ fn universal_content(
             }
             Content::FractionalScalings(scalings)
         }
+        UniversalKind::Tx802Performance => Content::Tx802Performance(Box::new(tx802_edit_of(data, options, findings)?)),
+        UniversalKind::Tx802Performances => {
+            let mut performances = Vec::with_capacity(groups.len());
+            for (place, group) in (0..).zip(groups) {
+                performances.push(tx802_packed_of(group.data, place, options, findings)?);
+            }
+            Content::Tx802Performances(performances)
+        }
+        UniversalKind::Tx802SystemSetup => {
+            Content::Tx802SystemSetup(Box::new(tx802_system_of(data, options, findings)?))
+        }
     })
+}
+
+/// The TX802's performance of its edit buffer's data, two hexadecimal digits
+/// for each of its 116 parameters, each step checked against its range.
+fn tx802_edit_of(data: &[u8], options: Options, findings: &mut Vec<Finding>) -> Result<tx802::Performance, Error> {
+    if data.len() != TX802_PERFORMANCE_BYTES {
+        return Err(Error::Length);
+    }
+    let steps = bytes_of_digits::<116>(data, 0, options, findings)?;
+    tx802_performance_of(&steps, 0, options, findings)
+}
+
+/// The TX802's performance of a group of its memory's dump, two hexadecimal
+/// digits for each of its 84 packed bytes, each checked.
+fn tx802_packed_of(
+    data: &[u8],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<tx802::Performance, Error> {
+    if data.len() != TX802_PACKED_BYTES {
+        return Err(Error::Length);
+    }
+    let packed = bytes_of_digits::<84>(data, place, options, findings)?;
+    let steps = unpack_tx802(&packed, place, options, findings)?;
+    tx802_performance_of(&steps, place, options, findings)
+}
+
+/// The TX802's performance of its 116 steps, in the order of its edit buffer,
+/// each checked against its parameter's range.
+fn tx802_performance_of(
+    steps: &[u8; 116],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<tx802::Performance, Error> {
+    let mut performance = tx802::Performance::zero();
+    for (parameter, &step) in tx802::PerformanceParameter::all().zip(steps) {
+        if !performance.set_step(parameter, step) {
+            let finding = Finding::Tx802PerformanceOutOfRange {
+                performance: place,
+                parameter,
+                step: u16::from(step),
+            };
+            note(finding, options, findings)?;
+        }
+    }
+    Ok(performance)
+}
+
+/// The TX802's system set-up of its 263 bytes, each checked against the
+/// steps its parameter takes.
+fn tx802_system_of(data: &[u8], options: Options, findings: &mut Vec<Finding>) -> Result<tx802::SystemSetup, Error> {
+    if data.len() != TX802_SYSTEM_BYTES {
+        return Err(Error::Length);
+    }
+    let mut setup = tx802::SystemSetup::zero();
+    for (parameter, &step) in tx802::SystemParameter::all().zip(data) {
+        if !setup.set_step(parameter, step) {
+            note(Finding::Tx802SystemOutOfRange { parameter, step }, options, findings)?;
+        }
+    }
+    Ok(setup)
+}
+
+/// `N` bytes of their `2N` hexadecimal digits, the high first \[TX802-SYSEX\],
+/// each digit checked.
+fn bytes_of_digits<const N: usize>(
+    digits: &[u8],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<[u8; N], Error> {
+    let mut bytes = [0; N];
+    let (pairs, _) = digits.as_chunks::<2>();
+    for ((value, &[high, low]), byte) in (0..).zip(pairs).zip(&mut bytes) {
+        let high = digit_of(high, place, value, options, findings)?;
+        let low = digit_of(low, place, value, options, findings)?;
+        *byte = high << 4 | low;
+    }
+    Ok(bytes)
+}
+
+/// The four bits that a hexadecimal digit stands for, '0' to '9' and 'A' to
+/// 'F': any other byte is reported, and taken as the digit it most likely
+/// stands for, ':' to '?' and 'a' to 'f' as 10 to 15, as the fractional
+/// scaling's dump and small letters would write them, a byte below '0' as 0
+/// and any other as 15.
+fn digit_of(byte: u8, place: u8, value: u8, options: Options, findings: &mut Vec<Finding>) -> Result<u8, Error> {
+    let digit = match byte {
+        b'0'..=b'9' => return Ok(byte - b'0'),
+        b'A'..=b'F' => return Ok(byte - b'A' + 10),
+        b':'..=b'?' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        0..=0x2f => 0,
+        _ => 15,
+    };
+    let finding = Finding::Tx802Digit {
+        performance: place,
+        value,
+        byte,
+    };
+    note(finding, options, findings)?;
+    Ok(digit)
+}
+
+/// The 116 steps of a packed performance of the TX802's memory, in the order
+/// of its edit buffer \[TX802-SYSEX\] Table 5: the voice channel offset in
+/// bits 7-5 of the first eight bytes and the receive channel in bits 4-0; the
+/// voices; the micro tuning tables; the volumes in bits 6-0; the detune in bits
+/// 6-3, the key assign group in bit 2 and the output in bits 1-0, the detune
+/// taking four bits as dumps of the TX802 hold it \[TX802-DUMPS\], where the
+/// table draws three; the lowest and the highest keys in bits 6-0; the forced
+/// damp in bit 6 and the note shift in bits 5-0; and the name. A high bit set
+/// where the table leaves it unused is reported.
+fn unpack_tx802(
+    packed: &[u8; 84],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<[u8; 116], Error> {
+    for (byte, &value) in (24..64).zip(&packed[24..64]) {
+        if value & 0x80 != 0 {
+            let finding = Finding::Tx802UnusedBits {
+                performance: place,
+                byte,
+                bits: 0x80,
+            };
+            note(finding, options, findings)?;
+        }
+    }
+    let mut steps = [0; 116];
+    for generator in 0..8 {
+        let channels = packed[generator];
+        let tuning = packed[32 + generator];
+        let damp = packed[56 + generator];
+        steps[generator] = channels >> 5;
+        steps[8 + generator] = channels & 0x1f;
+        steps[16 + generator] = packed[8 + generator];
+        steps[24 + generator] = tuning >> 3 & 0x0f;
+        steps[32 + generator] = packed[24 + generator] & 0x7f;
+        steps[40 + generator] = tuning & 0x03;
+        steps[48 + generator] = packed[40 + generator] & 0x7f;
+        steps[56 + generator] = packed[48 + generator] & 0x7f;
+        steps[64 + generator] = damp & 0x3f;
+        steps[72 + generator] = damp >> 6 & 1;
+        steps[80 + generator] = tuning >> 2 & 1;
+        steps[88 + generator] = packed[16 + generator];
+    }
+    steps[96..].copy_from_slice(&packed[64..]);
+    Ok(steps)
+}
+
+/// The 84 packed bytes of a performance of the TX802's memory, of its 116
+/// steps, each within its parameter's range ([`unpack_tx802`]).
+fn pack_tx802(steps: &[u8; 116]) -> [u8; 84] {
+    let mut packed = [0; 84];
+    for generator in 0..8 {
+        packed[generator] = steps[generator] << 5 | steps[8 + generator] & 0x1f;
+        packed[8 + generator] = steps[16 + generator];
+        packed[16 + generator] = steps[88 + generator];
+        packed[24 + generator] = steps[32 + generator] & 0x7f;
+        packed[32 + generator] =
+            (steps[24 + generator] & 0x0f) << 3 | (steps[80 + generator] & 1) << 2 | steps[40 + generator] & 0x03;
+        packed[40 + generator] = steps[48 + generator] & 0x7f;
+        packed[48 + generator] = steps[56 + generator] & 0x7f;
+        packed[56 + generator] = (steps[72 + generator] & 1) << 6 | steps[64 + generator] & 0x3f;
+    }
+    packed[64..].copy_from_slice(&steps[96..]);
+    packed
 }
 
 /// The micro tuning of a group's data, two bytes for each key, the step's high
@@ -2105,13 +2501,21 @@ fn system_setup_of(
 /// its count, its names, its data, and their checksum.
 fn universal_message<'a>(channel: Channel, format: [u8; 6], groups: impl IntoIterator<Item = &'a [u8]>) -> Vec<u8> {
     let mut message = vec![START, YAMAHA, DUMP << 4 | channel.0, UNIVERSAL_FORMAT];
+    let [f0, f1, f2, f3, f4, f5] = format;
+    let [c0, c1, c2, c3] = LM;
+    let names = [c0, c1, c2, c3, f0, f1, f2, f3, f4, f5];
     for data in groups {
         let mut counted = Vec::with_capacity(10 + data.len());
-        counted.extend_from_slice(&LM);
-        counted.extend_from_slice(&format);
+        counted.extend_from_slice(&names);
         counted.extend_from_slice(data);
-        // A count below 2^14, as every group's is.
-        let count = u16::try_from(counted.len()).unwrap_or(u16::MAX);
+        // A count below 2^14, as every group's is, of the data alone for the
+        // TX802's performances.
+        let length = if counts_data_alone(names) {
+            data.len()
+        } else {
+            counted.len()
+        };
+        let count = u16::try_from(length).unwrap_or(u16::MAX);
         message.extend_from_slice(&seven_bits(count));
         message.extend_from_slice(&counted);
         message.push(checksum_of(&counted));
@@ -2209,10 +2613,14 @@ fn change_of(channel: Channel, rest: &[u8], options: Options) -> Result<Paramete
     let &[group, number, ref data @ ..] = rest else {
         return Err(Error::Length);
     };
-    let (change, finding) = match ([group, number], data) {
-        (MICRO_TUNING_CHANGE, &[key, high, low]) => micro_tuning_change(key, high, low),
-        (SCALING_CHANGE, &[operator, key_group, high, low]) => scaling_change(operator, key_group, high, low)?,
-        (MICRO_TUNING_CHANGE | SCALING_CHANGE, _) => return Err(Error::Length),
+    // The TX802's voice and micro tuning table, whose changes carry two bytes.
+    let wide = tx802::PerformanceParameter::new(number)
+        .filter(|parameter| group == TX802_PERFORMANCE_GROUP && parameter.is_wide());
+    let (change, finding) = match ([group, number], data, wide) {
+        (MICRO_TUNING_CHANGE, &[key, high, low], _) => micro_tuning_change(key, high, low),
+        (SCALING_CHANGE, &[operator, key_group, high, low], _) => scaling_change(operator, key_group, high, low)?,
+        (_, &[high, low], Some(parameter)) => tx802_wide_change(parameter, high, low),
+        (MICRO_TUNING_CHANGE | SCALING_CHANGE, _, _) | (_, _, Some(_)) => return Err(Error::Length),
         _ => {
             let target = target_of(group, number).ok_or(Error::Unsupported)?;
             let &[data] = data else {
@@ -2252,8 +2660,11 @@ fn target_of(group: u8, number: u8) -> Option<Target> {
         (DX7II_GROUP, 1) => dx7ii::PerformanceParameter::new(number)
             .map(Target::Dx7iiPerformance)
             .or_else(|| SystemParameter::of_change(number).map(Target::System)),
+        (DX7II_GROUP, 2) => tx802::PerformanceParameter::new(number).map(Target::Tx802Performance),
         _ if group == SWITCH_REMOTE && number == SYSTEM_RESET => Some(Target::SystemReset),
-        _ if group == SWITCH_REMOTE => RemoteSwitch::new(number).map(Target::Remote),
+        _ if group == SWITCH_REMOTE => RemoteSwitch::new(number)
+            .map(Target::Remote)
+            .or_else(|| Tx802Switch::new(number).map(Target::Tx802Switch)),
         _ => None,
     }
 }
@@ -2272,6 +2683,8 @@ enum Target {
     Dx7iiPerformance(dx7ii::PerformanceParameter),
     System(SystemParameter),
     SystemReset,
+    Tx802Performance(tx802::PerformanceParameter),
+    Tx802Switch(Tx802Switch),
 }
 
 impl Target {
@@ -2372,8 +2785,32 @@ impl Target {
                 (Change::System(step), finding)
             }
             Self::SystemReset => (Change::SystemReset(Byte(data)), None),
+            Self::Tx802Performance(parameter) => tx802_change(parameter, u16::from(data)),
+            Self::Tx802Switch(switch) => (Change::Tx802Switch(switch, Byte(data)), None),
         }
     }
+}
+
+/// The change of a parameter of the TX802's performance to a step: a step
+/// beyond the parameter's largest is reported, and taken as its largest.
+fn tx802_change(parameter: tx802::PerformanceParameter, step: u16) -> (Change, Option<Finding>) {
+    let largest = parameter.largest();
+    let finding = (step > u16::from(largest)).then_some(Finding::Tx802PerformanceOutOfRange {
+        performance: 0,
+        parameter,
+        step,
+    });
+    let step = Tx802PerformanceStep {
+        parameter,
+        step: u8::try_from(step).unwrap_or(largest).min(largest),
+    };
+    (Change::Tx802Performance(step), finding)
+}
+
+/// The change of the TX802's voice or micro tuning table, of its two bytes of
+/// data, the step's high seven bits and its low seven.
+fn tx802_wide_change(parameter: tx802::PerformanceParameter, high: u8, low: u8) -> (Change, Option<Finding>) {
+    tx802_change(parameter, u16::from(high) << 7 | u16::from(low))
 }
 
 /// The change of a key of the micro tuning, of its three bytes of data: the
@@ -2616,8 +3053,8 @@ pub fn write_micro_tunings(
     rounding: Rounding,
 ) -> (Vec<u8>, Vec<(u8, Index<127>)>) {
     let mut rounded = Vec::new();
-    let mut groups = Vec::with_capacity(tunings.len().min(CARTRIDGE_GROUPS));
-    for (place, tuning) in (0..).zip(tunings.iter().take(CARTRIDGE_GROUPS)) {
+    let mut groups = Vec::with_capacity(tunings.len().min(MOST_GROUPS));
+    for (place, tuning) in (0..).zip(tunings.iter().take(MOST_GROUPS)) {
         let (data, keys) = data_of_micro_tuning(tuning, rounding);
         rounded.extend(keys.into_iter().map(|key| (place, key)));
         groups.push(data);
@@ -2667,14 +3104,101 @@ pub fn write_fractional_scalings(
     rounding: Rounding,
 ) -> (Vec<u8>, Vec<(u8, ScalingParameter)>) {
     let mut rounded = Vec::new();
-    let mut groups = Vec::with_capacity(scalings.len().min(CARTRIDGE_GROUPS));
-    for (place, scaling) in (0..).zip(scalings.iter().take(CARTRIDGE_GROUPS)) {
+    let mut groups = Vec::with_capacity(scalings.len().min(MOST_GROUPS));
+    for (place, scaling) in (0..).zip(scalings.iter().take(MOST_GROUPS)) {
         let (data, parameters) = data_of_scaling(scaling, rounding);
         rounded.extend(parameters.into_iter().map(|parameter| (place, parameter)));
         groups.push(data);
     }
     let message = universal_message(channel, SCALING_CARTRIDGE, groups.iter().map(Vec::as_slice));
     (message, rounded)
+}
+
+/// The TX802's universal bulk dump of its performance edit buffer, on a
+/// channel: a message of 250 bytes, each step as two hexadecimal digits. Each
+/// value is rounded to a step by `rounding`, and the parameters whose values
+/// lay between steps are given beside it.
+#[must_use]
+pub fn write_tx802_performance(
+    performance: &tx802::Performance,
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<tx802::PerformanceParameter>) {
+    let mut rounded = Vec::new();
+    let steps = steps_of_tx802(performance, rounding, |parameter| rounded.push(parameter));
+    (
+        universal_message(channel, TX802_PERFORMANCE_EDIT, [&digits_of(&steps)[..]]),
+        rounded,
+    )
+}
+
+/// The TX802's universal bulk dump of the performances of its memory, on a
+/// channel: a group of 181 bytes for each of the first 64, as many as its
+/// memory holds, in a message of 5 more, each packed into 84 bytes
+/// \[TX802-SYSEX\] Table 5 and each of those as two hexadecimal digits. Each
+/// value is rounded to a step by `rounding`, and the parameters whose values
+/// lay between steps are given beside it, by the place of their performance.
+/// Of no performance, the message has no group, and [`decode`] does not take
+/// it.
+#[must_use]
+pub fn write_tx802_performances(
+    performances: &[tx802::Performance],
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<(u8, tx802::PerformanceParameter)>) {
+    let mut rounded = Vec::new();
+    let mut groups = Vec::with_capacity(performances.len().min(MOST_GROUPS));
+    for (place, performance) in (0..).zip(performances.iter().take(MOST_GROUPS)) {
+        let steps = steps_of_tx802(performance, rounding, |parameter| rounded.push((place, parameter)));
+        groups.push(digits_of(&pack_tx802(&steps)));
+    }
+    let message = universal_message(channel, TX802_PERFORMANCE_MEMORY, groups.iter().map(Vec::as_slice));
+    (message, rounded)
+}
+
+/// The TX802's universal bulk dump of its system set-up, on a channel: a
+/// message of 281 bytes. The master tune is rounded to a step by `rounding`,
+/// and given beside it if it lay between steps.
+#[must_use]
+pub fn write_tx802_system_setup(
+    setup: &tx802::SystemSetup,
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<tx802::SystemParameter>) {
+    let steps: Vec<u8> = tx802::SystemParameter::all()
+        .map(|parameter| setup.step(parameter, rounding))
+        .collect();
+    let rounded = tx802::SystemParameter::all()
+        .filter(|&parameter| !setup.is_step(parameter))
+        .collect();
+    (universal_message(channel, TX802_SYSTEM_SETUP, [&steps[..]]), rounded)
+}
+
+/// The 116 steps of a TX802 performance, each rounded by `rounding`, the
+/// parameters whose values lay between steps given to `rounded`.
+fn steps_of_tx802(
+    performance: &tx802::Performance,
+    rounding: Rounding,
+    mut rounded: impl FnMut(tx802::PerformanceParameter),
+) -> [u8; 116] {
+    let mut steps = [0; 116];
+    for (parameter, step) in tx802::PerformanceParameter::all().zip(&mut steps) {
+        *step = performance.step(parameter, rounding);
+        if !performance.is_step(parameter) {
+            rounded(parameter);
+        }
+    }
+    steps
+}
+
+/// The hexadecimal digits of bytes, two to a byte, the high first, '0' to '9'
+/// and 'A' to 'F' \[TX802-SYSEX\].
+fn digits_of(bytes: &[u8]) -> Vec<u8> {
+    let digit = |nibble: u8| if nibble < 10 { b'0' + nibble } else { b'A' + nibble - 10 };
+    bytes
+        .iter()
+        .flat_map(|&byte| [digit(byte >> 4), digit(byte & 0x0f)])
+        .collect()
 }
 
 /// The 492 bytes of a fractional scaling, each step's high four bits and then
@@ -2767,8 +3291,9 @@ pub fn write_condition(condition: &Condition, channel: Channel) -> Vec<u8> {
     message(channel, CONDITION_FORMAT, CONDITION_COUNT, &data)
 }
 
-/// A parameter change on a channel: a message of 7 bytes, 9 for a key of a
-/// micro tuning and 10 for a parameter of a fractional scaling.
+/// A parameter change on a channel: a message of 7 bytes, 8 for the TX802's
+/// voice and micro tuning table, 9 for a key of a micro tuning and 10 for a
+/// parameter of a fractional scaling.
 #[must_use]
 pub fn write_change(channel: Channel, change: Change) -> Vec<u8> {
     let (group, number, data) = match change {
@@ -2793,6 +3318,22 @@ pub fn write_change(channel: Channel, change: Change) -> Vec<u8> {
             step.step,
         ),
         Change::SystemReset(data) => (SWITCH_REMOTE, SYSTEM_RESET, data.0),
+        Change::Tx802Performance(step) if step.parameter.is_wide() => {
+            let [high, low] = seven_bits(u16::from(step.step));
+            let number = step.parameter.number();
+            return vec![
+                START,
+                YAMAHA,
+                CHANGE << 4 | channel.0,
+                TX802_PERFORMANCE_GROUP,
+                number,
+                high,
+                low,
+                END,
+            ];
+        }
+        Change::Tx802Performance(step) => (TX802_PERFORMANCE_GROUP, step.parameter.number(), step.step),
+        Change::Tx802Switch(switch, data) => (SWITCH_REMOTE, switch.number(), data.0),
         Change::MicroTuning(step) => {
             let [group, number] = MICRO_TUNING_CHANGE;
             let [high, low] = seven_bits(step.step);

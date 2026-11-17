@@ -325,7 +325,7 @@ fn checksums_and_messages_of_no_kind() {
     // Another classification, another data format, and two groups in one
     // message are of no kind read.
     let steps = random_dx7ii_performance(&mut random);
-    for names in [b"LM  8976AE", b"LN  8973PE", b"LM  8952PE"] {
+    for names in [b"LM  8976AE", b"LN  8973PE", b"LM  8073PE"] {
         assert_eq!(
             syx::decode(&universal(0, names, &steps), Options::default()),
             Err(Error::Unsupported)

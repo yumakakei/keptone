@@ -21,10 +21,10 @@ mod properties;
 use std::path::Path;
 
 use common::{
-    SplitMix64, dump, micro_tuning_bytes, random_bank, random_dx7ii_performance, random_dx7s_system_setup,
-    random_micro_tuning_steps, random_performance_steps, random_performances, random_scaling_bytes,
-    random_supplement_steps, random_supplements, random_system_setup, random_voice, scaling_bytes, universal,
-    universal_groups,
+    SplitMix64, dump, hex_digits, micro_tuning_bytes, pack_tx802, random_bank, random_dx7ii_performance,
+    random_dx7s_system_setup, random_micro_tuning_steps, random_performance_steps, random_performances,
+    random_scaling_bytes, random_supplement_steps, random_supplements, random_system_setup, random_tx802_performance,
+    random_tx802_system, random_voice, scaling_bytes, tx802_universal, universal, universal_groups,
 };
 use keptone_model::json;
 use keptone_model::scala;
@@ -78,9 +78,10 @@ fn regressions(parser: &str) -> Vec<Vec<u8>> {
 /// What the mutations of `syx_takes_any_bytes` put into its inputs: the bytes
 /// that start and end a message, the headers of the dumps and of the parameter
 /// changes and requests of several groups, a universal bulk dump's names, the
-/// steps at the ends of the ranges, and the bytes that send four bits of a
-/// fractional scaling at their ends.
-const SYX_TOKENS: [&[u8]; 30] = [
+/// steps at the ends of the ranges, the bytes that send four bits of a
+/// fractional scaling at their ends, and the TX802's names, group byte and
+/// last hexadecimal digit.
+const SYX_TOKENS: [&[u8]; 34] = [
     &[0xf0],
     &[0xf7],
     &[0xf0, 0x43, 0x00, 0x00, 0x01, 0x1b],
@@ -101,6 +102,10 @@ const SYX_TOKENS: [&[u8]; 30] = [
     &[0xf0, 0x43, 0x10, 0x18, 0x7f],
     &[0x30],
     &[0x3f],
+    b"LM  8952P",
+    b"LM  8952S ",
+    &[0xf0, 0x43, 0x10, 0x1a],
+    b"F",
     &[0xf0, 0x43, 0x10, 0x04],
     &[0xf0, 0x43, 0x10, 0x08],
     &[0xf0, 0x43, 0x10, 0x11],
@@ -130,9 +135,11 @@ fn syx_takes_any_bytes() {
     .concat();
     // Parameter changes of a voice parameter, the operators' switches, a
     // function parameter, a button of the DX7's panel, a switch of the DX7II's,
-    // a key of its micro tuning and a parameter of its fractional scaling, and
-    // the TX7's of a performance's parameter, of its own settings and of its
-    // operator select; and dump requests, a universal one among them.
+    // a key of its micro tuning and a parameter of its fractional scaling, the
+    // TX802's of its performance's volume and voice and of a switch of its
+    // panel, and the TX7's of a performance's parameter, of its own settings
+    // and of its operator select; and dump requests, a universal one among
+    // them.
     let short = [
         &[0xf0, 0x43, 0x10, 0x01, 0x10, 0x05, 0xf7][..],
         &[0xf0, 0x43, 0x11, 0x01, 0x1b, 0x3f, 0xf7],
@@ -151,6 +158,9 @@ fn syx_takes_any_bytes() {
         &[0xf0, 0x43, 0x1a, 0x1b, 0x2e, 0x00, 0xf7],
         &[0xf0, 0x43, 0x1b, 0x18, 0x7e, 0x3c, 0x2a, 0x55, 0xf7],
         &[0xf0, 0x43, 0x1b, 0x18, 0x7f, 0x02, 0x11, 0x01, 0x23, 0xf7],
+        &[0xf0, 0x43, 0x1c, 0x1a, 0x22, 0x50, 0xf7],
+        &[0xf0, 0x43, 0x1c, 0x1a, 0x11, 0x01, 0x40, 0xf7],
+        &[0xf0, 0x43, 0x1c, 0x1b, 0x59, 0x00, 0xf7],
         &[0xf0, 0x43, 0x25, 0x00, 0xf7],
         &[0xf0, 0x43, 0x26, 0x09, 0xf7],
         &[0xf0, 0x43, 0x28, 0x01, 0xf7],
@@ -172,33 +182,7 @@ fn syx_takes_any_bytes() {
     ]
     .concat();
     let (_, supplements) = random_supplements(&mut random, 6);
-    // The DX7II's universal bulk dumps of its performance edit buffer, its 32
-    // performances and its system set-up, and the DX7s's of its system set-up.
-    let performances_of_32: Vec<u8> = (0..32).flat_map(|_| random_dx7ii_performance(&mut random)).collect();
-    let dx7ii = [
-        universal(7, b"LM  8973PE", &random_dx7ii_performance(&mut random)),
-        universal(8, b"LM  8973PM", &performances_of_32),
-        universal(9, b"LM  8973S ", &random_system_setup(&mut random)),
-        universal(10, b"LM  8973S ", &random_dx7s_system_setup(&mut random)),
-    ]
-    .concat();
-    // Its micro tunings, the edit buffer's, a memory's and a cartridge's of
-    // three, and its fractional scalings, the edit buffer's and a cartridge's of
-    // two.
-    let tunings: Vec<Vec<u8>> = (0..5)
-        .map(|_| micro_tuning_bytes(&random_micro_tuning_steps(&mut random)))
-        .collect();
-    let scalings: Vec<Vec<u8>> = (0..3)
-        .map(|_| scaling_bytes(&random_scaling_bytes(&mut random)))
-        .collect();
-    let keys = [
-        universal(11, b"LM  MCRYE ", &tunings[0]),
-        universal(12, b"LM  MCRYM\x01", &tunings[1]),
-        universal_groups(13, b"LM  MCRYC ", &tunings[2..]),
-        universal(14, b"LM  FKSYE ", &scalings[0]),
-        universal_groups(15, b"LM  FKSYC ", &scalings[1..]),
-    ]
-    .concat();
+    let [dx7ii, keys, tx802] = universal_seeds(&mut random);
     for seed in [
         &voice[..],
         &bank,
@@ -209,6 +193,7 @@ fn syx_takes_any_bytes() {
         &supplements,
         &dx7ii,
         &keys,
+        &tx802,
     ] {
         assert!(
             syx::read(seed, Options::default()).any(|message| message.result.is_ok()),
@@ -222,6 +207,52 @@ fn syx_takes_any_bytes() {
     for input in regressions("syx") {
         read_syx(&input);
     }
+}
+
+/// Seeds of the universal bulk dumps: the DX7II's of its performance edit
+/// buffer, its 32 performances and its system set-up, and the DX7s's of its
+/// system set-up; the DX7II's micro tunings and fractional scalings; and the
+/// TX802's performance edit buffer, performances of its memory and system
+/// set-up.
+fn universal_seeds(random: &mut SplitMix64) -> [Vec<u8>; 3] {
+    // The DX7II's universal bulk dumps of its performance edit buffer, its 32
+    // performances and its system set-up, and the DX7s's of its system set-up.
+    let performances_of_32: Vec<u8> = (0..32).flat_map(|_| random_dx7ii_performance(random)).collect();
+    let dx7ii = [
+        universal(7, b"LM  8973PE", &random_dx7ii_performance(random)),
+        universal(8, b"LM  8973PM", &performances_of_32),
+        universal(9, b"LM  8973S ", &random_system_setup(random)),
+        universal(10, b"LM  8973S ", &random_dx7s_system_setup(random)),
+    ]
+    .concat();
+    // Its micro tunings, the edit buffer's, a memory's and a cartridge's of
+    // three, and its fractional scalings, the edit buffer's and a cartridge's of
+    // two.
+    let tunings: Vec<Vec<u8>> = (0..5)
+        .map(|_| micro_tuning_bytes(&random_micro_tuning_steps(random)))
+        .collect();
+    let scalings: Vec<Vec<u8>> = (0..3).map(|_| scaling_bytes(&random_scaling_bytes(random))).collect();
+    let keys = [
+        universal(11, b"LM  MCRYE ", &tunings[0]),
+        universal(12, b"LM  MCRYM\x01", &tunings[1]),
+        universal_groups(13, b"LM  MCRYC ", &tunings[2..]),
+        universal(14, b"LM  FKSYE ", &scalings[0]),
+        universal_groups(15, b"LM  FKSYC ", &scalings[1..]),
+    ]
+    .concat();
+    // The TX802's performance edit buffer, three performances of its memory and
+    // its system set-up.
+    let edit = hex_digits(&random_tx802_performance(random));
+    let memory: Vec<Vec<u8>> = (0..3)
+        .map(|_| hex_digits(&pack_tx802(&random_tx802_performance(random))))
+        .collect();
+    let tx802 = [
+        tx802_universal(1, b"LM  8952PE", &[edit]),
+        tx802_universal(2, b"LM  8952PM", &memory),
+        universal(3, b"LM  8952S ", &random_tx802_system(random)),
+    ]
+    .concat();
+    [dx7ii, keys, tx802]
 }
 
 #[test]

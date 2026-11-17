@@ -607,3 +607,106 @@ pub fn scaling_bytes(bytes: &[u8; 246]) -> Vec<u8> {
 pub fn random_scaling_bytes(random: &mut SplitMix64) -> [u8; 246] {
     std::array::from_fn(|_| random.byte())
 }
+
+/// The largest step of each of a TX802 performance's twelve parameters of a
+/// tone generator \[TX802-SYSEX\] Table 3, eight numbers each: the voice channel
+/// offset 0–7, the receive channel 0–16, the voice 0–255, the detune 0–14, the
+/// volume 0–99, the output 0–3, the lowest and highest keys 0–127, the note
+/// shift 0–48, the forced damp and the key assign group 0–1, the micro tuning
+/// table 0–254. The name's twenty bytes take any eight bits.
+const TX802_LARGEST: [u8; 12] = [7, 16, 255, 14, 99, 3, 127, 127, 48, 1, 1, 254];
+
+/// The largest step of the TX802 performance's parameter of this number, below
+/// 116.
+pub fn tx802_performance_largest(number: usize) -> u8 {
+    if number < 96 { TX802_LARGEST[number / 8] } else { 0xff }
+}
+
+/// The 116 steps of a TX802 performance at random, each within its range.
+pub fn random_tx802_performance(random: &mut SplitMix64) -> [u8; 116] {
+    std::array::from_fn(|number| random.up_to(tx802_performance_largest(number)))
+}
+
+/// The hexadecimal digits of bytes, '0' to '9' and 'A' to 'F', the high first
+/// \[TX802-SYSEX\].
+pub fn hex_digits(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .flat_map(|byte| format!("{byte:02X}").into_bytes())
+        .collect()
+}
+
+/// The 84 bytes of a packed TX802 performance of its 116 steps \[TX802-SYSEX\]
+/// Table 5: the voice channel offset in bits 7–5 and the receive channel in
+/// bits 4–0; the voices; the micro tuning tables; the volumes; the detune in
+/// bits 6–3, as the TX802's dumps hold it, the key assign group in bit 2 and
+/// the output in bits 1–0; the lowest keys; the highest; the forced damp in bit
+/// 6 and the note shift in bits 5–0; the name.
+pub fn pack_tx802(steps: &[u8; 116]) -> [u8; 84] {
+    let mut packed = [0; 84];
+    for tone in 0..8 {
+        let step = |kind: usize| steps[kind * 8 + tone];
+        packed[tone] = step(0) << 5 | step(1);
+        packed[8 + tone] = step(2);
+        packed[16 + tone] = step(11);
+        packed[24 + tone] = step(4);
+        packed[32 + tone] = step(3) << 3 | step(10) << 2 | step(5);
+        packed[40 + tone] = step(6);
+        packed[48 + tone] = step(7);
+        packed[56 + tone] = step(9) << 6 | step(8);
+    }
+    packed[64..].copy_from_slice(&steps[96..]);
+    packed
+}
+
+/// A universal bulk dump of the TX802's performances, a group for each of
+/// `groups`, on a channel: the count of each group is of its data alone, the
+/// names not counted, and its checksum of the names and the data
+/// \[TX802-SYSEX\] Fig. 1.
+pub fn tx802_universal(channel: u8, names: &[u8; 10], groups: &[Vec<u8>]) -> Vec<u8> {
+    let mut message = vec![0xf0, 0x43, channel, 0x7e];
+    for data in groups {
+        let count = data.len();
+        message.push(u8::try_from(count >> 7).expect("a count below 2^14"));
+        message.push(u8::try_from(count & 0x7f).expect("seven bits"));
+        let counted: Vec<u8> = names.iter().chain(data).copied().collect();
+        message.extend_from_slice(&counted);
+        message.push(checksum(&counted));
+    }
+    message.push(0xf7);
+    message
+}
+
+/// The steps each of the TX802 system set-up's first thirteen bytes takes
+/// \[TX802-SYSEX\] Table 6, as the smallest and largest: the performance's
+/// channel 0–17, the device number 0–17, the voice block 0–1, the program
+/// change, aftertouch and pitch bend switches 0–17, the note switch 0–2, the
+/// program table's switch 0–1, the three banks 0–15, the master tune 0–127,
+/// the control change switch 0–17.
+const TX802_SYSTEM_RANGES: [u8; 13] = [17, 17, 1, 17, 17, 17, 2, 1, 15, 15, 15, 127, 17];
+
+/// The steps an entry of the TX802's table of control changes takes.
+pub const TX802_CONTROLS: [u8; 8] = [0, 1, 2, 4, 5, 7, 64, 65];
+
+/// Whether the TX802 system set-up's byte of this number, below 263, takes
+/// this step: its range, an entry of the control table one of the eight, an
+/// entry of the program table any seven bits.
+pub fn tx802_system_takes(byte: usize, step: u8) -> bool {
+    match byte {
+        0..13 => step <= TX802_SYSTEM_RANGES[byte],
+        13..135 => TX802_CONTROLS.contains(&step),
+        _ => step < 0x80,
+    }
+}
+
+/// The 263 bytes of a TX802 system set-up at random, each a step its byte
+/// takes.
+pub fn random_tx802_system(random: &mut SplitMix64) -> Vec<u8> {
+    (0..263)
+        .map(|byte| match byte {
+            0..13 => random.up_to(TX802_SYSTEM_RANGES[byte]),
+            13..135 => TX802_CONTROLS[random.below(8)],
+            _ => random.up_to(0x7f),
+        })
+        .collect()
+}

@@ -20,7 +20,9 @@
 # set-up's parameter changes, its universal bulk dump's header and names, and
 # the DX7s's system reset; the names of its micro tunings and fractional
 # scalings, their groups' byte counts, the headers of their parameter changes,
-# and the bytes that send four bits of a fractional scaling at their ends.
+# and the bytes that send four bits of a fractional scaling at their ends; and
+# the TX802's names, its performance's group byte and counts, and the last of
+# the hexadecimal digits its performances are sent in [TX802-SYSEX].
 
 start="\xF0"
 end="\xF7"
@@ -64,6 +66,13 @@ scaling_count="\x03\x76"
 micro_tuning_change="\xF0\x43\x10\x18\x7E"
 scaling_change="\xF0\x43\x10\x18\x7F"
 nibble_zero="\x30"
+tx802_performance_edit="LM  8952PE"
+tx802_performance_memory="LM  8952PM"
+tx802_system_setup="LM  8952S "
+tx802_performance_change="\xF0\x43\x10\x1A"
+tx802_edit_count="\x01\x68"
+tx802_memory_count="\x01\x28"
+hex_digit_f="F"
 note_on="\x90"
 largest_level="\x63"
 beyond_level="\x64"

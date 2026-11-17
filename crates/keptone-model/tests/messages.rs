@@ -249,7 +249,7 @@ fn steps_and_data_out_of_range() {
 
 #[test]
 fn what_is_of_no_kind_read_is_refused() {
-    let unsupported: [&[u8]; 30] = [
+    let unsupported: [&[u8]; 33] = [
         // Voice parameter 157, and the voice group's numbers from 256 on.
         &[0xf0, 0x43, 0x10, 0x01, 0x1d, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x02, 0x00, 0x00, 0xf7],
@@ -276,7 +276,9 @@ fn what_is_of_no_kind_read_is_refused() {
         // Group 3; the DX7II's supplement's reserved numbers 39 and 63 and 74,
         // and its fractional scaling's change of an operator 6 and of a group
         // 41, which name nothing; the numbers of its performance and system
-        // set-up's group that name nothing, 51, 63 and 84; switch 47.
+        // set-up's group that name nothing, 51, 63 and 84; the switches 47, 63
+        // and 97, beyond the DX7II's and around the TX802's; the TX802's
+        // performance's number 116.
         &[0xf0, 0x43, 0x10, 0x0c, 0x00, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x18, 39, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x18, 63, 0x00, 0xf7],
@@ -287,6 +289,9 @@ fn what_is_of_no_kind_read_is_refused() {
         &[0xf0, 0x43, 0x10, 0x19, 63, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x19, 84, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x1b, 47, 0x7f, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x1b, 63, 0x7f, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x1b, 97, 0x7f, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x1a, 116, 0x00, 0xf7],
         // Requests of formats 3, 0x7C and 0x7F, and a sub-status of no kind.
         &[0xf0, 0x43, 0x20, 0x03, 0xf7],
         &[0xf0, 0x43, 0x20, 0x7c, 0xf7],

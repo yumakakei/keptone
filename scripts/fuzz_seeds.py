@@ -19,18 +19,19 @@ none, and a dump whose checksum is wrong and some of whose bytes are out of rang
 [TX7-MANUAL] lays them out, and the DX7II's dumps of supplements of voices, of one and of 32, laid out as [DX7II-MANUAL]
 lays them out, and its universal bulk dumps of a performance, of 32 and of its system set-up, and the DX7s's of its
 system set-up [DX7S-MANUAL], and of its micro tunings and its fractional scalings, the edit buffer's, a memory's and
-cartridges', all of random steps, with the changes of a key of the one and of a parameter of the other; and a file of
-the DX7's other messages and its family's: parameter changes of voice parameters, of the operators' switches and of
-every function parameter, the presses of the DX7's panel buttons that make it send its bank [AJXS-ROM], switches of the
-DX7II's switch remote, the TX7's changes of a performance, of its own settings and of its operator select, the DX7II's
-changes of a supplement, a performance and the system set-up, the DX7s's system reset, dump requests [DX7II-MANUAL]
-[TX7-MANUAL], a performance under format number 2 and a condition acknowledge, with some out of range and some of no
-kind read. fuzz/seeds/json/ holds JSON texts of the subset that the native state is to be written in: an object of
-settings and values nested a few levels, with an integer of 64 bits; strings with every escape, a surrogate pair and
-characters of several scripts; arrays and objects nested a few levels; and numbers at the ends of binary64's range.
-fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard mappings of Scala's: equal steps in cents, just intonation
-in ratios, the three ends of a line, ISO 8859-1, a linear mapping and keys left unmapped. The script writes the same
-bytes every time.
+cartridges', all of random steps, with the changes of a key of the one and of a parameter of the other; and the TX802's
+performance edit buffer, performances of its memory and its system set-up, with changes of its performance and its panel
+[TX802-SYSEX]; and a file of the DX7's other messages and its family's: parameter changes of voice parameters, of the
+operators' switches and of every function parameter, the presses of the DX7's panel buttons that make it send its bank
+[AJXS-ROM], switches of the DX7II's switch remote, the TX7's changes of a performance, of its own settings and of its
+operator select, the DX7II's changes of a supplement, a performance and the system set-up, the DX7s's system reset, dump
+requests [DX7II-MANUAL] [TX7-MANUAL], a performance under format number 2 and a condition acknowledge, with some out of
+range and some of no kind read. fuzz/seeds/json/ holds JSON texts of the subset that the native state is to be written
+in: an object of settings and values nested a few levels, with an integer of 64 bits; strings with every escape, a
+surrogate pair and characters of several scripts; arrays and objects nested a few levels; and numbers at the ends of
+binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard mappings of Scala's: equal steps in
+cents, just intonation in ratios, the three ends of a line, ISO 8859-1, a linear mapping and keys left unmapped. The
+script writes the same bytes every time.
 """
 
 import sys
@@ -176,6 +177,14 @@ def main() -> int:
     keys += universal(14, b"LM  FKSYE ", scalings[0]) + universal_groups(14, b"LM  FKSYC ", scalings[1:])
     keys += bytes([0xF0, 0x43, 0x1E, 0x18, 0x7E, 60, 42, 85, 0xF7, 0xF0, 0x43, 0x1E, 0x18, 0x7E, 61, 85, 0, 0xF7])
     keys += bytes([0xF0, 0x43, 0x1E, 0x18, 0x7F, 2, 17, 1, 35, 0xF7, 0xF0, 0x43, 0x1E, 0x18, 0x7F, 5, 40, 2, 0, 0xF7])
+    # The TX802's performance edit buffer, three performances of its memory and its system set-up; the changes of a
+    # performance's volume and voice, the voice beyond its range, and a switch of its panel [TX802-SYSEX].
+    edit = tx802_universal(14, b"LM  8952PE", hex_digits(random_tx802_performance(numbers)))
+    packed = [hex_digits(pack_tx802(random_tx802_performance(numbers))) for _ in range(3)]
+    tx802 = edit + tx802_universal(14, b"LM  8952PM", *packed)
+    tx802 += universal(14, b"LM  8952S ", random_tx802_system(numbers))
+    tx802 += bytes([0xF0, 0x43, 0x1E, 0x1A, 34, 80, 0xF7, 0xF0, 0x43, 0x1E, 0x1A, 17, 1, 64, 0xF7])
+    tx802 += bytes([0xF0, 0x43, 0x1E, 0x1A, 16, 2, 0, 0xF7, 0xF0, 0x43, 0x1E, 0x1B, 89, 0, 0xF7])
     seeds = {
         "voice.syx": voice,
         "bank.syx": bank,
@@ -189,6 +198,7 @@ def main() -> int:
         "supplements.syx": supplements,
         "dx7ii.syx": performance_edit + performance_memory + system + system_dx7s,
         "keys.syx": keys,
+        "tx802.syx": tx802,
     }
     write(SEEDS / "syx", seeds)
     write(SEEDS / "json", json_seeds())
@@ -398,6 +408,58 @@ def random_scaling(numbers: Iterator[int]) -> list[int]:
     each sent as the byte 0x30 above them [DX7S-MANUAL]."""
     data = [next(numbers) % 256 for _ in range(246)]
     return [0x30 + half for byte in data for half in (byte >> 4, byte & 0x0F)]
+
+
+# The largest step of each of the twelve parameters of a TX802 performance's tone generator, eight numbers each
+# [TX802-SYSEX] Table 3; the name's twenty bytes take any eight bits.
+TX802_LARGEST = (7, 16, 255, 14, 99, 3, 127, 127, 48, 1, 1, 254)
+
+
+def random_tx802_performance(numbers: Iterator[int]) -> list[int]:
+    """The 116 steps of a TX802 performance at random, each within its range."""
+    largest = [TX802_LARGEST[number // 8] if number < 96 else 0xFF for number in range(116)]
+    return [next(numbers) % (step + 1) for step in largest]
+
+
+def pack_tx802(steps: list[int]) -> list[int]:
+    """The 84 bytes of a packed TX802 performance [TX802-SYSEX] Table 5, the detune in bits 6-3 as the TX802's
+    dumps hold it."""
+    packed = [0] * 84
+    for tone in range(8):
+        step = [steps[kind * 8 + tone] for kind in range(12)]
+        packed[tone] = step[0] << 5 | step[1]
+        packed[8 + tone] = step[2]
+        packed[16 + tone] = step[11]
+        packed[24 + tone] = step[4]
+        packed[32 + tone] = step[3] << 3 | step[10] << 2 | step[5]
+        packed[40 + tone] = step[6]
+        packed[48 + tone] = step[7]
+        packed[56 + tone] = step[9] << 6 | step[8]
+    return packed[:64] + steps[96:]
+
+
+def hex_digits(values: list[int]) -> list[int]:
+    """The hexadecimal digits of bytes, the high first, '0' to '9' and 'A' to 'F'."""
+    return [digit for value in values for digit in f"{value:02X}".encode()]
+
+
+def tx802_universal(channel: int, names: bytes, *groups: list[int]) -> bytes:
+    """A universal bulk dump of the TX802's performances: each group's count of its data alone, the names besides
+    it, and the checksum of the names and the data."""
+    message = bytes([0xF0, 0x43, channel, 0x7E])
+    for data in groups:
+        counted = [*names, *data]
+        message += bytes([len(data) >> 7, len(data) & 0x7F, *counted, -sum(counted) & 0x7F])
+    return message + bytes([0xF7])
+
+
+def random_tx802_system(numbers: Iterator[int]) -> list[int]:
+    """The 263 bytes of a TX802 system set-up at random [TX802-SYSEX] Table 6: its first thirteen within their
+    ranges, an entry of the control table one of the eight it takes, an entry of the program table any seven bits."""
+    ranges = (17, 17, 1, 17, 17, 17, 2, 1, 15, 15, 15, 127, 17)
+    controls = (0, 1, 2, 4, 5, 7, 64, 65)
+    first = [next(numbers) % (largest + 1) for largest in ranges]
+    return first + [controls[next(numbers) % 8] for _ in range(122)] + [next(numbers) % 128 for _ in range(128)]
 
 
 def random_dx7ii_performance(numbers: Iterator[int]) -> list[int]:

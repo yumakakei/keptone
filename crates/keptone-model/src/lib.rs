@@ -23,16 +23,19 @@
 //!   parameters, of range types as well, and their numbers;
 //! - [`dx7ii`]: the DX7II's performances, its system set-up, its micro
 //!   tunings and its fractional scalings, and their numbers;
+//! - [`tx802`]: the TX802's performances, of eight tone generators, and its
+//!   system set-up, and their numbers;
 //! - [`syx`]: the DX7's system-exclusive messages and its family's, read from
 //!   `.syx` files and from hosts, however many a file holds, and written back
 //!   byte for byte: the dumps of voices, of the DX7II's supplements and of
 //!   performances, the DX7II's universal bulk dumps of its performances, its
-//!   system set-up, its micro tunings and its fractional scalings, and the
-//!   DX7s's of its system set-up, the parameter changes of voices, of function
-//!   data, of supplements, of performances, of the system set-up, of micro
-//!   tunings and of fractional scalings, the presses of the DX7's panel
-//!   buttons and of the DX7II's switches, the DX7s's system reset, the TX7's
-//!   own settings and condition, and dump requests;
+//!   system set-up, its micro tunings and its fractional scalings, the DX7s's
+//!   of its system set-up, and the TX802's of its performances and its system
+//!   set-up, the parameter changes of voices, of function data, of
+//!   supplements, of performances, of the system set-up, of micro tunings and
+//!   of fractional scalings, the presses of the DX7's panel buttons and of the
+//!   DX7II's and the TX802's switches, the DX7s's system reset, the TX7's own
+//!   settings and condition, and dump requests;
 //! - [`json`]: the subset of JSON that the native state and the themes are
 //!   written in, read by hand, nested as deep as `json.max_depth` lets it be
 //!   without taking the thread's stack;
@@ -53,4 +56,5 @@ pub mod scala;
 pub mod sha256;
 pub mod supplement;
 pub mod syx;
+pub mod tx802;
 pub mod voice;

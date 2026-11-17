@@ -165,6 +165,21 @@ fn written_again(dump: &Dump) -> Vec<u8> {
             assert_eq!(rounded, []);
             written
         }
+        Content::Tx802Performance(performance) => {
+            let (written, rounded) = syx::write_tx802_performance(performance, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::Tx802Performances(performances) => {
+            let (written, rounded) = syx::write_tx802_performances(performances, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::Tx802SystemSetup(setup) => {
+            let (written, rounded) = syx::write_tx802_system_setup(setup, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
     }
 }
 
