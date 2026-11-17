@@ -60,7 +60,7 @@ The project's analysis of Dexed 1.1.0 and AV Dexed found these classes of defect
 Cargo.toml  Cargo.lock  rust-toolchain.toml  rustfmt.toml  clippy.toml  ruff.toml  .cargo/config.toml
 CMakeLists.txt  CMakePresets.json        # only the C++ wrappers and the C layout tests
 REUSE.toml  LICENSE  LICENSES/  README.md  README.ja.md  .gitignore  .gitattributes  .gitmodules
-.github/workflows/ci.yml                 # the CI jobs of §13.2, each running a script of ci/
+.github/workflows/ci.yml  fuzz.yml       # the CI jobs of §13.2 (fuzz.yml the daily fuzzing), each running a script of ci/
 crates/
   keptone-cpu/        processor features and the level in effect (as kiral-cpu)
   keptone-math/       reference elementary functions, ADAA, Kepler, Kapteyn tables
@@ -84,7 +84,7 @@ fuzz/
   libfuzzer/        cargo-fuzz crate (nightly; outside the workspace)
   dict/  seeds/  regressions/<target>/
 bench/baselines.toml
-scripts/            Python (ruff-checked): mpmath references, Sollya drivers, filter design checks
+scripts/            Python (ruff-checked): mpmath references, Sollya drivers, filter design checks, fuzz seeds
 ci/                 setup.sh  core-math.sh  rust.sh  targets.sh  emulated.sh  python.sh  wrappers.sh  fuzz.sh  sanitizers.sh
 thirdparty/         git submodules, pinned commits (§12)
 docs/               DESIGN.md  MATH.md  UI.md  REFERENCES.md  VERIFICATION.md  STATE-FORMAT.md  DEPENDENCIES.md
@@ -365,7 +365,7 @@ Dependencies are kept to the minimum for their own sake, not banned. Each one is
 | FreeType, HarfBuzz | submodules | keptone-ui | FreeType (FTL or GPLv2), HarfBuzz (Old MIT) | text. Record which FreeType license option is taken, and why, in DEPENDENCIES.md |
 | CORE-MATH | submodule | tests only: the few files they compile, which `ci/core-math.sh` fetches | MIT | correctly rounded oracle |
 | MTS-ESP client | submodule | optional feature | 0BSD | dynamic tuning (loads the user's `libMTS`) |
-| libfuzzer-sys | crates.io | fuzz/libfuzzer only (nightly) | MIT/Apache-2.0 | coverage-guided fuzzing |
+| libfuzzer-sys | crates.io | fuzz/libfuzzer only (nightly) | (MIT OR Apache-2.0) AND NCSA | coverage-guided fuzzing |
 | loom | crates.io | keptone-rt dev-dependency | MIT | exhaustive interleaving tests of the queues |
 | Python: mpmath, SymPy, numpy, scipy | pip | scripts/ only | BSD | high-precision references, derivations, filter checks |
 | Sollya | tool | scripts/ only | CeCILL-C | coefficient design and error certificates |
@@ -399,7 +399,7 @@ GitHub Actions, plain git checkout, no third-party actions:
    - ASan/UBSan and TSan on the C++ wrappers and `tests/layout`;
    - RTSan on a host simulator that drives `process` with random events;
    - Miri on `keptone-rt`, `keptone-model` and `keptone-math`.
-5. **fuzz**: on push, every libFuzzer target for a short time; daily, for long. Earlier crashes are replayed first (ADLplug-Next's `ci/fuzz.sh` behaviour).
+5. **fuzz**: on push, every libFuzzer target for a minute; daily, for thirty minutes each (`.github/workflows/fuzz.yml`), carrying on from the corpus the last daily run kept as an artifact. Earlier crashes are replayed first (ADLplug-Next's `ci/fuzz.sh` behaviour). A pinned nightly toolchain and cargo-fuzz build the targets with the address sanitizer, overflow checks and debug assertions; each target holds its parser to the same property as the parser's mutation tests.
 6. **conformance**: the alias metric and the independences of MATH §16, against `bench/baselines.toml`.
 7. **reuse**: `reuse lint`. **python**: `ruff`.
 

@@ -16,6 +16,16 @@ Every dependency of Keptone, and every pinned tool its build and CI use: what it
 
 None in the product. The workspace takes no crate from crates.io: `Cargo.lock` names the workspace's own crates only, and cargo always runs with `--locked`.
 
+The fuzz targets, a crate outside the workspace (`fuzz/libfuzzer`), take libfuzzer-sys and what it needs from crates.io; `fuzz/libfuzzer/Cargo.lock` pins each of them, and `ci/fuzz.sh` checks that it is up to date. None of them is built into Keptone.
+
+| Crate | Version | License | Why |
+| --- | --- | --- | --- |
+| libfuzzer-sys | 0.4.13, the latest on 2026-11-17, pinned exactly in `fuzz/libfuzzer/Cargo.toml` | (MIT OR Apache-2.0) AND NCSA | LLVM's libFuzzer, which it compiles from the sources it carries, and the macro that makes a fuzz target of a function: the coverage-guided fuzzing of every parser (DESIGN §12.3). A fuzzer of the project's own would cost far more. |
+| arbitrary | 1.5.0 | MIT OR Apache-2.0 | libfuzzer-sys's own, for targets that take structured inputs; Keptone's take bytes. |
+| cc | 1.11.2 | MIT OR Apache-2.0 | libfuzzer-sys's build script compiles libFuzzer with it, by Clang (`ci/fuzz.sh`). |
+| find-msvc-tools, jobserver, libc, shlex | 0.1.15, 0.1.35, 0.2.191, 2.0.1 | MIT OR Apache-2.0 | cc's own. |
+| cfg-if, getrandom, r-efi | 1.0.5, 0.4.3, 6.0.0 | MIT OR Apache-2.0; r-efi MIT OR Apache-2.0 OR LGPL-2.1-or-later | In `Cargo.lock` for builds on other systems; none is built on Linux, where the fuzzing runs. |
+
 ## Submodules
 
 | Dependency | Commit | Where | License | Why |
@@ -41,5 +51,8 @@ The tools that `scripts/` runs to compute what the code and the tests take, whic
 | LLVM: Clang, LLD | 23.1.5, the latest release on 2026-11-16 | `ci/setup.sh`: the SHA-256 of the Windows and macOS release archives, and the fingerprint of apt.llvm.org's signing key on Ubuntu | Apache-2.0 WITH LLVM-exception | Clang drives the link and LLD links on every system (`.cargo/config.toml`); Clang compiles the CORE-MATH oracle of the tests of `keptone-math`, and is to compile the C23 layout tests and the C++26 wrappers. `ci/setup.sh` checks its floating-point contraction (DESIGN §13.1). |
 | ruff | 0.17.5, the latest release on 2026-11-16 | `.github/workflows/ci.yml` | MIT | Checks the Python of `scripts/`. |
 | REUSE tool | Ubuntu's package | — | GPL-3.0-or-later | Checks that every file names its copyright holder and license. |
+| Rust nightly | `nightly-2026-11-16`, the latest on 2026-11-17 | `ci/fuzz.sh` | MIT OR Apache-2.0 | cargo-fuzz builds the fuzz targets with options that only a nightly rustc takes, for the address sanitizer and the coverage that guides libFuzzer. The workspace is built by the stable toolchain alone. |
+| cargo-fuzz | 0.13.2, the latest release on 2026-11-17 | `ci/fuzz.sh` | MIT OR Apache-2.0 | Builds the fuzz targets for libFuzzer (`ci/fuzz.sh setup` installs it). |
+| actions/upload-artifact | v7.0.2, commit `cf430e030ddbb5b0abf93d22962f4752f3646cd9`, the latest release on 2026-11-17 | `.github/workflows/ci.yml`, `.github/workflows/fuzz.yml` | MIT | GitHub's own action, and the only action the CI uses: it keeps a run's fuzzing corpora and the inputs that failed, for the next run to carry on from and to replay. |
 
 Not dependencies, and used on a machine of one's own: Intel's Software Development Emulator, for the tests at levels of x86-64 no machine at hand has (`ci/emulated.sh`). The tools of later milestones are listed in `docs/DESIGN.md` §12.3.

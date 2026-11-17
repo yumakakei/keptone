@@ -25,7 +25,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## 現状
 
-計画（[docs/DESIGN.md](docs/DESIGN.md) §16）のマイルストーン M2 に取り組んでいます．M0 でワークスペースを整えました：プロジェクトの lint 設定を適用した 13 のクレート，ツールチェーンの設定ファイル，Windows・Ubuntu・macOS での CI，そして仕様です．M1 では `keptone-math` に関数を実装しました：turn 単位の位相の正弦と余弦，2 を底とする指数関数，sinc とその導関数です．それぞれ CORE-MATH の正しく丸められた関数，または mpmath で計算した参照値と比較してテストしています．さらに，位相の正弦を 1 サンプルにわたって平均する，1 次と 2 次のアンチデリバティブアンチエイリアシング（ADAA）の閉形式を実装し，mpmath の参照値と比較してテストしています．フィードバックオペレータを与えるケプラー方程式のソルバも実装し，100 万点で残差を検査しています．そのオペレータのフーリエ級数（カプタイン級数）の係数も DFT とテーブルで求め，mpmath と比較してテストしています．M2 ではこれまでに，`keptone-model` に DX7 のボイスを実装しました．そのパラメータはすべて範囲型です．DX7 の 1 ボイスと 32 ボイスのダンプも実装しました．`.syx` ファイルに含まれるすべてのメッセージを読み込み，書き出すとバイト単位で元どおりになります．そのパーサは，ランダムに変更した入力でテストしています．他のクレートの中身はまだ空で，まだ音は出ません．
+計画（[docs/DESIGN.md](docs/DESIGN.md) §16）のマイルストーン M2 に取り組んでいます．M0 でワークスペースを整えました：プロジェクトの lint 設定を適用した 13 のクレート，ツールチェーンの設定ファイル，Windows・Ubuntu・macOS での CI，そして仕様です．M1 では `keptone-math` に関数を実装しました：turn 単位の位相の正弦と余弦，2 を底とする指数関数，sinc とその導関数です．それぞれ CORE-MATH の正しく丸められた関数，または mpmath で計算した参照値と比較してテストしています．さらに，位相の正弦を 1 サンプルにわたって平均する，1 次と 2 次のアンチデリバティブアンチエイリアシング（ADAA）の閉形式を実装し，mpmath の参照値と比較してテストしています．フィードバックオペレータを与えるケプラー方程式のソルバも実装し，100 万点で残差を検査しています．そのオペレータのフーリエ級数（カプタイン級数）の係数も DFT とテーブルで求め，mpmath と比較してテストしています．M2 ではこれまでに，`keptone-model` に DX7 のボイスを実装しました．そのパラメータはすべて範囲型です．DX7 の 1 ボイスと 32 ボイスのダンプも実装しました．`.syx` ファイルに含まれるすべてのメッセージを読み込み，書き出すとバイト単位で元どおりになります．そのパーサは，ランダムに変更した入力でテストし，CI では libFuzzer でファジングしています．他のクレートの中身はまだ空で，まだ音は出ません．
 
 | クレート | 実装する内容 | マイルストーン |
 | --- | --- | --- |
@@ -70,7 +70,7 @@ bash ci/core-math.sh
 bash ci/rust.sh
 ```
 
-`ci/core-math.sh` は，`keptone-math` のテストが Clang でコンパイルして比較に使う CORE-MATH のファイルを，サブモジュール `thirdparty/core-math` が記録するコミットで取得します．CORE-MATH 全体が必要なら `git submodule update --init` を使います．`ci/rust.sh` はレイアウト，clippy（警告はすべてエラー），ドキュメントを検査し，dev と release の両プロファイルでテストを実行します．`bash ci/targets.sh test` は 512 ビット幅のベクトルを使う x86-64-v4 向けにワークスペースをビルドし，プロセッサが AVX-512 を備えていればテストします．`bash ci/emulated.sh <sde64>` は [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) の下で，Haswell，Alder Lake，Arrow Lake，Skylake-SP，Ice Lake-SP，Sapphire Rapids としてテストを実行します．`bash ci/python.sh` は `scripts/` を ruff で検査し，`reuse lint` はすべてのファイルの著作権とライセンスの表記を検査します．
+`ci/core-math.sh` は，`keptone-math` のテストが Clang でコンパイルして比較に使う CORE-MATH のファイルを，サブモジュール `thirdparty/core-math` が記録するコミットで取得します．CORE-MATH 全体が必要なら `git submodule update --init` を使います．`ci/rust.sh` はレイアウト，clippy（警告はすべてエラー），ドキュメントを検査し，dev と release の両プロファイルでテストを実行します．`bash ci/targets.sh test` は 512 ビット幅のベクトルを使う x86-64-v4 向けにワークスペースをビルドし，プロセッサが AVX-512 を備えていればテストします．`bash ci/emulated.sh <sde64>` は [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) の下で，Haswell，Alder Lake，Arrow Lake，Skylake-SP，Ice Lake-SP，Sapphire Rapids としてテストを実行します．`bash ci/python.sh` は `scripts/` を ruff で検査し，`reuse lint` はすべてのファイルの著作権とライセンスの表記を検査します．`bash ci/fuzz.sh setup` はファジングで固定している nightly のツールチェーンと cargo-fuzz をインストールし，`bash ci/fuzz.sh <秒数> <コーパス> <クラッシュ>` は `keptone-model` の各パーサを x86-64 の Linux 上で libFuzzer によりその秒数だけファジングします．CI は push のたびに 1 分ずつ，毎日 30 分ずつこれを行います．
 
 ## ライセンス
 

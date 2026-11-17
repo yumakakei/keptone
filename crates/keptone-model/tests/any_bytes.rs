@@ -10,17 +10,18 @@
 //! bits flipped, bytes put in, taken out, repeated, the end cut off, bytes that
 //! mean something to the format put in -- are read or refused, never a panic,
 //! as kiral's tests of its parsers have it. What a parser makes of them is
-//! held to what it promises: every dump read from a `.syx` file, written
-//! again, is a valid dump of the same voices. The inputs that once made a
+//! held to what it promises, by the properties that the fuzz targets of
+//! fuzz/libfuzzer check as well (`properties`). The inputs that once made a
 //! parser fail are kept in fuzz/regressions/<parser>/, and read on every run.
 
 mod common;
+mod properties;
 
 use std::path::Path;
 
 use common::{SplitMix64, random_bank, random_voice};
-use keptone_model::syx::{self, Content, Loss, Options, OutOfRange};
-use keptone_model::voice::Rounding;
+use keptone_model::syx::{self, Options};
+use properties::read_syx;
 
 /// How many inputs are made of each seed: fewer in the dev profile, whose
 /// code is some ten times slower.
@@ -64,42 +65,6 @@ fn regressions(parser: &str) -> Vec<Vec<u8>> {
     entries
         .map(|entry| std::fs::read(entry.expect("a directory entry").path()).expect("a regression input"))
         .collect()
-}
-
-/// A file read with every choice of the options. The messages lie in the file
-/// one after another, and every dump read, written again, is read back with
-/// nothing to report and the same voices.
-fn read_syx(input: &[u8]) {
-    let strict = Options {
-        accept_bad_checksum: false,
-        out_of_range: OutOfRange::Reject,
-    };
-    for accept_bad_checksum in [true, false] {
-        for out_of_range in [OutOfRange::Clamp, OutOfRange::Reject] {
-            let options = Options {
-                accept_bad_checksum,
-                out_of_range,
-            };
-            let mut end = 0;
-            for message in syx::read(input, options) {
-                assert!(message.offset >= end && message.length > 0);
-                end = message.offset + message.length;
-                assert!(end <= input.len());
-                let Ok(dump) = message.result else {
-                    continue;
-                };
-                let (written, loss) = match &dump.content {
-                    Content::Voice(voice) => syx::write_voice(voice, dump.channel, Rounding::Nearest),
-                    Content::Bank(voices) => syx::write_bank(voices, dump.channel, Rounding::Nearest),
-                };
-                assert_eq!(loss, Loss::default());
-                let again = syx::decode(&written, strict).expect("a dump written is valid");
-                assert_eq!(again.findings, []);
-                assert_eq!(again.channel, dump.channel);
-                assert_eq!(again.content, dump.content);
-            }
-        }
-    }
 }
 
 #[test]

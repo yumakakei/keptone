@@ -7,16 +7,26 @@
 # (LICENSES/GPL-3.0-or-later.txt).
 #
 # The copyright holders and licenses of the files that cannot name them in a
-# comment of their own: Cargo.lock, which cargo writes over; the built-in themes,
-# data in the JSON subset of docs/UI.md §6b; the PNG renderings of the editor
-# mockups; and the mockups' canvas sources, kept as the design tool wrote them.
+# comment of their own: the Cargo.lock files, which cargo writes over, of the
+# workspace and of the fuzz targets; the built-in themes, data in the JSON
+# subset of docs/UI.md §6b; the PNG renderings of the editor mockups; the
+# mockups' canvas sources, kept as the design tool wrote them; and the fuzz
+# targets' seed inputs and regressions, bytes of the formats they are fed to.
 # Every other file names them at its top. The license texts are in LICENSES/,
 # and `reuse lint` checks the repository in the CI.
 
 version = 1
 
 [[annotations]]
-path = ["Cargo.lock", "assets/themes/*.keptone-theme", "docs/mockups/*.png", "docs/mockups/source/**"]
+path = [
+  "Cargo.lock",
+  "fuzz/libfuzzer/Cargo.lock",
+  "assets/themes/*.keptone-theme",
+  "docs/mockups/*.png",
+  "docs/mockups/source/**",
+  "fuzz/seeds/**",
+  "fuzz/regressions/**",
+]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Yuma Kakei <yumasansansan@gmail.com>"
 SPDX-License-Identifier = "GPL-3.0-or-later"

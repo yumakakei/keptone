@@ -29,9 +29,18 @@
 # checks with reuse lint, from Ubuntu's reuse package, that every file names its
 # copyright holder and license (REUSE.toml, LICENSES/).
 #
+# The fuzz job fuzzes each parser of keptone-model with libFuzzer for a minute,
+# on Ubuntu, from its seed inputs and the inputs that once made it fail
+# (ci/fuzz.sh): the targets, outside the workspace (fuzz/libfuzzer), are built
+# by a pinned nightly toolchain and cargo-fuzz with the address sanitizer. An
+# input that fails is kept as an artifact of the run. The long fuzzing, once a
+# day, is a workflow of its own (fuzz.yml).
+#
 # The checkout is plain git, CORE-MATH's files included (ci/core-math.sh), and
 # ci/setup.sh installs a pinned LLVM toolchain, as in kiral, JPEG-Unround and
-# ADLplug-Next. No action from elsewhere is used.
+# ADLplug-Next. The one action used is GitHub's own actions/upload-artifact, in
+# the fuzz job, pinned to the commit of its release as ADLplug-Next pins it; no
+# action from elsewhere is used.
 
 name: CI
 
@@ -156,3 +165,38 @@ jobs:
 
       - name: Check the licensing of every file
         run: reuse lint
+
+  fuzz:
+    name: fuzz (ubuntu-26.04)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out
+        run: |
+          git config --global core.autocrlf false
+          git -c init.defaultBranch=main init --quiet
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags --quiet --depth 1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach "$GITHUB_SHA"
+          git log -1 --format='%H %s'
+
+      - name: Set up the toolchain
+        run: bash ci/setup.sh
+
+      - name: Set up the fuzzing
+        run: bash ci/fuzz.sh setup
+
+      - name: Fuzz each target for a minute
+        run: bash ci/fuzz.sh 60 fuzz-run/corpora fuzz-run/crashes
+
+      # An input that failed, for the commit that fixes what it found to put
+      # into fuzz/regressions.
+      - name: Keep the inputs that failed
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashes
+          path: fuzz-run/crashes/
+          if-no-files-found: ignore
+          retention-days: 90

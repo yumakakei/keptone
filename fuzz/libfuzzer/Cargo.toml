@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# The fuzz targets of Keptone, which cargo-fuzz builds and libFuzzer runs: a
+# crate outside the workspace, the root of a workspace of its own, since it is
+# built by a nightly toolchain and takes libfuzzer-sys from crates.io, neither of
+# which the workspace does (docs/DESIGN.md §3, §12). ci/fuzz.sh runs it, with
+# the toolchain and the cargo-fuzz it pins, and docs/DEPENDENCIES.md says why
+# each crate here is taken. Cargo.lock pins each of them, and ci/fuzz.sh checks
+# that it is up to date.
+#
+# A target is one of the parsers of keptone-model, given what libFuzzer makes
+# up, and held to the property of that parser that the crate's mutation tests
+# check (crates/keptone-model/tests/properties/). The lints are the workspace's.
+
+[package]
+name = "keptone-fuzz"
+description = "The fuzz targets of Keptone's parsers, for cargo-fuzz and libFuzzer"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/yumasansansan/keptone"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+keptone-model = { path = "../../crates/keptone-model" }
+libfuzzer-sys = "=0.4.13"
+
+[[bin]]
+name = "syx"
+path = "fuzz_targets/syx.rs"
+test = false
+doc = false
+bench = false
+
+# Line tables, for the stacks a failing input's report shows.
+[profile.release]
+debug = "line-tables-only"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"
+missing_debug_implementations = "deny"
+missing_docs = "deny"
+unused_qualifications = "deny"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+cast_lossless = "deny"
+as_conversions = "deny"

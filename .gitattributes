@@ -9,6 +9,9 @@
 # Text is kept with LF line ends, in the repository and in every checkout, on
 # every system: a file that a tool on Windows wrote with CRLF is stored with LF
 # when it is added, rather than differing from its last version on every line.
-# The inputs that once made a parser fail are bytes, kept as they are.
+# The fuzz targets' seed inputs and the inputs that once made a parser fail are
+# bytes, kept as they are: a seed of a format whose lines may end with CR is
+# written with CR on purpose.
 * text=auto eol=lf
+/fuzz/seeds/** binary
 /fuzz/regressions/** binary

@@ -10,6 +10,13 @@
 target/
 /build/
 
+# Fuzzing: what ci/fuzz.sh grows and finds where the CI runs it (fuzz-run/), and
+# what cargo-fuzz writes by itself when it is run by hand
+/fuzz-run/
+/fuzz/libfuzzer/artifacts/
+/fuzz/libfuzzer/corpus/
+/fuzz/libfuzzer/coverage/
+
 # Python
 __pycache__/
 .ruff_cache/
