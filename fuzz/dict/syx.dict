@@ -15,7 +15,8 @@
 # switch's data; a universal bulk dump's request and classification name
 # [DX7II-MANUAL]; and the TX7's: the headers of the dumps of performances and
 # of the condition acknowledge, the group bytes of its parameter changes, and
-# its model name [TX7-MANUAL].
+# its model name [TX7-MANUAL]; and the headers of the DX7II's dumps of
+# supplements and the group byte of its supplement's parameter change.
 
 start="\xF0"
 end="\xF7"
@@ -40,6 +41,9 @@ performance_group="\xF0\x43\x10\x04"
 tx_group="\xF0\x43\x10\x11"
 operator_select="\x01\x1C"
 model="8950  "
+supplement_header="\xF0\x43\x00\x05\x00\x31"
+supplements_header="\xF0\x43\x00\x06\x08\x60"
+supplement_group="\xF0\x43\x10\x18"
 note_on="\x90"
 largest_level="\x63"
 beyond_level="\x64"

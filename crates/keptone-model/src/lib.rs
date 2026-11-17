@@ -19,12 +19,15 @@
 //!   numbers;
 //! - [`performance`]: the performances of the DX1 and the TX7, two sides of
 //!   function data each, and their numbers;
+//! - [`supplement`]: the DX7II's supplement of a voice, its additional
+//!   parameters, of range types as well, and their numbers;
 //! - [`syx`]: the DX7's system-exclusive messages and its family's, read from
 //!   `.syx` files and from hosts, however many a file holds, and written back
-//!   byte for byte: the dumps of voices and of performances, the parameter
-//!   changes of voices, of function data and of performances, the presses of
-//!   the DX7's panel buttons and of the DX7II's switches, the TX7's own
-//!   settings and condition, and dump requests;
+//!   byte for byte: the dumps of voices, of the DX7II's supplements and of
+//!   performances, the parameter changes of voices, of function data, of
+//!   supplements and of performances, the presses of the DX7's panel buttons
+//!   and of the DX7II's switches, the TX7's own settings and condition, and
+//!   dump requests;
 //! - [`json`]: the subset of JSON that the native state and the themes are
 //!   written in, read by hand, nested as deep as `json.max_depth` lets it be
 //!   without taking the thread's stack;
@@ -42,5 +45,6 @@ pub mod json;
 pub mod performance;
 pub mod scala;
 pub mod sha256;
+pub mod supplement;
 pub mod syx;
 pub mod voice;

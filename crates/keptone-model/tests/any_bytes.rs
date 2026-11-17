@@ -20,7 +20,10 @@ mod properties;
 
 use std::path::Path;
 
-use common::{SplitMix64, dump, random_bank, random_performance_steps, random_performances, random_voice};
+use common::{
+    SplitMix64, dump, random_bank, random_performance_steps, random_performances, random_supplement_steps,
+    random_supplements, random_voice,
+};
 use keptone_model::json;
 use keptone_model::scala;
 use keptone_model::syx::{self, Options};
@@ -100,6 +103,8 @@ fn syx_takes_any_bytes() {
         &[0xf0, 0x43, 0x16, 0x11, 0x05, 0x15, 0xf7],
         &[0xf0, 0x43, 0x16, 0x11, 0x07, 0x7f, 0xf7],
         &[0xf0, 0x43, 0x17, 0x01, 0x1c, 0x03, 0xf7],
+        &[0xf0, 0x43, 0x18, 0x18, 0x10, 0x0c, 0xf7],
+        &[0xf0, 0x43, 0x18, 0x18, 0x49, 0x01, 0xf7],
         &[0xf0, 0x43, 0x25, 0x00, 0xf7],
         &[0xf0, 0x43, 0x26, 0x09, 0xf7],
         &[0xf0, 0x43, 0x28, 0x01, 0xf7],
@@ -109,16 +114,19 @@ fn syx_takes_any_bytes() {
     ]
     .concat();
     // The dumps of one performance, under format 1 and under 2, and of 64,
-    // and a condition acknowledge.
+    // a condition acknowledge, and the DX7II's dumps of one supplement and of
+    // 32.
     let steps = random_performance_steps(&mut random);
     let (_, performances) = random_performances(&mut random, 3);
     let performance = [
         dump(1, 1, &steps),
         dump(2, 2, &steps),
         dump(0, 0x7d, b"LM  8950  \x01\x02\x58\x05\x1f\x00"),
+        dump(5, 5, &random_supplement_steps(&mut random)),
     ]
     .concat();
-    let tokens: [&[u8]; 17] = [
+    let (_, supplements) = random_supplements(&mut random, 6);
+    let tokens: [&[u8]; 20] = [
         &[0xf0],
         &[0xf7],
         &[0xf0, 0x43, 0x00, 0x00, 0x01, 0x1b],
@@ -126,6 +134,9 @@ fn syx_takes_any_bytes() {
         &[0xf0, 0x43, 0x00, 0x01, 0x00, 0x5e],
         &[0xf0, 0x43, 0x00, 0x02, 0x20, 0x00],
         &[0xf0, 0x43, 0x00, 0x7d, 0x00, 0x10],
+        &[0xf0, 0x43, 0x00, 0x05, 0x00, 0x31],
+        &[0xf0, 0x43, 0x00, 0x06, 0x08, 0x60],
+        &[0xf0, 0x43, 0x10, 0x18],
         &[0xf0, 0x43, 0x10, 0x04],
         &[0xf0, 0x43, 0x10, 0x08],
         &[0xf0, 0x43, 0x10, 0x11],
@@ -137,7 +148,15 @@ fn syx_takes_any_bytes() {
         &[0x64],
         b"LM  ",
     ];
-    for seed in [&voice[..], &bank, &file, &short, &performance, &performances] {
+    for seed in [
+        &voice[..],
+        &bank,
+        &file,
+        &short,
+        &performance,
+        &performances,
+        &supplements,
+    ] {
         assert!(
             syx::read(seed, Options::default()).any(|message| message.result.is_ok()),
             "a seed with no message read"

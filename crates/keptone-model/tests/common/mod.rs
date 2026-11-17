@@ -338,3 +338,113 @@ pub fn random_performances(random: &mut SplitMix64, channel: u8) -> (Vec<(Vec<u8
     let message = dump(channel, 2, &data);
     (performances, message)
 }
+
+/// The largest step of each of the DX7II supplement's 49 parameters, in the
+/// order of the ACED format \[DX7II-MANUAL\] p. Add-9, parameters 0 to 38 and
+/// 64 to 73: the operators' scaling modes 0–1 and amplitude modulation
+/// sensitivities 0–7, OP6's first; the pitch envelope's range 0–3, the LFO's
+/// key trigger and velocity's switch of the pitch envelope 0–1, mono/poly with
+/// unison 0–3; the pitch bend's range and step 0–12 and mode 0–3, as
+/// \[DX7S-MANUAL\] p. Add-10 has it, normal at 0 among them; the random
+/// pitch 0–7; the portamento's mode 0–1, step 0–12 and time 0–99; the
+/// modulation wheel's three ranges, the first foot controller's four, the
+/// breath controller's and the aftertouch's three with a pitch bias 0–100;
+/// the pitch envelope's rate scaling 0–7; the second foot controller's and
+/// the MIDI controller's four ranges; the unison's detune 0–7; and the first
+/// foot controller's switch to the slider 0–1.
+const SUPPLEMENT_LARGEST: [u8; 49] = [
+    1, 1, 1, 1, 1, 1, 7, 7, 7, 7, 7, 7, 3, 1, 1, 3, 12, 12, 3, 7, 1, 12, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    100, 99, 99, 99, 100, 7, 99, 99, 99, 99, 99, 99, 99, 99, 7, 1,
+];
+
+/// The largest step of the supplement's parameter at this place of the ACED
+/// format.
+pub fn supplement_largest(index: usize) -> u8 {
+    SUPPLEMENT_LARGEST[index]
+}
+
+/// Where the supplement's parameter at this place of the ACED format lies in a
+/// packed supplement \[DX7II-MANUAL\] p. Add-12, its byte and its lowest bit:
+/// the scaling modes of OP6 to OP1 in byte 0 at bits 0 to 5; the amplitude
+/// modulation sensitivities of OP6 and OP5 in byte 1 at bits 0 and 3, of OP4
+/// and OP3 in byte 2, of OP2 and OP1 in byte 3; the pitch envelope's range,
+/// the LFO's key trigger, velocity's switch and the random pitch in byte 4 at
+/// bits 0, 2, 3 and 4; mono/poly with unison and the pitch bend's range in
+/// byte 5 at bits 0 and 2; its step and mode in byte 6 at bits 0 and 4; the
+/// portamento's mode and step in byte 7 at bits 0 and 1; the portamento's
+/// time and the ranges to the aftertouch's pitch bias in bytes 8 to 23; the
+/// pitch envelope's rate scaling in byte 24; the second foot controller's and
+/// the MIDI controller's ranges in bytes 26 to 33; the unison's detune and the
+/// slider's switch in byte 34 at bits 0 and 3.
+pub fn supplement_place(index: usize) -> (usize, u32) {
+    match index {
+        0..=5 => (0, u32::try_from(index).expect("below 6")),
+        6 => (1, 0),
+        7 => (1, 3),
+        8 => (2, 0),
+        9 => (2, 3),
+        10 => (3, 0),
+        11 => (3, 3),
+        12 => (4, 0),
+        13 => (4, 2),
+        14 => (4, 3),
+        15 => (5, 0),
+        16 => (5, 2),
+        17 => (6, 0),
+        18 => (6, 4),
+        19 => (4, 4),
+        20 => (7, 0),
+        21 => (7, 1),
+        22..=37 => (index - 14, 0),
+        38 => (24, 0),
+        39..=46 => (index - 13, 0),
+        47 => (34, 0),
+        _ => (34, 3),
+    }
+}
+
+/// The bits of a field whose largest step is this.
+fn width(largest: u8) -> u32 {
+    largest.bit_width()
+}
+
+/// The 35 bytes of a packed supplement of the 49 steps of the ACED format,
+/// laid out by [`supplement_place`].
+pub fn pack_supplement(steps: &[u8]) -> Vec<u8> {
+    assert_eq!(steps.len(), 49);
+    let mut packed = vec![0; 35];
+    for (index, &step) in steps.iter().enumerate() {
+        let (byte, bit) = supplement_place(index);
+        packed[byte] |= step << bit;
+    }
+    packed
+}
+
+/// The bits that each of a packed supplement's 35 bytes uses, by
+/// [`supplement_place`] and each field's width; the others are unused.
+pub fn supplement_used() -> Vec<u8> {
+    let mut used = vec![0; 35];
+    for (index, &largest) in SUPPLEMENT_LARGEST.iter().enumerate() {
+        let (byte, bit) = supplement_place(index);
+        used[byte] |= ((1 << width(largest)) - 1) << bit;
+    }
+    used
+}
+
+/// The 49 bytes of the dump of one supplement of random steps, each within its
+/// range.
+pub fn random_supplement_steps(random: &mut SplitMix64) -> Vec<u8> {
+    SUPPLEMENT_LARGEST
+        .iter()
+        .map(|&largest| random.up_to(largest))
+        .collect()
+}
+
+/// The steps of 32 random supplements, and a valid dump of 32 of them, on a
+/// channel.
+pub fn random_supplements(random: &mut SplitMix64, channel: u8) -> (Vec<Vec<u8>>, Vec<u8>) {
+    let steps: Vec<Vec<u8>> = (0..32).map(|_| random_supplement_steps(random)).collect();
+    let data: Vec<u8> = steps.iter().flat_map(|steps| pack_supplement(steps)).collect();
+    let message = dump(channel, 6, &data);
+    (steps, message)
+}

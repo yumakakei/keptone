@@ -110,6 +110,16 @@ fn written_again(dump: &Dump) -> Vec<u8> {
             written
         }
         Content::Condition(condition) => syx::write_condition(condition, channel),
+        Content::Supplement(supplement) => {
+            let (written, rounded) = syx::write_supplement(supplement, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::Supplements(supplements) => {
+            let (written, rounded) = syx::write_supplements(supplements, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
     }
 }
 

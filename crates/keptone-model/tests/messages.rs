@@ -26,9 +26,11 @@ mod common;
 use common::FUNCTION_LARGEST;
 use keptone_model::function::FunctionParameter;
 use keptone_model::performance::DxPerformanceParameter;
+use keptone_model::supplement::SupplementParameter;
 use keptone_model::syx::{
     self, Button, Change, Channel, Error, Finding, FunctionStep, OperatorSelect, Options, OutOfRange, ParameterChange,
-    PerformanceStep, RemoteSwitch, Request, Requested, Sysex, TxFunctionParameter, TxStep, UniversalName, VoiceStep,
+    PerformanceStep, RemoteSwitch, Request, Requested, SupplementStep, Sysex, TxFunctionParameter, TxStep,
+    UniversalName, VoiceStep,
 };
 use keptone_model::voice::{Parameter, Rounding, Value};
 
@@ -247,7 +249,7 @@ fn steps_and_data_out_of_range() {
 
 #[test]
 fn what_is_of_no_kind_read_is_refused() {
-    let unsupported: [&[u8]; 23] = [
+    let unsupported: [&[u8]; 27] = [
         // Voice parameter 157, and the voice group's numbers from 256 on.
         &[0xf0, 0x43, 0x10, 0x01, 0x1d, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x02, 0x00, 0x00, 0xf7],
@@ -271,9 +273,15 @@ fn what_is_of_no_kind_read_is_refused() {
         &[0xf0, 0x43, 0x10, 0x11, 8, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x11, 12, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x10, 0, 0x00, 0xf7],
-        // Group 3, the DX7II's supplement (group 6), switch 46.
+        // Group 3; the DX7II's supplement's reserved numbers 39 and 63 and 74,
+        // and its micro tuning and fractional scaling, 126 and 127, which carry
+        // more data than a byte; switch 46.
         &[0xf0, 0x43, 0x10, 0x0c, 0x00, 0x00, 0xf7],
-        &[0xf0, 0x43, 0x10, 0x18, 0x00, 0x00, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x18, 39, 0x00, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x18, 63, 0x00, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x18, 74, 0x00, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x18, 126, 0x00, 0xf7],
+        &[0xf0, 0x43, 0x10, 0x18, 127, 0x00, 0xf7],
         &[0xf0, 0x43, 0x10, 0x1b, 46, 0x7f, 0xf7],
         // Requests of formats 3, 0x7C and 0x7F, and a sub-status of no kind.
         &[0xf0, 0x43, 0x20, 0x03, 0xf7],
@@ -383,6 +391,40 @@ fn tx_function_changes() {
         .collect();
     assert_eq!(names[2], "data entry volume switch");
     assert_eq!(names[8], "load function select");
+}
+
+#[test]
+fn supplement_changes_at_every_step() {
+    // The DX7II's supplement, group 6 with the group byte's low bits 0, its
+    // parameters 0 to 38 and 64 to 73 at their numbers \[DX7II-MANUAL\] p.
+    // Add-9, ranged as `common` states them.
+    let numbers: Vec<u8> = SupplementParameter::all().map(SupplementParameter::number).collect();
+    assert_eq!(numbers, (0..=38).chain(64..=73).collect::<Vec<u8>>());
+    for (index, parameter) in SupplementParameter::all().enumerate() {
+        let largest = common::supplement_largest(index);
+        for step in 0..=largest {
+            let change = Change::Supplement(SupplementStep::new(parameter, step).expect("a step within its range"));
+            let message = syx::write_change(channel(14), change);
+            assert_eq!(message, [0xf0, 0x43, 0x1e, 0x18, parameter.number(), step, 0xf7]);
+            assert_eq!(change_in(&message).change, change);
+        }
+        assert!(SupplementStep::new(parameter, largest + 1).is_none());
+    }
+    // The pitch bend's range at 13: reported, and taken as 12 or refused.
+    let range = SupplementParameter::new(16).expect("a parameter");
+    let message = [0xf0, 0x43, 0x10, 0x18, 16, 13, 0xf7];
+    let finding = Finding::SupplementOutOfRange {
+        supplement: 0,
+        parameter: range,
+        step: 13,
+    };
+    let expected = ParameterChange {
+        channel: Channel::default(),
+        change: Change::Supplement(SupplementStep::new(range, 12).expect("a step")),
+        finding: Some(finding),
+    };
+    assert_eq!(syx::decode(&message, Options::default()), Ok(Sysex::Change(expected)));
+    assert_eq!(syx::decode(&message, STRICT), Err(Error::Refused(finding)));
 }
 
 #[test]

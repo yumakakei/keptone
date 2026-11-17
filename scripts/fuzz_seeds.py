@@ -16,17 +16,18 @@ are random numbers, each within the range of its parameter, laid out as [DEXED-S
 again here, apart from keptone-model and its tests): a single-voice dump, a 32-voice dump, a file of several
 messages among bytes that are none, and a dump whose checksum is wrong and some of whose bytes are out of range.
 No voice of Yamaha's is among them (docs/DESIGN.md §14). Beside them, the dumps of the performances of the DX1 and the
-TX7, of one and of 64, laid out as [TX7-MANUAL] lays them out, of random steps; and a file of the DX7's other messages
-and its family's: parameter changes of voice parameters, of the operators' switches and of every function parameter,
+TX7, of one and of 64, laid out as [TX7-MANUAL] lays them out, and the DX7II's dumps of supplements of voices, of one
+and of 32, laid out as [DX7II-MANUAL] lays them out, all of random steps; and a file of the DX7's other messages and
+its family's: parameter changes of voice parameters, of the operators' switches and of every function parameter,
 the presses of the DX7's panel buttons that make it send its bank [AJXS-ROM], switches of the DX7II's switch remote,
-the TX7's changes of a performance, of its own settings and of its operator select, dump requests [DX7II-MANUAL]
-[TX7-MANUAL], a performance under format number 2 and a condition acknowledge, with some out of range and some of no
-kind read. fuzz/seeds/json/ holds JSON texts of the subset
-that the native state is to be written in: an object of settings and values nested a few levels, with an integer of
-64 bits; strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a
-few levels; and numbers at the ends of binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and
-keyboard mappings of Scala's: equal steps in cents, just intonation in ratios, the three ends of a line, ISO 8859-1,
-a linear mapping and keys left unmapped. The script writes the same bytes every time.
+the TX7's changes of a performance, of its own settings and of its operator select, the DX7II's changes of a
+supplement, dump requests [DX7II-MANUAL] [TX7-MANUAL], a performance under format number 2 and a condition
+acknowledge, with some out of range and some of no kind read. fuzz/seeds/json/ holds JSON texts of the subset that
+the native state is to be written in: an object of settings and values nested a few levels, with an integer of 64
+bits; strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a few
+levels; and numbers at the ends of binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard
+mappings of Scala's: equal steps in cents, just intonation in ratios, the three ends of a line, ISO 8859-1, a linear
+mapping and keys left unmapped. The script writes the same bytes every time.
 """
 
 import sys
@@ -151,6 +152,9 @@ def main() -> int:
     performance = dump(10, 1, random_performance(numbers))
     packed = [pack_performance(random_performance(numbers), next(numbers) % 3) for _ in range(64)]
     performances = dump(11, 2, [byte for performance_bytes in packed for byte in performance_bytes])
+    # One supplement, and 32.
+    supplement = dump(12, 5, random_supplement(numbers))
+    supplements = dump(13, 6, [byte for _ in range(32) for byte in pack_supplement(random_supplement(numbers))])
     seeds = {
         "voice.syx": voice,
         "bank.syx": bank,
@@ -160,6 +164,8 @@ def main() -> int:
         "messages.syx": others,
         "performance.syx": performance,
         "performances.syx": performances,
+        "supplement.syx": supplement,
+        "supplements.syx": supplements,
     }
     write(SEEDS / "syx", seeds)
     write(SEEDS / "json", json_seeds())
@@ -222,6 +228,77 @@ def pack_performance(steps: list[int], key_assign: int) -> list[int]:
     return packed
 
 
+# The largest step of each of the DX7II supplement's parameters, 0 to 38 and 64 to 73, in the order of the ACED format
+# [DX7II-MANUAL]: the operators' scaling modes and amplitude modulation sensitivities, the pitch envelope's range, the
+# LFO's key trigger, velocity's switch of the pitch envelope, mono/poly with unison, the pitch bend's range, step and
+# mode, the random pitch, the portamento's mode, step and time, the controllers' ranges with two pitch biases of 0 to
+# 100, the pitch envelope's rate scaling, the unison's detune and the first foot controller's switch to the slider.
+SUPPLEMENT_LARGEST = (
+    *(1,) * 6,
+    *(7,) * 6,
+    3,
+    1,
+    1,
+    3,
+    12,
+    12,
+    3,
+    7,
+    1,
+    12,
+    *(99,) * 11,
+    100,
+    99,
+    99,
+    99,
+    100,
+    7,
+    *(99,) * 8,
+    7,
+    1,
+)
+
+# Where each of the supplement's parameters lies in a packed supplement, its byte and its lowest bit, in the order of
+# the ACED format [DX7II-MANUAL] p. Add-12.
+SUPPLEMENT_PLACES = (
+    *((0, bit) for bit in range(6)),
+    (1, 0),
+    (1, 3),
+    (2, 0),
+    (2, 3),
+    (3, 0),
+    (3, 3),
+    (4, 0),
+    (4, 2),
+    (4, 3),
+    (5, 0),
+    (5, 2),
+    (6, 0),
+    (6, 4),
+    (4, 4),
+    (7, 0),
+    (7, 1),
+    *((byte, 0) for byte in range(8, 24)),
+    (24, 0),
+    *((byte, 0) for byte in range(26, 34)),
+    (34, 0),
+    (34, 3),
+)
+
+
+def random_supplement(numbers: Iterator[int]) -> list[int]:
+    """The 49 bytes of the dump of one supplement of random steps, each within its range."""
+    return [next(numbers) % (largest + 1) for largest in SUPPLEMENT_LARGEST]
+
+
+def pack_supplement(steps: list[int]) -> list[int]:
+    """The 35 bytes of a packed supplement of the dump of one's 49."""
+    packed = [0] * 35
+    for step, (byte, bit) in zip(steps, SUPPLEMENT_PLACES, strict=True):
+        packed[byte] |= step << bit
+    return packed
+
+
 # The largest step of each function parameter, 64 to 77: mono/poly; the pitch bend's range and step; the
 # portamento's mode, glissando and time; the range and the assignment of each of the four controllers.
 FUNCTION_LARGEST = (1, 12, 12, 1, 1, 99, 99, 7, 99, 7, 99, 7, 99, 7)
@@ -278,7 +355,10 @@ def messages(numbers: Iterator[int]) -> bytes:
         change(13, 0x04, 8, 0),
         change(13, 0x11, 8, 0),
     ]
-    return b"".join((*voice, switches, *function, *panel, *remote, *requests, *beyond, *unread, *tx7))
+    # The DX7II's: a supplement's pitch bend range, its unison's detune, its breath controller's pitch bias out of
+    # range, and a reserved number.
+    dx7ii = [change(14, 0x18, 16, 12), change(14, 0x18, 72, 7), change(15, 0x18, 33, 101), change(15, 0x18, 50, 0)]
+    return b"".join((*voice, switches, *function, *panel, *remote, *requests, *beyond, *unread, *tx7, *dx7ii))
 
 
 def scl_seeds() -> dict[str, bytes]:

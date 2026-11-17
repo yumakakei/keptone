@@ -382,13 +382,13 @@ fn messages_that_are_not_dumps() {
     };
     // A byte with its high bit set in the middle; another maker's message; a
     // parameter change's sub-status, whose data is then far more than its one
-    // byte; a sub-status of no kind; a format of neither dump; a byte count
+    // byte; a sub-status of no kind; a format of no dump; a byte count
     // that is not the format's.
     assert_eq!(changed(80, 0x80), Err(Error::NotSysEx));
     assert_eq!(changed(1, 0x41), Err(Error::Unsupported));
     assert_eq!(changed(2, 0x10), Err(Error::Length));
     assert_eq!(changed(2, 0x30), Err(Error::Unsupported));
-    assert_eq!(changed(3, 5), Err(Error::Unsupported));
+    assert_eq!(changed(3, 3), Err(Error::Unsupported));
     assert_eq!(changed(5, 0x1c), Err(Error::Length));
     assert_eq!(changed(4, 0x20), Err(Error::Length));
     // A byte more, and a byte less.

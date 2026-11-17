@@ -15,7 +15,9 @@
 //!
 //! - the dumps of voices: the single-voice dump, the 155 parameters of one voice
 //!   a byte each, and the 32-voice dump, a bank of 32 voices of 128 bytes each,
-//!   two or three parameters packed into some of the bytes;
+//!   two or three parameters packed into some of the bytes; and the DX7II's
+//!   supplements of voices ([`crate::supplement`]), one in 49 bytes and 32
+//!   packed into 35 bytes each;
 //! - the dumps of the performances of the DX1 and the TX7
 //!   ([`crate::performance`]): one performance in 94 bytes, under format
 //!   number 1, and under 2, which \[DX7-MANUAL\] prints for it, and 64
@@ -23,9 +25,10 @@
 //!   acknowledge, which says what it is and how it is set;
 //! - the parameter changes: of a voice parameter, of a function parameter, of a
 //!   button of the DX7's panel, which its firmware takes as pressed or released
-//!   \[AJXS-ROM\], of a switch of the DX7II's panel by its switch remote, and
-//!   the TX7's, of a performance's parameter, of one of its own settings and of
-//!   the operator its panel edits;
+//!   \[AJXS-ROM\], of a switch of the DX7II's panel by its switch remote and of
+//!   a parameter of its supplement, and the TX7's, of a performance's
+//!   parameter, of one of its own settings and of the operator its panel
+//!   edits;
 //! - the dump requests of the DX7II and the TX7, which the DX7 itself does not
 //!   answer, and Keptone does (docs/DESIGN.md §15).
 //!
@@ -42,9 +45,9 @@
 //! `syx.out_of_range` says (docs/MATH.md §17). A message is decoded whole or
 //! refused whole.
 //!
-//! [`write_voice`], [`write_bank`], [`write_performance`],
-//! [`write_performances`], [`write_condition`], [`write_change`] and
-//! [`write_request`] write the messages, each value rounded to a step as
+//! [`write_voice`], [`write_bank`], [`write_supplement`], [`write_supplements`],
+//! [`write_performance`], [`write_performances`], [`write_condition`],
+//! [`write_change`] and [`write_request`] write the messages, each value rounded to a step as
 //! `syx.export_rounding` says; the dumps say what they could not hold of what
 //! they were written from. A message that is valid -- its checksum right, every
 //! byte in range, no unused bit set and a switch's data 0 or 127 -- comes back
@@ -54,13 +57,14 @@
 //! Every function here takes any bytes and gives a value or an error, never a
 //! panic, and allocates in proportion to the bytes it is given: [`read`] goes
 //! through a file a message at a time, and a dump decoded takes no more than
-//! nine times the bytes of its message, 1056 for each voice and 280 for each
-//! performance on a 64-bit system.
+//! ten times the bytes of its message, 1056 for each voice, 280 for each
+//! performance and 344 for each supplement on a 64-bit system.
 
 use std::fmt;
 
 use crate::function::{Function, FunctionParameter};
 use crate::performance::{DxPerformanceParameter, KeyAssign, Performance, PerformanceParameter, Unnamed};
+use crate::supplement::{Supplement, SupplementParameter};
 use crate::voice::{Parameter, Rounding, Voice};
 
 /// The byte that starts a system-exclusive message.
@@ -124,6 +128,10 @@ const FUNCTION_GROUP: u8 = 2;
 /// low bits are 1 \[TX7-MANUAL\].
 const TX_GROUP: u8 = 4;
 
+/// The parameter group of the DX7II's own parameters: with the group byte's
+/// low bits 0, of the supplement \[DX7II-MANUAL\].
+const DX7II_GROUP: u8 = 6;
+
 /// The group byte's low bits and the number of the voice group's parameter
 /// 156, 1 · 128 + 28, which selects the operator a panel edits \[TX7-MANUAL\].
 const OPERATOR_SELECT: [u8; 2] = [0x01, 0x1c];
@@ -177,6 +185,21 @@ const PERFORMANCES_COUNT: [u8; 2] = [0x20, 0x00];
 /// The byte count of the condition acknowledge: 16 = 0 · 128 + 16.
 const CONDITION_COUNT: [u8; 2] = [0x00, 0x10];
 
+/// The bytes of the data of the dump of one supplement, a parameter each.
+const SUPPLEMENT_BYTES: usize = 49;
+
+/// The bytes of one supplement of the dump of 32.
+const PACKED_SUPPLEMENT_BYTES: usize = 35;
+
+/// The bytes of the data of the dump of 32 supplements.
+const SUPPLEMENTS_BYTES: usize = 32 * PACKED_SUPPLEMENT_BYTES;
+
+/// The byte count of the dump of one supplement: 49 = 0 · 128 + 49.
+const SUPPLEMENT_COUNT: [u8; 2] = [0x00, 0x31];
+
+/// The byte count of the dump of 32 supplements: 1120 = 8 · 128 + 96.
+const SUPPLEMENTS_COUNT: [u8; 2] = [0x08, 0x60];
+
 /// The bits that each byte of a packed voice uses \[DEXED-SYSEX\]; a valid dump
 /// leaves the others clear. Of each operator's 17 bytes, byte 11 holds the two
 /// curves in four bits, byte 13 the two sensitivities in five and byte 15 the
@@ -227,6 +250,41 @@ const fn performance_used() -> [u8; PACKED_PERFORMANCE_BYTES] {
     }
     used[32] = 0x07;
     used[33] = 0;
+    used
+}
+
+/// The bits that each byte of a packed supplement uses \[DX7II-MANUAL\] p.
+/// Add-12; a valid dump leaves the others clear. Byte 0 holds the operators'
+/// scaling modes, OP1's in bit 5 to OP6's in bit 0; bytes 1 to 3 their
+/// amplitude modulation sensitivities, three bits each, OP5's and OP6's, OP3's
+/// and OP4's, OP1's and OP2's, the first in bits 5–3; byte 4 the random pitch
+/// fluctuation in bits 6–4, velocity's switch of the pitch envelope in bit 3,
+/// the LFO's key trigger in bit 2 and the pitch envelope's range in bits 1–0;
+/// byte 5 the pitch bend's range in bits 5–2 and mono/poly with unison in bits
+/// 1–0; byte 6 the pitch bend's mode in bits 5–4 and its step in bits 3–0;
+/// byte 7 the portamento's step in bits 4–1 and its mode in bit 0; bytes 8 to
+/// 23 the portamento's time and the controllers' ranges; byte 24 the pitch
+/// envelope's rate scaling in bits 2–0; byte 25 nothing; bytes 26 to 33 the
+/// ranges of the second foot controller and the MIDI controller; and byte 34
+/// the first foot controller's switch to the slider in bit 3 and the unison's
+/// detune in bits 2–0. The manual draws a line in byte 5 between bits 4 and 3,
+/// but the pitch bend's range, 0 to 12, takes four bits, and the byte has six
+/// for it and mono/poly with unison, as \[DX7S-MANUAL\] p. Add-13 draws them.
+const SUPPLEMENT_USED: [u8; PACKED_SUPPLEMENT_BYTES] = supplement_used();
+
+/// The bits each byte of a packed supplement uses: [`SUPPLEMENT_USED`].
+const fn supplement_used() -> [u8; PACKED_SUPPLEMENT_BYTES] {
+    let mut used = [0x7f; PACKED_SUPPLEMENT_BYTES];
+    used[0] = 0x3f;
+    used[1] = 0x3f;
+    used[2] = 0x3f;
+    used[3] = 0x3f;
+    used[5] = 0x3f;
+    used[6] = 0x3f;
+    used[7] = 0x1f;
+    used[24] = 0x07;
+    used[25] = 0;
+    used[34] = 0x0f;
     used
 }
 
@@ -388,6 +446,27 @@ pub enum Finding {
         /// The channel it held.
         channel: u8,
     },
+    /// A step of a supplement's parameter beyond its range
+    /// ([`SupplementParameter::largest`]).
+    SupplementOutOfRange {
+        /// The place of the supplement: 0 in the dump of one or a parameter
+        /// change, 0 to 31 in the dump of 32.
+        supplement: u8,
+        /// The parameter.
+        parameter: SupplementParameter,
+        /// The step it held.
+        step: u8,
+    },
+    /// A byte of a packed supplement with bits set that the format leaves
+    /// unused.
+    SupplementUnusedBits {
+        /// The place of the supplement, 0 to 31.
+        supplement: u8,
+        /// The place of the byte among the supplement's 35.
+        byte: u8,
+        /// The bits it set that are unused.
+        bits: u8,
+    },
 }
 
 impl fmt::Display for Finding {
@@ -460,6 +539,21 @@ impl fmt::Display for Finding {
             Self::ConditionChannel { channel } => {
                 write!(formatter, "the receive channel is {channel}, beyond its largest, 15")
             }
+            Self::SupplementOutOfRange {
+                supplement,
+                parameter,
+                step,
+            } => write!(
+                formatter,
+                "supplement {}: {parameter} is {step}, beyond its largest, {}",
+                u16::from(supplement) + 1,
+                parameter.largest()
+            ),
+            Self::SupplementUnusedBits { supplement, byte, bits } => write!(
+                formatter,
+                "supplement {}: byte {byte} sets unused bits {bits:#04x}",
+                u16::from(supplement) + 1
+            ),
         }
     }
 }
@@ -480,7 +574,8 @@ pub enum Error {
     Unsupported,
     /// A message whose byte count or length is not its kind's: a single-voice
     /// dump holds 155 bytes of data in a message of 163, a 32-voice dump 4096
-    /// in 4104, the dump of one performance 94 in 102, the dump of 64 4096 in
+    /// in 4104, the dump of one supplement 49 in 57, the dump of 32 1120 in
+    /// 1128, the dump of one performance 94 in 102, the dump of 64 4096 in
     /// 4104, the condition acknowledge 16 in 24, a parameter change one byte
     /// of data in 7, and a dump request is of 5 bytes, or 15 for a universal
     /// bulk dump's.
@@ -526,6 +621,11 @@ pub enum Content {
     Voice(Box<Voice>),
     /// A 32-voice dump's voices, in the order of their places.
     Bank(Box<[Voice; 32]>),
+    /// The DX7II's dump of one supplement's supplement.
+    Supplement(Box<Supplement>),
+    /// The DX7II's dump of 32 supplements' supplements, in the order of their
+    /// places.
+    Supplements(Box<[Supplement; 32]>),
     /// The dump of one performance's performance.
     Performance(Box<Performance>),
     /// The dump of 64 performances' performances, in the order of their
@@ -924,6 +1024,46 @@ impl VoiceStep {
     }
 }
 
+/// A parameter of the DX7II's supplement and a step within its range: what a
+/// parameter change of the supplement sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SupplementStep {
+    /// The parameter.
+    parameter: SupplementParameter,
+    /// The step, no more than the parameter's largest.
+    step: u8,
+}
+
+impl SupplementStep {
+    /// The parameter and step, if the step is within the parameter's range.
+    #[must_use]
+    pub fn new(parameter: SupplementParameter, step: u8) -> Option<Self> {
+        (step <= parameter.largest()).then_some(Self { parameter, step })
+    }
+
+    /// The parameter of a supplement and its step, its value rounded by
+    /// `rounding`.
+    #[must_use]
+    pub fn of(supplement: &Supplement, parameter: SupplementParameter, rounding: Rounding) -> Self {
+        Self {
+            parameter,
+            step: supplement.step(parameter, rounding).min(parameter.largest()),
+        }
+    }
+
+    /// The parameter.
+    #[must_use]
+    pub const fn parameter(self) -> SupplementParameter {
+        self.parameter
+    }
+
+    /// The step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        self.step
+    }
+}
+
 /// A function parameter and a step within its range: what a parameter change
 /// of the function group sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -986,6 +1126,9 @@ pub enum Change {
     Tx(TxStep),
     /// The operator a panel edits, by voice parameter 156 \[TX7-MANUAL\].
     OperatorSelect(OperatorSelect),
+    /// A parameter of the DX7II's supplement, of group 6 with the group byte's
+    /// low bits 0 \[DX7II-MANUAL\].
+    Supplement(SupplementStep),
 }
 
 /// A parameter change, decoded.
@@ -1178,6 +1321,8 @@ enum DumpKind {
     Performance,
     Performances,
     Condition,
+    Supplement,
+    Supplements,
 }
 
 /// The dump of a message's bytes after its sub-status: the format, the byte
@@ -1188,7 +1333,13 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
     };
     if !matches!(
         format,
-        VOICE_FORMAT | PERFORMANCE_FORMAT | PERFORMANCES_FORMAT | BANK_FORMAT | CONDITION_FORMAT
+        VOICE_FORMAT
+            | PERFORMANCE_FORMAT
+            | PERFORMANCES_FORMAT
+            | SUPPLEMENT_FORMAT
+            | SUPPLEMENTS_FORMAT
+            | BANK_FORMAT
+            | CONDITION_FORMAT
     ) {
         return Err(Error::Unsupported);
     }
@@ -1211,6 +1362,8 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
         }
         (PERFORMANCES_FORMAT, PERFORMANCES_COUNT) => DumpKind::Performances,
         (CONDITION_FORMAT, CONDITION_COUNT) => DumpKind::Condition,
+        (SUPPLEMENT_FORMAT, SUPPLEMENT_COUNT) => DumpKind::Supplement,
+        (SUPPLEMENTS_FORMAT, SUPPLEMENTS_COUNT) => DumpKind::Supplements,
         _ => return Err(Error::Length),
     };
     let expected = checksum_of(data);
@@ -1224,12 +1377,23 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
         }
         findings.push(finding);
     }
-    let content = match kind {
+    let content = content_of(kind, data, options, &mut findings)?;
+    Ok(Dump {
+        channel,
+        content,
+        findings,
+    })
+}
+
+/// What a dump of a kind holds, of its data, each byte checked as the options
+/// say.
+fn content_of(kind: DumpKind, data: &[u8], options: Options, findings: &mut Vec<Finding>) -> Result<Content, Error> {
+    Ok(match kind {
         DumpKind::Voice => {
             let Ok(steps) = <&[u8; VOICE_BYTES]>::try_from(data) else {
                 return Err(Error::Length);
             };
-            Content::Voice(Box::new(voice_of(steps, 0, options, &mut findings)?))
+            Content::Voice(Box::new(voice_of(steps, 0, options, findings)?))
         }
         DumpKind::Bank => {
             let Ok(data) = <&[u8; BANK_BYTES]>::try_from(data) else {
@@ -1238,8 +1402,8 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
             let (packed, _) = data.as_chunks::<PACKED_BYTES>();
             let mut voices = Vec::with_capacity(32);
             for (place, packed) in (0..).zip(packed) {
-                let steps = unpack(packed, place, options, &mut findings)?;
-                voices.push(voice_of(&steps, place, options, &mut findings)?);
+                let steps = unpack(packed, place, options, findings)?;
+                voices.push(voice_of(&steps, place, options, findings)?);
             }
             let Ok(voices) = <Box<[Voice; 32]>>::try_from(voices.into_boxed_slice()) else {
                 return Err(Error::Length);
@@ -1250,7 +1414,7 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
             let Ok(steps) = <&[u8; PERFORMANCE_BYTES]>::try_from(data) else {
                 return Err(Error::Length);
             };
-            Content::Performance(Box::new(performance_of(steps, options, &mut findings)?))
+            Content::Performance(Box::new(performance_of(steps, options, findings)?))
         }
         DumpKind::Performances => {
             let Ok(data) = <&[u8; PERFORMANCES_BYTES]>::try_from(data) else {
@@ -1259,7 +1423,7 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
             let (packed, _) = data.as_chunks::<PACKED_PERFORMANCE_BYTES>();
             let mut performances = Vec::with_capacity(64);
             for (place, packed) in (0..).zip(packed) {
-                performances.push(unpack_performance(packed, place, options, &mut findings)?);
+                performances.push(unpack_performance(packed, place, options, findings)?);
             }
             let Ok(performances) = <Box<[Performance; 64]>>::try_from(performances.into_boxed_slice()) else {
                 return Err(Error::Length);
@@ -1270,13 +1434,29 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
             let Ok(data) = <&[u8; CONDITION_BYTES]>::try_from(data) else {
                 return Err(Error::Length);
             };
-            Content::Condition(condition_of(data, options, &mut findings)?)
+            Content::Condition(condition_of(data, options, findings)?)
         }
-    };
-    Ok(Dump {
-        channel,
-        content,
-        findings,
+        DumpKind::Supplement => {
+            let Ok(steps) = <&[u8; SUPPLEMENT_BYTES]>::try_from(data) else {
+                return Err(Error::Length);
+            };
+            Content::Supplement(Box::new(supplement_of(steps, 0, options, findings)?))
+        }
+        DumpKind::Supplements => {
+            let Ok(data) = <&[u8; SUPPLEMENTS_BYTES]>::try_from(data) else {
+                return Err(Error::Length);
+            };
+            let (packed, _) = data.as_chunks::<PACKED_SUPPLEMENT_BYTES>();
+            let mut supplements = Vec::with_capacity(32);
+            for (place, packed) in (0..).zip(packed) {
+                let steps = unpack_supplement(packed, place, options, findings)?;
+                supplements.push(supplement_of(&steps, place, options, findings)?);
+            }
+            let Ok(supplements) = <Box<[Supplement; 32]>>::try_from(supplements.into_boxed_slice()) else {
+                return Err(Error::Length);
+            };
+            Content::Supplements(supplements)
+        }
     })
 }
 
@@ -1318,6 +1498,7 @@ fn target_of(group: u8, number: u8) -> Option<Target> {
             .map(Target::Function)
             .or_else(|| Button::new(number).map(Target::Panel)),
         (TX_GROUP, 1) => TxFunctionParameter::new(number).map(Target::Tx),
+        (DX7II_GROUP, 0) => SupplementParameter::new(number).map(Target::Supplement),
         _ if group == SWITCH_REMOTE => RemoteSwitch::new(number).map(Target::Remote),
         _ => None,
     }
@@ -1333,6 +1514,7 @@ enum Target {
     Performance(DxPerformanceParameter),
     Tx(TxFunctionParameter),
     OperatorSelect,
+    Supplement(SupplementParameter),
 }
 
 impl Target {
@@ -1395,6 +1577,19 @@ impl Target {
             Self::OperatorSelect => {
                 let finding = (data > 5).then_some(Finding::OperatorSelectOutOfRange { step: data });
                 (Change::OperatorSelect(OperatorSelect(data.min(5))), finding)
+            }
+            Self::Supplement(parameter) => {
+                let largest = parameter.largest();
+                let finding = (data > largest).then_some(Finding::SupplementOutOfRange {
+                    supplement: 0,
+                    parameter,
+                    step: data,
+                });
+                let step = SupplementStep {
+                    parameter,
+                    step: data.min(largest),
+                };
+                (Change::Supplement(step), finding)
             }
         }
     }
@@ -1461,6 +1656,39 @@ pub fn write_bank(voices: &[Voice; 32], channel: Channel, rounding: Rounding) ->
         data.extend_from_slice(&pack(&steps_of(voice, place, rounding, &mut loss)));
     }
     (message(channel, BANK_FORMAT, BANK_COUNT, &data), loss)
+}
+
+/// The DX7II's dump of one supplement, on a channel: a message of 57 bytes.
+/// Each value is rounded to a step by `rounding`, and the parameters whose
+/// values lay between steps are given beside it.
+#[must_use]
+pub fn write_supplement(
+    supplement: &Supplement,
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<(u8, SupplementParameter)>) {
+    let mut rounded = Vec::new();
+    let steps = steps_of_supplement(supplement, 0, rounding, &mut rounded);
+    (message(channel, SUPPLEMENT_FORMAT, SUPPLEMENT_COUNT, &steps), rounded)
+}
+
+/// The DX7II's dump of 32 supplements, on a channel: a message of 1128 bytes.
+/// Each value is rounded to a step by `rounding`, and the parameters whose
+/// values lay between steps are given beside it, by the place of their
+/// supplement.
+#[must_use]
+pub fn write_supplements(
+    supplements: &[Supplement; 32],
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<(u8, SupplementParameter)>) {
+    let mut rounded = Vec::new();
+    let mut data = Vec::with_capacity(SUPPLEMENTS_BYTES);
+    for (place, supplement) in (0..).zip(supplements) {
+        let steps = steps_of_supplement(supplement, place, rounding, &mut rounded);
+        data.extend_from_slice(&pack_supplement(&steps));
+    }
+    (message(channel, SUPPLEMENTS_FORMAT, SUPPLEMENTS_COUNT, &data), rounded)
 }
 
 /// The dump of one performance, on a channel: a message of 102 bytes, under
@@ -1536,6 +1764,7 @@ pub fn write_change(channel: Channel, change: Change) -> Vec<u8> {
             let [high, number] = OPERATOR_SELECT;
             (VOICE_GROUP << 2 | high, number, select.0)
         }
+        Change::Supplement(step) => (DX7II_GROUP << 2, step.parameter.number(), step.step),
     };
     vec![START, YAMAHA, CHANGE << 4 | channel.0, group, number, data, END]
 }
@@ -1643,6 +1872,122 @@ fn note(finding: Finding, options: Options, findings: &mut Vec<Finding>) -> Resu
     }
     findings.push(finding);
     Ok(())
+}
+
+/// The supplement of the 49 bytes of the dump of one, in the order of its
+/// parameters' numbers, each checked against its parameter's range: a step
+/// beyond it is a finding, and either the largest step or the dump's refusal.
+fn supplement_of(
+    steps: &[u8; SUPPLEMENT_BYTES],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<Supplement, Error> {
+    let mut supplement = Supplement::zero();
+    for (parameter, &step) in SupplementParameter::all().zip(steps) {
+        if !supplement.set_step(parameter, step) {
+            let finding = Finding::SupplementOutOfRange {
+                supplement: place,
+                parameter,
+                step,
+            };
+            note(finding, options, findings)?;
+        }
+    }
+    Ok(supplement)
+}
+
+/// The steps of a supplement's parameters, as the dump of one holds them, and
+/// the parameters whose values they round.
+fn steps_of_supplement(
+    supplement: &Supplement,
+    place: u8,
+    rounding: Rounding,
+    rounded: &mut Vec<(u8, SupplementParameter)>,
+) -> [u8; SUPPLEMENT_BYTES] {
+    let mut steps = [0; SUPPLEMENT_BYTES];
+    for (parameter, step) in SupplementParameter::all().zip(&mut steps) {
+        *step = supplement.step(parameter, rounding);
+        if !supplement.is_step(parameter) {
+            rounded.push((place, parameter));
+        }
+    }
+    steps
+}
+
+/// The 35 bytes of a packed supplement of the 49 steps of the dump of one,
+/// every step within its range, laid out as [`SUPPLEMENT_USED`] says. The
+/// steps lie in the order of the parameters' numbers: 0 to 38 at their
+/// numbers, 64 to 73 at 39 to 48.
+fn pack_supplement(steps: &[u8; SUPPLEMENT_BYTES]) -> [u8; PACKED_SUPPLEMENT_BYTES] {
+    let mut packed = [0; PACKED_SUPPLEMENT_BYTES];
+    // The scaling modes of OP6 to OP1, parameters 0 to 5, in bits 0 to 5.
+    packed[0] = steps[..6].iter().rev().fold(0, |byte, &step| byte << 1 | step);
+    // The amplitude modulation sensitivities of OP6 to OP1, parameters 6 to
+    // 11, two to a byte, the lower-numbered in bits 2–0.
+    packed[1] = steps[7] << 3 | steps[6];
+    packed[2] = steps[9] << 3 | steps[8];
+    packed[3] = steps[11] << 3 | steps[10];
+    packed[4] = steps[19] << 4 | steps[14] << 3 | steps[13] << 2 | steps[12];
+    packed[5] = steps[16] << 2 | steps[15];
+    packed[6] = steps[18] << 4 | steps[17];
+    packed[7] = steps[21] << 1 | steps[20];
+    packed[8..24].copy_from_slice(&steps[22..38]);
+    packed[24] = steps[38];
+    // Parameters 64 to 71, and 72 and 73.
+    packed[26..34].copy_from_slice(&steps[39..47]);
+    packed[34] = steps[48] << 3 | steps[47];
+    packed
+}
+
+/// The 49 steps of the dump of one supplement of a packed one's 35, which
+/// [`pack_supplement`] lays out. A byte with unused bits set is a finding, and
+/// the bits are ignored or the dump refused; a field wider than its range, as
+/// the pitch bend's range's four bits are for 0 to 12, may give a step beyond
+/// it, which [`supplement_of`] finds.
+fn unpack_supplement(
+    packed: &[u8; PACKED_SUPPLEMENT_BYTES],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<[u8; SUPPLEMENT_BYTES], Error> {
+    for (byte, (&value, &used)) in (0..).zip(packed.iter().zip(&SUPPLEMENT_USED)) {
+        let bits = value & !used;
+        if bits != 0 {
+            let finding = Finding::SupplementUnusedBits {
+                supplement: place,
+                byte,
+                bits,
+            };
+            note(finding, options, findings)?;
+        }
+    }
+    let mut steps = [0; SUPPLEMENT_BYTES];
+    for (bit, step) in (0..6).zip(&mut steps[..6]) {
+        *step = packed[0] >> bit & 0x01;
+    }
+    steps[6] = packed[1] & 0x07;
+    steps[7] = packed[1] >> 3 & 0x07;
+    steps[8] = packed[2] & 0x07;
+    steps[9] = packed[2] >> 3 & 0x07;
+    steps[10] = packed[3] & 0x07;
+    steps[11] = packed[3] >> 3 & 0x07;
+    steps[12] = packed[4] & 0x03;
+    steps[13] = packed[4] >> 2 & 0x01;
+    steps[14] = packed[4] >> 3 & 0x01;
+    steps[19] = packed[4] >> 4 & 0x07;
+    steps[15] = packed[5] & 0x03;
+    steps[16] = packed[5] >> 2 & 0x0f;
+    steps[17] = packed[6] & 0x0f;
+    steps[18] = packed[6] >> 4 & 0x03;
+    steps[20] = packed[7] & 0x01;
+    steps[21] = packed[7] >> 1 & 0x0f;
+    steps[22..38].copy_from_slice(&packed[8..24]);
+    steps[38] = packed[24] & 0x07;
+    steps[39..47].copy_from_slice(&packed[26..34]);
+    steps[47] = packed[34] & 0x07;
+    steps[48] = packed[34] >> 3 & 0x01;
+    Ok(steps)
 }
 
 /// Sets a performance's parameter to a step: a step beyond its range is a
