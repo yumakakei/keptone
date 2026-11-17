@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# What libFuzzer may put into the inputs of the `kbm` target (-dict): the
+# comment mark, the ends of a line, the mark of an unmapped key, the ends of
+# MIDI's keys and past them, and a frequency.
+
+comment="!"
+line_feed="\x0A"
+carriage_return="\x0D"
+unmapped="x"
+minus="-"
+period="."
+lowest_key="0"
+highest_key="127"
+beyond_keys="128"
+frequency="440.0"

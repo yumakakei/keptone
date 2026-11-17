@@ -15,7 +15,10 @@
 
 #![allow(dead_code, reason = "each fuzz target takes the property of its own parser")]
 
+use std::fmt::Write as _;
+
 use keptone_model::json::{self, DEFAULT_MAX_DEPTH, Value};
+use keptone_model::scala::{self, Mapping, Pitch, Scale};
 use keptone_model::syx::{self, Content, Loss, Options, OutOfRange};
 use keptone_model::voice::Rounding;
 
@@ -121,4 +124,89 @@ fn names_once(value: &Value) -> bool {
         }
     }
     true
+}
+
+/// A scale file read, and, where it reads, the scale written again in the
+/// plainest form the format has and read back the same; an error names a line
+/// of the file, or the one after its last.
+pub fn read_scl(input: &[u8]) {
+    match scala::parse_scl(input) {
+        Ok(scale) => {
+            let again = scala::parse_scl(&write_scl(&scale)).expect("a scale written reads");
+            assert_eq!(again, scale);
+        }
+        Err(error) => assert!(error.line >= 1 && error.line <= lines(input) + 1),
+    }
+}
+
+/// A mapping file read, and, where it reads, the mapping written again in
+/// the plainest form the format has and read back the same; an error names a
+/// line of the file, or the one after its last.
+pub fn read_kbm(input: &[u8]) {
+    match scala::parse_kbm(input) {
+        Ok(mapping) => {
+            assert!(mapping.degrees().len() <= mapping.size());
+            let again = scala::parse_kbm(&write_kbm(&mapping)).expect("a mapping written reads");
+            assert_eq!(again, mapping);
+        }
+        Err(error) => assert!(error.line >= 1 && error.line <= lines(input) + 1),
+    }
+}
+
+/// The number of lines in a file, as the Scala parsers count them.
+fn lines(input: &[u8]) -> usize {
+    let mut count = 0;
+    let mut rest = input;
+    while !rest.is_empty() {
+        count += 1;
+        let Some(end) = rest.iter().position(|&byte| byte == b'\n' || byte == b'\r') else {
+            break;
+        };
+        let ending = if rest[end..].starts_with(b"\r\n") { 2 } else { 1 };
+        rest = &rest[end + ending..];
+    }
+    count
+}
+
+/// A scale as a `.scl` file, its cents in fixed notation with a period, as
+/// the format has them.
+fn write_scl(scale: &Scale) -> Vec<u8> {
+    let mut text = format!("{}\n{}\n", scale.description, scale.pitches.len());
+    for pitch in &scale.pitches {
+        match pitch {
+            Pitch::Cents(cents) => {
+                let mut value = cents.get().to_string();
+                if !value.contains('.') {
+                    value.push('.');
+                }
+                text += &value;
+            }
+            Pitch::Ratio(ratio) => {
+                write!(text, "{}/{}", ratio.numerator(), ratio.denominator()).expect("a string takes any text");
+            }
+        }
+        text.push('\n');
+    }
+    text.into_bytes()
+}
+
+/// A mapping as a `.kbm` file.
+fn write_kbm(mapping: &Mapping) -> Vec<u8> {
+    let mut text = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        mapping.size(),
+        mapping.first().get(),
+        mapping.last().get(),
+        mapping.middle().get(),
+        mapping.reference().get(),
+        mapping.frequency().get(),
+        mapping.octave()
+    );
+    for degree in mapping.degrees() {
+        match degree {
+            Some(degree) => writeln!(text, "{degree}").expect("a string takes any text"),
+            None => text += "x\n",
+        }
+    }
+    text.into_bytes()
 }

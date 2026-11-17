@@ -21,8 +21,9 @@ use std::path::Path;
 
 use common::{SplitMix64, random_bank, random_voice};
 use keptone_model::json;
+use keptone_model::scala;
 use keptone_model::syx::{self, Options};
-use properties::{read_json, read_syx};
+use properties::{read_json, read_kbm, read_scl, read_syx};
 
 /// How many inputs are made of each seed: fewer in the dev profile, whose
 /// code is some ten times slower.
@@ -132,5 +133,60 @@ fn json_takes_any_bytes() {
     }
     for input in regressions("json") {
         read_json(&input);
+    }
+}
+
+#[test]
+fn scl_takes_any_bytes() {
+    let seeds: [&[u8]; 4] = [
+        b"! equal.scl\n!\nTwelve equal steps of the octave\n 12\n!\n100.0\n200.\n300.0\n400.0\n500.0\n600.0\n\
+          700.0\n800.0\n900.0\n1000.0\n1100.0\n2/1\n",
+        b"Five-limit just intonation\r\n12\r\n16/15\r\n9/8\r\n6/5\r\n5/4 E\r\n4/3\r\n45/32\r\n3/2\r\n\
+          8/5\r\n5/3\r\n9/5\r\n15/8\r\n2/1\r\n",
+        b"Caf\xe9\r3\r-5.0\r10/20\r 3 cents\r",
+        b"\n0\n",
+    ];
+    let tokens: [&[u8]; 10] = [
+        b"!",
+        b"\n",
+        b"\r\n",
+        b"\r",
+        b".",
+        b"/",
+        b"-",
+        b" ",
+        b"18446744073709551615",
+        b"\xe9",
+    ];
+    let mut random = SplitMix64(13);
+    for seed in seeds {
+        assert!(scala::parse_scl(seed).is_ok(), "a seed that is not a scale");
+        for _ in 0..MUTATIONS / 4 {
+            read_scl(&mutate(&mut random, seed, &tokens));
+        }
+    }
+    for input in regressions("scl") {
+        read_scl(&input);
+    }
+}
+
+#[test]
+fn kbm_takes_any_bytes() {
+    let seeds: [&[u8]; 3] = [
+        b"! a mapping of twelve keys\n12\n0\n127\n60\n69\n440.0\n12\n! the entries\n0\n1\n2\n3\n4\n5\n\
+          6\n7\n8\n9\n10\n11\n",
+        b"0\r\n0\r\n127\r\n60\r\n60\r\n261.6255653\r\n0\r\n",
+        b"7\n21\n108\n60\n62\n293.66\n-7\n0\nx\n2\n-1\n",
+    ];
+    let tokens: [&[u8]; 9] = [b"!", b"\n", b"\r", b"x", b"-", b".", b"127", b"128", b"0"];
+    let mut random = SplitMix64(14);
+    for seed in seeds {
+        assert!(scala::parse_kbm(seed).is_ok(), "a seed that is not a mapping");
+        for _ in 0..MUTATIONS / 4 {
+            read_kbm(&mutate(&mut random, seed, &tokens));
+        }
+    }
+    for input in regressions("kbm") {
+        read_kbm(&input);
     }
 }

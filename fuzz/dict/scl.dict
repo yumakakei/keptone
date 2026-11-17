@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# What libFuzzer may put into the inputs of the `scl` target (-dict): the
+# comment mark, the three ends of a line, what a pitch is written with, a part
+# of a ratio at the end of 64 bits and beyond it, and a byte of ISO 8859-1.
+
+comment="!"
+line_feed="\x0A"
+carriage_return="\x0D"
+both_ends="\x0D\x0A"
+period="."
+slash="/"
+minus="-"
+space=" "
+tab="\x09"
+octave="2/1"
+octave_in_cents="1200.0"
+largest_part="18446744073709551615"
+beyond_part="18446744073709551616"
+latin_e_acute="\xE9"

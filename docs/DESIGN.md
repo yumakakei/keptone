@@ -343,7 +343,14 @@ Specified in `docs/STATE-FORMAT.md`, which is written in milestone M2.
 
 ### 11.4 Tuning
 
-`.scl` and `.kbm` parsers in `keptone-model` (total, fuzzed); MTS-ESP behind a feature and a setting.
+`.scl` and `.kbm` parsers in `keptone-model` (`keptone_model::scala`; total, fuzzed); MTS-ESP behind a feature and a setting. Where [SCALA-SCL] and [SCALA-KBM] leave things open, the parsers:
+
+- end a line at a line feed, a carriage return or both together, and take a line that begins with `!` as a comment;
+- take a scale's description as its first line that is not a comment, whole and possibly empty, as UTF-8 where its bytes are UTF-8 and as ISO 8859-1 where they are not, and pass over blank lines after it, and throughout a mapping;
+- take a value as the first run of characters on its line that are not spaces or tabs, and pass over the rest of the line, as the format says of a pitch;
+- read a pitch that holds a period as cents, `-?[0-9]+\.[0-9]*`, and any other as a ratio, `[0-9]+(/[0-9]+)?`, both parts above 0 and within 64 bits, a ratio alone over 1;
+- take a mapping's four keys as MIDI's, 0 to 127, its frequency as `[0-9]+(\.[0-9]*)?` above 0, its entries as integers or `x`, and the keys of its pattern after the last entry as unmapped, and refuse a mapping that leaves its reference key unmapped, as the format says;
+- pass over what follows a scale's last pitch or the last entry that a mapping's size allows, and allocate only as they read, never because a count in the file says so.
 
 ## 12. Dependencies
 

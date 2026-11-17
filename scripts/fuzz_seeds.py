@@ -18,7 +18,9 @@ messages among bytes that are none, and a dump whose checksum is wrong and some 
 No voice of Yamaha's is among them (docs/DESIGN.md §14). fuzz/seeds/json/ holds JSON texts of the subset that the
 native state is to be written in: an object of settings and values nested a few levels, with an integer of 64 bits;
 strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a few levels;
-and numbers at the ends of binary64's range. The script writes the same bytes every time.
+and numbers at the ends of binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard mappings of
+Scala's: equal steps in cents, just intonation in ratios, the three ends of a line, ISO 8859-1, a linear mapping and
+keys left unmapped. The script writes the same bytes every time.
 """
 
 import sys
@@ -147,7 +149,36 @@ def main() -> int:
     }
     write(SEEDS / "syx", seeds)
     write(SEEDS / "json", json_seeds())
+    write(SEEDS / "scl", scl_seeds())
+    write(SEEDS / "kbm", kbm_seeds())
     return 0
+
+
+def scl_seeds() -> dict[str, bytes]:
+    """The seeds of the scl target: twelve equal steps in cents, five-limit just intonation in ratios with CR and
+    LF, a scale of ISO 8859-1 ending its lines with CR alone, and a scale of no notes."""
+    equal = "! equal.scl\n!\nTwelve equal steps of the octave\n 12\n!\n"
+    equal += "".join(f"{100 * step}.0\n" for step in range(1, 12)) + "2/1\n"
+    ratios = ("16/15", "9/8", "6/5", "5/4 E", "4/3", "45/32", "3/2", "8/5", "5/3", "9/5", "15/8", "2/1")
+    just = "Five-limit just intonation\r\n12\r\n" + "".join(f"{ratio}\r\n" for ratio in ratios)
+    return {
+        "equal.scl": equal.encode(),
+        "just.scl": just.encode(),
+        "latin.scl": b"Caf\xe9\r3\r-5.0\r10/20\r 3 cents\r",
+        "empty.scl": b"\n0\n",
+    }
+
+
+def kbm_seeds() -> dict[str, bytes]:
+    """The seeds of the kbm target: twelve keys from middle C with A at 440 Hz, a linear mapping with CR and LF,
+    and a mapping of seven keys with one left unmapped and degrees below 0."""
+    twelve = "! a mapping of twelve keys\n12\n0\n127\n60\n69\n440.0\n12\n! the entries\n"
+    twelve += "".join(f"{degree}\n" for degree in range(12))
+    return {
+        "twelve.kbm": twelve.encode(),
+        "linear.kbm": b"0\r\n0\r\n127\r\n60\r\n60\r\n261.6255653\r\n0\r\n",
+        "seven.kbm": b"7\n21\n108\n60\n62\n293.66\n-7\n0\nx\n2\n-1\n",
+    }
 
 
 def json_seeds() -> dict[str, bytes]:

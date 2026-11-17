@@ -45,6 +45,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "kbm"
+path = "fuzz_targets/kbm.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scl"
+path = "fuzz_targets/scl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "syx"
 path = "fuzz_targets/syx.rs"
 test = false

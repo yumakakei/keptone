@@ -21,15 +21,17 @@
 //! - [`json`]: the subset of JSON that the native state and the themes are
 //!   written in, read by hand, nested as deep as `json.max_depth` lets it be
 //!   without taking the thread's stack;
-//! - [`sha256`]: the digest the native state carries of its voice.
+//! - [`sha256`]: the digest the native state carries of its voice;
+//! - [`scala`]: Scala's scales and keyboard mappings, `.scl` and `.kbm`, the
+//!   tuning of docs/MATH.md §2.1.
 //!
-//! The function data, the parameter changes and requests, the native state and
-//! Scala's `.scl` and `.kbm` files come later in the milestone. Every parser is
-//! total: any bytes give a value or an error, never a panic and never an
-//! unbounded allocation.
+//! The function data, the parameter changes and requests and the native state
+//! come later in the milestone. Every parser is total: any bytes give a value
+//! or an error, never a panic and never an unbounded allocation.
 #![forbid(unsafe_code)]
 
 pub mod json;
+pub mod scala;
 pub mod sha256;
 pub mod syx;
 pub mod voice;
