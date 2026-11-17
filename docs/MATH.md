@@ -331,6 +331,16 @@ It is unipolar: it only attenuates.
 - Glide speed is $`v(\text{TIME})`$ semitones per second, linear in pitch. MSFA fits $`2100\cdot 2^{-0.062c}`$ over a 0–127 control $`c`$ (glissando $`1300\cdot2^{-0.062c}`$). Map TIME 0–99 onto it with $`c = 127\,\text{TIME}/99`$ [MSFA `porta.cpp`; verify against AJXS-ROM].
 - Glissando quantises the glide to the tuning's notes.
 
+### 7.4 Performances of the DX1 and the TX7
+
+A performance of the DX1 or the TX7 gives each side, A and B, the function data of §7.1 and §7.3, but with each controller's sensitivity $`s`$ from 0 to 15 where the DX7's range $`r`$ runs from 0 to 99 [TX7-MANUAL] (DESIGN §11.2). With `syx.performance_sensitivity = linear`, the default, the range is in proportion:
+
+```math
+r = \frac{99s}{15}
+```
+
+so that 15 gives 99 and the steps between give values between the range's steps. With `firmware`, it is $`r = \lfloor 53s/8\rfloor`$, as the DX7's firmware computes it, the high byte of $`212s`$ shifted left by 3: 0, 6, 13, 19, 26, 33, 39, 46, 53, 59, 66, 72, 79, 86, 92, 99 [AJXS-ROM]. A range written as a sensitivity is $`15r/99`$, which a dump rounds to a step as `syx.export_rounding` says; under either scale, a range given by a step comes back to that step when rounded to the nearest.
+
 ## 8. Operators and algorithms (`keptone-engine::graph`)
 
 ### 8.1 Algorithm data
@@ -660,7 +670,7 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 | Forms agree on the engine | a full render with `engine.kernels = auto` vs `portable`, non-chaotic patches | ≤ the error budget the contracts imply (derived per patch class; start at −200 dBFS) |
 | Chaotic regimes | as above, patches with β > 1 | long-term spectrum (Welch) within 0.1 dB below 20 kHz; level statistics within 0.1 dB |
 | Alias metric | each patch of `conformance/patches/` rendered at $`f_{\mathrm{s}}`$ and by the reference renderer (`engine.oversampling = 64`, FIR decimation, `adaa.order = 0`); the residual's energy below min(20 kHz, 0.45 $`f_{\mathrm{s}}`$), in dB relative to the signal | regression baselines in `bench/baselines.toml`; may only improve |
-| .syx round trip | every valid dump → model → dump | byte-identical |
+| .syx round trip | every valid dump, parameter change and dump request → model → message; a performance under format 2 is written under 1 | byte-identical |
 | Parsers | random mutations of the seeds (SplitMix64) plus `fuzz/regressions/` on every test run; libFuzzer in CI | never a panic; every input is accepted or rejected |
 | Finiteness | random patches × random event streams × random settings | output always finite; the audio thread never allocates (RTSan) |
 
@@ -720,4 +730,5 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `syx.accept_bad_checksum` | true | bool | DESIGN §11.2 |
 | `syx.out_of_range` | clamp | clamp / reject | DESIGN §11.2 |
 | `syx.export_rounding` | nearest | nearest / floor | DESIGN §7.4 |
+| `syx.performance_sensitivity` | linear | linear / firmware | 7.4 |
 | `json.max_depth` | 64 | ≥ 0 | DESIGN §11.1 |

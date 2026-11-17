@@ -15,9 +15,16 @@
 //!
 //! - [`voice`]: the DX7's voice, every parameter a range type, and the numbers
 //!   the DX7 gives its parameters;
-//! - [`syx`]: the DX7's dumps of one voice and of 32, read from `.syx` files
-//!   and SysEx messages, however many a file holds, and written back byte for
-//!   byte;
+//! - [`function`]: the DX7's function data, of range types as well, and their
+//!   numbers;
+//! - [`performance`]: the performances of the DX1 and the TX7, two sides of
+//!   function data each, and their numbers;
+//! - [`syx`]: the DX7's system-exclusive messages and its family's, read from
+//!   `.syx` files and from hosts, however many a file holds, and written back
+//!   byte for byte: the dumps of voices and of performances, the parameter
+//!   changes of voices, of function data and of performances, the presses of
+//!   the DX7's panel buttons and of the DX7II's switches, the TX7's own
+//!   settings and condition, and dump requests;
 //! - [`json`]: the subset of JSON that the native state and the themes are
 //!   written in, read by hand, nested as deep as `json.max_depth` lets it be
 //!   without taking the thread's stack;
@@ -25,12 +32,14 @@
 //! - [`scala`]: Scala's scales and keyboard mappings, `.scl` and `.kbm`, the
 //!   tuning of docs/MATH.md §2.1.
 //!
-//! The function data, the parameter changes and requests and the native state
-//! come later in the milestone. Every parser is total: any bytes give a value
-//! or an error, never a panic and never an unbounded allocation.
+//! The native state comes later in the milestone. Every parser is total: any
+//! bytes give a value or an error, never a panic and never an unbounded
+//! allocation.
 #![forbid(unsafe_code)]
 
+pub mod function;
 pub mod json;
+pub mod performance;
 pub mod scala;
 pub mod sha256;
 pub mod syx;

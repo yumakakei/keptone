@@ -54,8 +54,19 @@ impl<const MAX: u8> Value<MAX> {
     }
 
     /// The value of a step, or `MAX` if the step is more.
-    fn saturating(step: u8) -> Self {
+    pub(crate) fn saturating(step: u8) -> Self {
         Self(f64::from(step.min(MAX)))
+    }
+
+    /// A number taken into the scale: below 0, NaN and −0 as 0, above `MAX`
+    /// as `MAX`. The conversions between scales give numbers already in it,
+    /// and take it as a guard.
+    pub(crate) fn clamped(value: f64) -> Self {
+        if value > 0.0 {
+            Self(value.min(f64::from(MAX)))
+        } else {
+            Self::ZERO
+        }
     }
 
     /// The value.
@@ -86,7 +97,7 @@ pub enum Rounding {
 
 impl Rounding {
     /// The step that a value of [0, 127] rounds to.
-    fn apply(self, value: f64) -> u8 {
+    pub(crate) fn apply(self, value: f64) -> u8 {
         let step = match self {
             Self::Nearest => value.round_ties_even(),
             Self::Floor => value.floor(),

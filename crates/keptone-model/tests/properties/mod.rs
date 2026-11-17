@@ -19,12 +19,15 @@ use std::fmt::Write as _;
 
 use keptone_model::json::{self, DEFAULT_MAX_DEPTH, Value};
 use keptone_model::scala::{self, Mapping, Pitch, Scale};
-use keptone_model::syx::{self, Content, Loss, Options, OutOfRange};
+use keptone_model::syx::{self, Content, Dump, Loss, Options, OutOfRange, ParameterChange, PerformanceLoss, Sysex};
 use keptone_model::voice::Rounding;
 
 /// A file read with every choice of the options. The messages lie in the file
-/// one after another, and every dump read, written again, is read back with
-/// nothing to report and the same voices.
+/// one after another, and every message read, written again, is read back with
+/// nothing to report and the same in every way: a dump with the same channel
+/// and voices, a parameter change with the same channel and change, a request
+/// with the same channel and request. A message read with nothing to report is
+/// written back byte for byte as it was (docs/MATH.md §16).
 pub fn read_syx(input: &[u8]) {
     let strict = Options {
         accept_bad_checksum: false,
@@ -41,20 +44,72 @@ pub fn read_syx(input: &[u8]) {
                 assert!(message.offset >= end && message.length > 0);
                 end = message.offset + message.length;
                 assert!(end <= input.len());
-                let Ok(dump) = message.result else {
+                let Ok(sysex) = message.result else {
                     continue;
                 };
-                let (written, loss) = match &dump.content {
-                    Content::Voice(voice) => syx::write_voice(voice, dump.channel, Rounding::Nearest),
-                    Content::Bank(voices) => syx::write_bank(voices, dump.channel, Rounding::Nearest),
-                };
-                assert_eq!(loss, Loss::default());
-                let again = syx::decode(&written, strict).expect("a dump written is valid");
-                assert_eq!(again.findings, []);
-                assert_eq!(again.channel, dump.channel);
-                assert_eq!(again.content, dump.content);
+                let (_, from) = input.split_at(message.offset);
+                let (read, _) = from.split_at(message.length);
+                match sysex {
+                    Sysex::Dump(dump) => {
+                        let written = written_again(&dump);
+                        if dump.findings.is_empty() {
+                            assert_eq!(written, read);
+                        }
+                        let Ok(Sysex::Dump(again)) = syx::decode(&written, strict) else {
+                            panic!("a dump written is not read back as one");
+                        };
+                        assert_eq!(again.findings, []);
+                        assert_eq!(again.channel, dump.channel);
+                        assert_eq!(again.content, dump.content);
+                    }
+                    Sysex::Change(change) => {
+                        let written = syx::write_change(change.channel, change.change);
+                        if change.finding.is_none() {
+                            assert_eq!(written, read);
+                        }
+                        let again = syx::decode(&written, strict);
+                        let expected = ParameterChange {
+                            finding: None,
+                            ..change
+                        };
+                        assert_eq!(again, Ok(Sysex::Change(expected)));
+                    }
+                    Sysex::Request(request) => {
+                        let written = syx::write_request(request.channel, request.requested);
+                        assert_eq!(written, read);
+                        assert_eq!(syx::decode(&written, strict), Ok(Sysex::Request(request)));
+                    }
+                }
             }
         }
+    }
+}
+
+/// A dump written again from what was read of it, which it holds exactly.
+fn written_again(dump: &Dump) -> Vec<u8> {
+    let (channel, rounding) = (dump.channel, Rounding::Nearest);
+    match &dump.content {
+        Content::Voice(voice) => {
+            let (written, loss) = syx::write_voice(voice, channel, rounding);
+            assert_eq!(loss, Loss::default());
+            written
+        }
+        Content::Bank(voices) => {
+            let (written, loss) = syx::write_bank(voices, channel, rounding);
+            assert_eq!(loss, Loss::default());
+            written
+        }
+        Content::Performance(performance) => {
+            let (written, loss) = syx::write_performance(performance, channel, rounding);
+            assert_eq!(loss, PerformanceLoss::default());
+            written
+        }
+        Content::Performances(performances) => {
+            let (written, loss) = syx::write_performances(performances, channel, rounding);
+            assert_eq!(loss, PerformanceLoss::default());
+            written
+        }
+        Content::Condition(condition) => syx::write_condition(condition, channel),
     }
 }
 

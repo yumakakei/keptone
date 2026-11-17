@@ -19,7 +19,7 @@
 mod common;
 
 use common::{SplitMix64, dump, pack, random_bank, random_steps, random_voice};
-use keptone_model::syx::{self, Channel, Content, Dump, Error, Finding, Loss, Options, OutOfRange};
+use keptone_model::syx::{self, Change, Channel, Content, Dump, Error, Finding, Loss, Options, OutOfRange, Sysex};
 use keptone_model::voice::{Curve, Parameter, Rounding, Value, Voice, Wave};
 
 /// The options that refuse whatever a valid dump does not hold.
@@ -38,11 +38,19 @@ fn parameter(number: u8) -> Parameter {
     Parameter::new(number).expect("a parameter")
 }
 
+/// The dump that a message decoded is.
+fn dump_in(sysex: Sysex) -> Dump {
+    match sysex {
+        Sysex::Dump(dump) => dump,
+        other => panic!("not a dump: {other:?}"),
+    }
+}
+
 /// The voice of a single-voice dump.
 fn voice_of(dump: Dump) -> Voice {
     match dump.content {
         Content::Voice(voice) => *voice,
-        Content::Bank(_) => panic!("a bank, not a voice"),
+        other => panic!("not a voice: {other:?}"),
     }
 }
 
@@ -50,7 +58,7 @@ fn voice_of(dump: Dump) -> Voice {
 fn bank_of(dump: Dump) -> Box<[Voice; 32]> {
     match dump.content {
         Content::Bank(voices) => voices,
-        Content::Voice(_) => panic!("a voice, not a bank"),
+        other => panic!("not a bank: {other:?}"),
     }
 }
 
@@ -68,7 +76,7 @@ fn each_byte_lands_in_its_field() {
     let steps: Vec<u8> = (0..155)
         .map(|number| u8::try_from((7 * number + 3) % (usize::from(common::largest(number)) + 1)).expect("a step"))
         .collect();
-    let voice = voice_of(syx::decode(&dump(0, 0, &steps), STRICT).expect("a valid dump"));
+    let voice = voice_of(dump_in(syx::decode(&dump(0, 0, &steps), STRICT).expect("a valid dump")));
     for (k, operator) in voice.operators.iter().enumerate() {
         // OP1's parameters come last, OP6's first.
         let step = |offset: usize| steps[21 * (5 - k) + offset];
@@ -116,7 +124,7 @@ fn single_voice_dumps_come_back_byte_for_byte() {
     for _ in 0..2000 {
         let channel = random.up_to(15);
         let message = random_voice(&mut random, channel);
-        let dump = syx::decode(&message, STRICT).expect("a valid dump");
+        let dump = dump_in(syx::decode(&message, STRICT).expect("a valid dump"));
         assert_eq!(dump.findings, []);
         assert_eq!(dump.channel.get(), channel);
         let voice = voice_of(dump);
@@ -136,7 +144,7 @@ fn bank_dumps_come_back_byte_for_byte() {
         let channel = random.up_to(15);
         let (steps, message) = random_bank(&mut random, channel);
         assert_eq!(message.len(), 4104);
-        let dump = syx::decode(&message, STRICT).expect("a valid dump");
+        let dump = dump_in(syx::decode(&message, STRICT).expect("a valid dump"));
         assert_eq!(dump.findings, []);
         assert_eq!(dump.channel.get(), channel);
         let channel = dump.channel;
@@ -155,9 +163,9 @@ fn a_voice_is_the_same_in_both_dumps() {
     let mut random = SplitMix64(3);
     for _ in 0..20 {
         let (steps, message) = random_bank(&mut random, 0);
-        let voices = bank_of(syx::decode(&message, STRICT).expect("a valid dump"));
+        let voices = bank_of(dump_in(syx::decode(&message, STRICT).expect("a valid dump")));
         for (voice, steps) in voices.iter().zip(&steps) {
-            let single = voice_of(syx::decode(&dump(0, 0, steps), STRICT).expect("a valid dump"));
+            let single = voice_of(dump_in(syx::decode(&dump(0, 0, steps), STRICT).expect("a valid dump")));
             assert_eq!(&single, voice);
         }
     }
@@ -166,7 +174,9 @@ fn a_voice_is_the_same_in_both_dumps() {
 #[test]
 fn values_between_steps_are_rounded_and_reported() {
     let mut random = SplitMix64(4);
-    let mut voice = voice_of(syx::decode(&random_voice(&mut random, 0), STRICT).expect("a valid dump"));
+    let mut voice = voice_of(dump_in(
+        syx::decode(&random_voice(&mut random, 0), STRICT).expect("a valid dump"),
+    ));
     // OP6's output level, parameter 16; OP1's R1, 105; the feedback, 135; and
     // the transposition, 144.
     voice.operators[5].output_level = Value::new(3.5).expect("a level");
@@ -181,7 +191,7 @@ fn values_between_steps_are_rounded_and_reported() {
         assert_eq!(loss.rounded, rounded);
         assert_eq!(loss.switched_off, []);
         // Read back, the voice holds the steps.
-        let back = voice_of(syx::decode(&message, STRICT).expect("a valid dump"));
+        let back = voice_of(dump_in(syx::decode(&message, STRICT).expect("a valid dump")));
         assert_eq!(back.operators[5].output_level, value(expected[0]));
         assert_eq!(back.transpose, value(expected[3]));
     }
@@ -191,7 +201,7 @@ fn values_between_steps_are_rounded_and_reported() {
 fn switches_are_reported_lost() {
     let mut random = SplitMix64(5);
     let (_, message) = random_bank(&mut random, 0);
-    let mut voices = bank_of(syx::decode(&message, STRICT).expect("a valid dump"));
+    let mut voices = bank_of(dump_in(syx::decode(&message, STRICT).expect("a valid dump")));
     let switches = parameter(155);
     assert!(
         voices
@@ -232,7 +242,7 @@ fn wrong_checksums_are_reported() {
             expected: right,
             found: wrong,
         };
-        let dump = syx::decode(&message, Options::default()).expect("a dump");
+        let dump = dump_in(syx::decode(&message, Options::default()).expect("a dump"));
         assert_eq!(dump.findings, [finding]);
         let refusing = Options {
             accept_bad_checksum: false,
@@ -244,6 +254,7 @@ fn wrong_checksums_are_reported() {
         let (written, _) = match dump.content {
             Content::Voice(voice) => syx::write_voice(&voice, channel, Rounding::Nearest),
             Content::Bank(voices) => syx::write_bank(&voices, channel, Rounding::Nearest),
+            other => panic!("neither a voice nor a bank: {other:?}"),
         };
         message[at] = right;
         assert_eq!(written, message);
@@ -261,7 +272,7 @@ fn steps_out_of_range_are_clamped_or_refused() {
         steps[number] = step;
     }
     let message = dump(0, 0, &steps);
-    let dump = syx::decode(&message, Options::default()).expect("a dump");
+    let dump = dump_in(syx::decode(&message, Options::default()).expect("a dump"));
     let findings: Vec<Finding> = beyond
         .iter()
         .map(|&(number, step)| Finding::OutOfRange {
@@ -285,7 +296,7 @@ fn steps_out_of_range_are_clamped_or_refused() {
     assert_eq!(syx::decode(&message, rejecting), Err(Error::Refused(findings[0])));
     // Written again, the dump is valid.
     let (written, _) = syx::write_voice(&voice, Channel::default(), Rounding::Nearest);
-    let again = syx::decode(&written, STRICT).expect("a valid dump");
+    let again = dump_in(syx::decode(&written, STRICT).expect("a valid dump"));
     assert_eq!(voice_of(again), voice);
 }
 
@@ -307,7 +318,7 @@ fn packed_bytes_out_of_range_are_clamped_or_refused() {
     message[byte(31, 85 + 14)] = 0x7f;
     let at = message.len() - 2;
     message[at] = common::checksum(&message[6..at]);
-    let dump = syx::decode(&message, Options::default()).expect("a dump");
+    let dump = dump_in(syx::decode(&message, Options::default()).expect("a dump"));
     let expected = [
         Finding::UnusedBits {
             voice: 0,
@@ -347,7 +358,10 @@ fn packed_bytes_out_of_range_are_clamped_or_refused() {
     assert_eq!(syx::decode(&message, rejecting), Err(Error::Refused(expected[0])));
     // Written again, the bank is valid, and holds the same voices.
     let (written, _) = syx::write_bank(&voices, Channel::default(), Rounding::Nearest);
-    assert_eq!(bank_of(syx::decode(&written, STRICT).expect("a valid dump")), voices);
+    assert_eq!(
+        bank_of(dump_in(syx::decode(&written, STRICT).expect("a valid dump"))),
+        voices
+    );
 }
 
 #[test]
@@ -357,8 +371,8 @@ fn messages_that_are_not_dumps() {
     let voice = random_voice(&mut random, 0);
     assert_eq!(syx::decode(&[], options), Err(Error::NotSysEx));
     assert_eq!(syx::decode(&[0xf0], options), Err(Error::NotSysEx));
-    assert_eq!(syx::decode(&[0xf0, 0xf7], options), Err(Error::NotDump));
-    assert_eq!(syx::decode(&[0xf0, 0x43, 0xf7], options), Err(Error::NotDump));
+    assert_eq!(syx::decode(&[0xf0, 0xf7], options), Err(Error::Unsupported));
+    assert_eq!(syx::decode(&[0xf0, 0x43, 0xf7], options), Err(Error::Unsupported));
     assert_eq!(syx::decode(&voice[..162], options), Err(Error::NotSysEx));
     assert_eq!(syx::decode(&voice[1..], options), Err(Error::NotSysEx));
     let changed = |at: usize, byte: u8| {
@@ -367,12 +381,14 @@ fn messages_that_are_not_dumps() {
         syx::decode(&message, options)
     };
     // A byte with its high bit set in the middle; another maker's message; a
-    // parameter change's sub-status; a format of neither dump; a byte count
+    // parameter change's sub-status, whose data is then far more than its one
+    // byte; a sub-status of no kind; a format of neither dump; a byte count
     // that is not the format's.
     assert_eq!(changed(80, 0x80), Err(Error::NotSysEx));
-    assert_eq!(changed(1, 0x41), Err(Error::NotDump));
-    assert_eq!(changed(2, 0x10), Err(Error::NotDump));
-    assert_eq!(changed(3, 5), Err(Error::NotDump));
+    assert_eq!(changed(1, 0x41), Err(Error::Unsupported));
+    assert_eq!(changed(2, 0x10), Err(Error::Length));
+    assert_eq!(changed(2, 0x30), Err(Error::Unsupported));
+    assert_eq!(changed(3, 5), Err(Error::Unsupported));
     assert_eq!(changed(5, 0x1c), Err(Error::Length));
     assert_eq!(changed(4, 0x20), Err(Error::Length));
     // A byte more, and a byte less.
@@ -403,8 +419,8 @@ fn files_are_scanned_for_every_message() {
     // A note between messages.
     file.extend_from_slice(&[0x90, 0x3c, 0x40]);
     add(&mut file, &bank, 4104);
-    // A parameter change, another maker's message, and a message cut short by
-    // the F0 of the next.
+    // A parameter change of the transposition, 144, to 5; another maker's
+    // message; and a message cut short by the F0 of the next.
     add(&mut file, &[0xf0, 0x43, 0x10, 0x01, 0x10, 0x05, 0xf7], 7);
     add(&mut file, &[0xf0, 0x41, 0x10, 0x42, 0x12, 0xf7], 6);
     add(&mut file, &[0xf0, 0x43, 0x00, 0x00, 0x01], 5);
@@ -432,8 +448,8 @@ fn files_are_scanned_for_every_message() {
         [
             Ok(()),
             Ok(()),
-            Err(Error::NotDump),
-            Err(Error::NotDump),
+            Ok(()),
+            Err(Error::Unsupported),
             Err(Error::Unterminated),
             Ok(()),
             Err(Error::Unterminated),
@@ -441,9 +457,15 @@ fn files_are_scanned_for_every_message() {
             Err(Error::Unterminated),
         ]
     );
-    let Ok(dump) = &messages[1].result else {
+    let Ok(Sysex::Dump(dump)) = &messages[1].result else {
         panic!("a dump")
     };
+    let Ok(Sysex::Change(change)) = &messages[2].result else {
+        panic!("a parameter change")
+    };
+    let transposition = Parameter::new(144).expect("a parameter");
+    assert!(matches!(change.change, Change::Voice(step) if step.parameter() == transposition && step.step() == 5));
+    assert_eq!((change.channel.get(), change.finding), (0, None));
     assert_eq!(dump.channel.get(), 2);
     assert!(matches!(dump.content, Content::Bank(_)));
     // A file of nothing, and of no message.
@@ -462,14 +484,14 @@ fn channels() {
 fn every_step_at_its_largest() {
     // A voice of every step its largest fills every bit a packed voice uses.
     let steps: Vec<u8> = (0..155).map(common::largest).collect();
-    let voice = voice_of(syx::decode(&dump(0, 0, &steps), STRICT).expect("a valid dump"));
+    let voice = voice_of(dump_in(syx::decode(&dump(0, 0, &steps), STRICT).expect("a valid dump")));
     assert_eq!(steps_of(&voice), steps);
     let voices: [Voice; 32] = std::array::from_fn(|_| voice.clone());
     let (written, loss) = syx::write_bank(&voices, Channel::default(), Rounding::Nearest);
     assert_eq!(loss, Loss::default());
     assert_eq!(&written[6..134], pack(&steps).as_slice());
     assert_eq!(
-        bank_of(syx::decode(&written, STRICT).expect("a valid dump")).as_slice(),
+        bank_of(dump_in(syx::decode(&written, STRICT).expect("a valid dump"))).as_slice(),
         voices
     );
 }

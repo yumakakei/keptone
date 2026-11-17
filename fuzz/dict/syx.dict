@@ -9,7 +9,13 @@
 # What libFuzzer may put into the inputs of the `syx` target (-dict): the bytes
 # that start and end a system-exclusive message, the headers of the DX7's two
 # dumps of voices and of its other messages, a status byte, and the steps at
-# the ends of the ranges, [DEXED-SYSEX].
+# the ends of the ranges, [DEXED-SYSEX]; the group bytes of a parameter change,
+# the voice group with its number's high bits, the function group, which the
+# DX7's panel buttons share [AJXS-ROM], and the DX7II's switch remote; a
+# switch's data; a universal bulk dump's request and classification name
+# [DX7II-MANUAL]; and the TX7's: the headers of the dumps of performances and
+# of the condition acknowledge, the group bytes of its parameter changes, and
+# its model name [TX7-MANUAL].
 
 start="\xF0"
 end="\xF7"
@@ -20,6 +26,20 @@ voice_count="\x01\x1B"
 bank_count="\x20\x00"
 parameter_change="\xF0\x43\x10"
 request="\xF0\x43\x20"
+voice_group_high="\xF0\x43\x10\x01"
+function_group="\xF0\x43\x10\x08"
+switch_remote="\xF0\x43\x10\x1B"
+universal_request="\xF0\x43\x20\x7E"
+classification="LM  "
+released="\x00"
+largest_switches="\x3F"
+performance_header="\xF0\x43\x00\x01\x00\x5E"
+performances_header="\xF0\x43\x00\x02\x20\x00"
+condition_header="\xF0\x43\x00\x7D\x00\x10"
+performance_group="\xF0\x43\x10\x04"
+tx_group="\xF0\x43\x10\x11"
+operator_select="\x01\x1C"
+model="8950  "
 note_on="\x90"
 largest_level="\x63"
 beyond_level="\x64"

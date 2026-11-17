@@ -99,7 +99,7 @@ assets/themes/      the built-in themes (*.keptone-theme), embedded in keptone-u
 | keptone-cpu | Features and level in effect; `KEPTONE_ISA=<level>` caps it and `KEPTONE_KERNELS=portable` forces the reference (kiral's `Request`). | forbid | std |
 | keptone-math | Reference functions (MATH §9, §10, §12), all `#[inline]`, all scalar binary64 with `mul_add`. | forbid | — |
 | keptone-kernels | Vector forms, one module per architecture (§10). Each call into assembly is one `unsafe` block whose comment says what was checked. | per-arch modules only | keptone-cpu, keptone-math |
-| keptone-model | Typed patch model with range types; DX7 codecs (1-voice, 32-voice packed, parameter change incl. function group 2, request messages); native state (docs/STATE-FORMAT.md); `.scl` and `.kbm`. | forbid | keptone-math (checksums need nothing else) |
+| keptone-model | Typed patch model with range types; DX7 codecs (1-voice, 32-voice packed, the DX1's and the TX7's performances, parameter change incl. function group 2, the DX7's panel switches, the DX7II's switch remote and the TX7's changes, request messages); native state (docs/STATE-FORMAT.md); `.scl` and `.kbm`. | forbid | keptone-math (checksums need nothing else) |
 | keptone-engine | MATH §1–§14. Owns no threads and allocates only in `prepare()`. | forbid | keptone-math, keptone-kernels, keptone-model |
 | keptone-rt | SPSC ring, triple-buffer mailbox, drop-queue. | yes (atomics + `UnsafeCell`), each block one operation | std |
 | keptone-host | Processor/main/worker split (§5), parameter table and smoothing, event decoding (CLAP events, MIDI 1.0, MIDI 2.0 UMP, SysEx), state save/load. | forbid | engine, model, rt |
@@ -330,11 +330,14 @@ Specified in `docs/STATE-FORMAT.md`, which is written in milestone M2.
 - Unknown keys are kept and written back, so newer versions round-trip through older ones.
 - A host state that fails to parse leaves the plugin unchanged and is reported.
 
-### 11.2 Voices and banks
+### 11.2 Voices, banks and other messages
 
+- Keptone is upward compatible with the DX7 rather than a copy of it (§15): it reads every message the DX7 reads, and those of its family that the DX7 does not, the DX1's, the TX7's and the DX7II's, and what the DX7's own manual documents where its firmware differs, wherever they mean nothing that conflicts with what the DX7 takes.
 - DX7 `.syx` 1-voice and 32-voice dumps are read and written exactly [DEXED-SYSEX] (`keptone_model::syx`). Concatenated and garbage-prefixed files are scanned for every well-formed message, not only the first. A message cut short, by another status byte or by the end of the file, is reported, and the scan goes on from the byte that cut it.
 - Checksum mismatches are reported. The data is loaded only if `syx.accept_bad_checksum` (default `true`) allows it.
-- Out-of-range bytes are reported: a step beyond its parameter's range, and a packed byte that sets bits its format leaves unused. They are mapped by an explicit, documented policy (`syx.out_of_range = clamp | reject`, default `clamp`), not by the ad-hoc scaling Dexed uses: `clamp` takes a step beyond the range as the range's end and ignores unused bits, and `reject` refuses the message. A message is loaded or refused whole.
+- The performances of the DX1 and the TX7 (`keptone_model::performance`) are read and written exactly [TX7-MANUAL]: the dump of one, 94 bytes, under format 1, and under 2 as [DX7-MANUAL] prints it, which is reported and written under 1; and the dump of 64, packed into 64 bytes each, under 2. A performance holds two sides, A and B, each with the function data, its controllers' sensitivities 0–15 where the DX7's ranges are 0–99 (MATH §7.4), and an attenuation; which side an instrument that plays one takes; the key assign mode; a name; and the bytes the TX7's manual leaves unnamed. Each dump holds all of it but one of the last two, and its writer reports what it could not hold. The TX7's condition acknowledge (format 125) is read and written as well.
+- The other messages of the DX7 and its family are read and written by the same module: parameter changes of the voice group (0, parameters 0–155, the number's high bits in the group byte, and 156, the operator select of the TX7 and the DX7II, which number the operators in opposite orders and whose step is kept as it comes) and of the function group (2, parameters 64–77) [DEXED-SYSEX] [DX7-MANUAL] [TX7-MANUAL] [DX7II-MANUAL]; the DX7's panel switch messages, group 2 with numbers 0–41, a button pressed or released [AJXS-ROM]; the DX7II's switch remote, group byte 0x1B with switches 0–45 [DX7II-MANUAL]; the TX7's DX performance parameter change, group 1, and TX function parameter change, group 4 with the group byte's low bits 1 [TX7-MANUAL]; and dump requests of formats 0, 1, 2, 5, 6, 9 and 125, and of a universal bulk dump by its names [DX7II-MANUAL] [TX7-MANUAL]. Every other message is reported as one of a kind not read.
+- Out-of-range bytes are reported: a step outside its parameter's range, a packed byte that sets bits its format leaves unused, and a switch's data that is neither 0 (released) nor 127 (pressed). They are mapped by an explicit, documented policy (`syx.out_of_range = clamp | reject`, default `clamp`), not by the ad-hoc scaling Dexed uses: `clamp` takes a step outside the range as the range's nearer end, ignores unused bits and takes a switch's data other than 0 as pressed, as the DX7's firmware does [AJXS-ROM]; `reject` refuses the message. A message is loaded or refused whole.
 - Later: DX7II/TX802 supplements (AMEM/ACED, the TX802 performance) and user graphs in the native format.
 
 ### 11.3 Themes
@@ -460,6 +463,11 @@ These are recorded here and settled by the author (and GRØVeN where it is their
    - The librarian sends them to a hardware DX7, which answers no request, to make it dump: with SYS INFO AVAIL, a voice button sends that voice, and FUNCTION, button 8 to MIDI transmit and YES send the bank [AJXS-ROM].
    - A setting may map them to Keptone's own actions instead.
    - `keptone-model` decodes and encodes all of these messages (M2); the host answers and acts on them (M5).
+8. ~~The DX1's performance~~ — **decided** (2026-11-17): Keptone is upward compatible with the DX7, not a copy of it, and reads what the DX7 and its family send wherever it can (§11.2).
+   - The DX7 receives a dump of one performance in 94 bytes, the A side of a DX1's [DX7-MANUAL], and takes from it the number of a voice, which it selects, and the function data, passing the rest over [AJXS-ROM]. Its manual prints the dump's format number as 2; the TX7's numbers it 1 and gives 2 to the dump of 64 performances [TX7-MANUAL], and firmware 1.8 takes 1 and passes a dump of 2 over [AJXS-ROM]. Keptone reads it under both, and writes it under 1.
+   - It reads the dump of 64 performances and the TX7's other messages as well: the DX performance and TX function parameter changes, the operator select, the condition acknowledge, and the requests of formats 1, 2 and 125.
+   - A performance's sensitivities, 0–15, become the DX7's ranges in proportion by default, or as the firmware has them, as `syx.performance_sensitivity` says (MATH §7.4).
+   - `keptone-model` decodes and encodes them (M2); the host acts on them (M5): which side it takes (the DX7 takes A, and the TX7 the side its voice select names), the voice that byte 0 selects, and the TX7's settings.
 
 ## 16. Milestones
 

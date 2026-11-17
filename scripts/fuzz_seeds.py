@@ -15,12 +15,18 @@ and checksums that a parser checks before anything else. fuzz/seeds/syx/ holds D
 are random numbers, each within the range of its parameter, laid out as [DEXED-SYSEX] lays them out (stated
 again here, apart from keptone-model and its tests): a single-voice dump, a 32-voice dump, a file of several
 messages among bytes that are none, and a dump whose checksum is wrong and some of whose bytes are out of range.
-No voice of Yamaha's is among them (docs/DESIGN.md §14). fuzz/seeds/json/ holds JSON texts of the subset that the
-native state is to be written in: an object of settings and values nested a few levels, with an integer of 64 bits;
-strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a few levels;
-and numbers at the ends of binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard mappings of
-Scala's: equal steps in cents, just intonation in ratios, the three ends of a line, ISO 8859-1, a linear mapping and
-keys left unmapped. The script writes the same bytes every time.
+No voice of Yamaha's is among them (docs/DESIGN.md §14). Beside them, the dumps of the performances of the DX1 and the
+TX7, of one and of 64, laid out as [TX7-MANUAL] lays them out, of random steps; and a file of the DX7's other messages
+and its family's: parameter changes of voice parameters, of the operators' switches and of every function parameter,
+the presses of the DX7's panel buttons that make it send its bank [AJXS-ROM], switches of the DX7II's switch remote,
+the TX7's changes of a performance, of its own settings and of its operator select, dump requests [DX7II-MANUAL]
+[TX7-MANUAL], a performance under format number 2 and a condition acknowledge, with some out of range and some of no
+kind read. fuzz/seeds/json/ holds JSON texts of the subset
+that the native state is to be written in: an object of settings and values nested a few levels, with an integer of
+64 bits; strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a
+few levels; and numbers at the ends of binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and
+keyboard mappings of Scala's: equal steps in cents, just intonation in ratios, the three ends of a line, ISO 8859-1,
+a linear mapping and keys left unmapped. The script writes the same bytes every time.
 """
 
 import sys
@@ -140,18 +146,139 @@ def main() -> int:
             bytes([0xF0, 0x43, 0x00]),
         )
     )
+    others = messages(numbers)
+    # One performance, and 64 with random key assign modes.
+    performance = dump(10, 1, random_performance(numbers))
+    packed = [pack_performance(random_performance(numbers), next(numbers) % 3) for _ in range(64)]
+    performances = dump(11, 2, [byte for performance_bytes in packed for byte in performance_bytes])
     seeds = {
         "voice.syx": voice,
         "bank.syx": bank,
         "beyond.syx": bytes(beyond),
         "unused.syx": unused,
         "mixed.syx": mixed,
+        "messages.syx": others,
+        "performance.syx": performance,
+        "performances.syx": performances,
     }
     write(SEEDS / "syx", seeds)
     write(SEEDS / "json", json_seeds())
     write(SEEDS / "scl", scl_seeds())
     write(SEEDS / "kbm", kbm_seeds())
     return 0
+
+
+# The largest step of each byte of a side's thirty in the dump of one performance [TX7-MANUAL]: mono/poly at 2; the
+# pitch bend's range and step at 3 and 4; the portamento's time, glissando and mode at 5 to 7; the sensitivity and the
+# assignment of the modulation wheel, the foot controller, the aftertouch and the breath controller at 9 to 16; the
+# attenuation at 26. The bytes the manual leaves unnamed take any seven bits.
+SIDE_LARGEST = (0x7F, 0x7F, 1, 12, 12, 99, 1, 1, 0x7F, 15, 7, 15, 7, 15, 7, 15, 7, *(0x7F,) * 9, 7, 0x7F, 0x7F, 0x7F)
+
+# Where each of a side's fields lies in its sixteen bytes of a packed performance, by its byte in the dump of one: some
+# of its bits' byte, the bit there of the lowest of them, that bit's place in the field, and how many they are.
+SIDE_PACKING = (
+    (2, ((0, 6, 0, 1),)),
+    (3, ((1, 0, 0, 4),)),
+    (4, ((1, 4, 0, 3), (15, 6, 3, 1))),
+    (5, ((2, 0, 0, 7),)),
+    (6, ((3, 0, 0, 1),)),
+    (7, ((3, 1, 0, 1),)),
+    (9, ((4, 0, 0, 4),)),
+    (10, ((4, 4, 0, 3),)),
+    (11, ((5, 0, 0, 4),)),
+    (12, ((5, 4, 0, 3),)),
+    (13, ((6, 0, 0, 4),)),
+    (14, ((6, 4, 0, 3),)),
+    (15, ((7, 0, 0, 4),)),
+    (16, ((7, 4, 0, 3),)),
+    (26, ((14, 0, 0, 3),)),
+)
+
+
+def performance_largest(number: int) -> int:
+    """The largest step of the byte of this number of the dump of one performance: the sides', the voice memory
+    select at 61, and the name, which takes any seven bits."""
+    if number < 60:
+        return SIDE_LARGEST[number % 30]
+    return 1 if number == 61 else 0x7F
+
+
+def random_performance(numbers: Iterator[int]) -> list[int]:
+    """The 94 bytes of the dump of one performance of random steps, each within its range."""
+    return [next(numbers) % (performance_largest(number) + 1) for number in range(94)]
+
+
+def pack_performance(steps: list[int], key_assign: int) -> list[int]:
+    """The 64 bytes of a packed performance of the dump of one's 94 and a key assign mode: side A in bytes 0 to 15,
+    side B in 16 to 31, the voice memory select and the key assign mode in byte 32, the name in 34 to 63."""
+    packed = [0] * 64
+    for side in range(2):
+        for offset, places in SIDE_PACKING:
+            step = steps[30 * side + offset]
+            for byte, bit, low, width in places:
+                packed[16 * side + byte] |= (step >> low & ((1 << width) - 1)) << bit
+    packed[32] = steps[61] << 2 | key_assign
+    packed[34:] = steps[64:]
+    return packed
+
+
+# The largest step of each function parameter, 64 to 77: mono/poly; the pitch bend's range and step; the
+# portamento's mode, glissando and time; the range and the assignment of each of the four controllers.
+FUNCTION_LARGEST = (1, 12, 12, 1, 1, 99, 99, 7, 99, 7, 99, 7, 99, 7)
+
+
+def change(channel: int, group: int, number: int, data: int) -> bytes:
+    """A parameter change: its header with the channel, the group byte, the number's low seven bits and the
+    data."""
+    return bytes([0xF0, 0x43, 0x10 | channel, group, number, data, 0xF7])
+
+
+def request(channel: int, *body: int) -> bytes:
+    """A dump request: its header with the channel, the format and, for a universal bulk dump, its names."""
+    return bytes([0xF0, 0x43, 0x20 | channel, *body, 0xF7])
+
+
+def messages(numbers: Iterator[int]) -> bytes:
+    """A file of parameter changes and dump requests."""
+    # The voice group, 0, holds the number's high bits in the group byte's low two.
+    voice = [change(0, number >> 7, number & 0x7F, next(numbers) % (largest(number) + 1)) for number in (0, 121, 144)]
+    switches = change(1, 0x01, 155 & 0x7F, 0b101101)
+    function = [
+        change(2, 0x08, number, next(numbers) % (largest + 1)) for number, largest in enumerate(FUNCTION_LARGEST, 64)
+    ]
+    # FUNCTION; button 8 three times, which steps from the receive channel to SYS INFO AVAIL and then to MIDI
+    # TRANSMIT; and YES, each pressed and released: by these a DX7 sends its 32 voices [AJXS-ROM]. Then a switch of
+    # the DX7II's at each end of their numbers.
+    panel = [change(3, 0x08, button, data) for button in (39, 7, 7, 7, 41) for data in (0x7F, 0x00)]
+    remote = [change(4, 0x1B, switch, data) for switch in (0, 45) for data in (0x7F, 0x00)]
+    requests = [request(5, 0x00), request(6, 0x05), request(7, 0x06), request(8, 0x09)]
+    requests.append(request(9, 0x7E, *b"LM  8973PE"))
+    # Out of range: a rate at 100, the pitch bend's range at 13, a button's data neither 0 nor 127; and of no
+    # kind read: function parameter 50, a request of format 1.
+    beyond = [change(10, 0x00, 0, 100), change(11, 0x08, 65, 13), change(12, 0x08, 32, 0x40)]
+    unread = [change(13, 0x08, 50, 0), request(14, 0x03)]
+    # The TX7's: the source select, the aftertouch's sensitivity and the master tuning of a performance; its lowest
+    # note and its memory protect; its operator select; its requests; a performance under format number 2, as
+    # [DX7-MANUAL] prints it; and a condition acknowledge. Then some out of range, and some of no kind read.
+    tx7 = [
+        change(5, 0x04, 1, 11),
+        change(5, 0x04, 13, 9),
+        change(5, 0x04, 64, 64),
+        change(6, 0x11, 5, 21),
+        change(6, 0x11, 7, 0x7F),
+        change(7, 0x01, 0x1C, 3),
+        request(8, 0x01),
+        request(8, 0x02),
+        request(8, 0x7D),
+        dump(9, 2, random_performance(numbers)),
+        dump(0, 0x7D, [*b"LM  8950  ", 1, 2, 0x58, 5, 31, 0]),
+        change(10, 0x04, 1, 0),
+        change(11, 0x11, 0, 2),
+        change(12, 0x01, 0x1C, 6),
+        change(13, 0x04, 8, 0),
+        change(13, 0x11, 8, 0),
+    ]
+    return b"".join((*voice, switches, *function, *panel, *remote, *requests, *beyond, *unread, *tx7))
 
 
 def scl_seeds() -> dict[str, bytes]:

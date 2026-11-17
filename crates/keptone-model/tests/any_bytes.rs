@@ -9,17 +9,18 @@
 //! The parsers take any bytes: inputs made by changing valid ones at random --
 //! bits flipped, bytes put in, taken out, repeated, the end cut off, bytes that
 //! mean something to the format put in -- are read or refused, never a panic,
-//! as kiral's tests of its parsers have it. What a parser makes of them is
-//! held to what it promises, by the properties that the fuzz targets of
-//! fuzz/libfuzzer check as well (`properties`). The inputs that once made a
-//! parser fail are kept in fuzz/regressions/<parser>/, and read on every run.
+//! as kiral's tests of its parsers have it. What a parser makes of them, and of
+//! the valid inputs themselves, is held to what it promises, by the properties
+//! that the fuzz targets of fuzz/libfuzzer check as well (`properties`). The
+//! inputs that once made a parser fail are kept in fuzz/regressions/<parser>/,
+//! and read on every run.
 
 mod common;
 mod properties;
 
 use std::path::Path;
 
-use common::{SplitMix64, random_bank, random_voice};
+use common::{SplitMix64, dump, random_bank, random_performance_steps, random_performances, random_voice};
 use keptone_model::json;
 use keptone_model::scala;
 use keptone_model::syx::{self, Options};
@@ -84,21 +85,64 @@ fn syx_takes_any_bytes() {
         b"after",
     ]
     .concat();
-    let tokens: [&[u8]; 8] = [
+    // Parameter changes of a voice parameter, the operators' switches, a
+    // function parameter, a button of the DX7's panel, a switch of the DX7II's,
+    // and the TX7's of a performance's parameter, of its own settings and of
+    // its operator select; and dump requests, a universal one among them.
+    let short = [
+        &[0xf0, 0x43, 0x10, 0x01, 0x10, 0x05, 0xf7][..],
+        &[0xf0, 0x43, 0x11, 0x01, 0x1b, 0x3f, 0xf7],
+        &[0xf0, 0x43, 0x12, 0x08, 0x41, 0x0b, 0xf7],
+        &[0xf0, 0x43, 0x13, 0x08, 0x27, 0x7f, 0xf7],
+        &[0xf0, 0x43, 0x14, 0x1b, 0x2d, 0x00, 0xf7],
+        &[0xf0, 0x43, 0x15, 0x04, 0x01, 0x0b, 0xf7],
+        &[0xf0, 0x43, 0x15, 0x04, 0x0d, 0x09, 0xf7],
+        &[0xf0, 0x43, 0x16, 0x11, 0x05, 0x15, 0xf7],
+        &[0xf0, 0x43, 0x16, 0x11, 0x07, 0x7f, 0xf7],
+        &[0xf0, 0x43, 0x17, 0x01, 0x1c, 0x03, 0xf7],
+        &[0xf0, 0x43, 0x25, 0x00, 0xf7],
+        &[0xf0, 0x43, 0x26, 0x09, 0xf7],
+        &[0xf0, 0x43, 0x28, 0x01, 0xf7],
+        &[0xf0, 0x43, 0x28, 0x02, 0xf7],
+        &[0xf0, 0x43, 0x28, 0x7d, 0xf7],
+        b"\xf0\x43\x27\x7eLM  8973PE\xf7",
+    ]
+    .concat();
+    // The dumps of one performance, under format 1 and under 2, and of 64,
+    // and a condition acknowledge.
+    let steps = random_performance_steps(&mut random);
+    let (_, performances) = random_performances(&mut random, 3);
+    let performance = [
+        dump(1, 1, &steps),
+        dump(2, 2, &steps),
+        dump(0, 0x7d, b"LM  8950  \x01\x02\x58\x05\x1f\x00"),
+    ]
+    .concat();
+    let tokens: [&[u8]; 17] = [
         &[0xf0],
         &[0xf7],
         &[0xf0, 0x43, 0x00, 0x00, 0x01, 0x1b],
         &[0xf0, 0x43, 0x00, 0x09, 0x20, 0x00],
+        &[0xf0, 0x43, 0x00, 0x01, 0x00, 0x5e],
+        &[0xf0, 0x43, 0x00, 0x02, 0x20, 0x00],
+        &[0xf0, 0x43, 0x00, 0x7d, 0x00, 0x10],
+        &[0xf0, 0x43, 0x10, 0x04],
+        &[0xf0, 0x43, 0x10, 0x08],
+        &[0xf0, 0x43, 0x10, 0x11],
+        &[0xf0, 0x43, 0x10, 0x1b],
+        &[0xf0, 0x43, 0x20],
         &[0x7f],
         &[0x80],
         &[0x63],
         &[0x64],
+        b"LM  ",
     ];
-    for seed in [&voice[..], &bank, &file] {
+    for seed in [&voice[..], &bank, &file, &short, &performance, &performances] {
         assert!(
             syx::read(seed, Options::default()).any(|message| message.result.is_ok()),
-            "a seed with no dump"
+            "a seed with no message read"
         );
+        read_syx(seed);
         for _ in 0..MUTATIONS {
             read_syx(&mutate(&mut random, seed, &tokens));
         }
@@ -127,6 +171,7 @@ fn json_takes_any_bytes() {
             json::parse(seed, json::DEFAULT_MAX_DEPTH).is_ok(),
             "a seed that is not JSON"
         );
+        read_json(seed);
         for _ in 0..MUTATIONS / 5 {
             read_json(&mutate(&mut random, seed, &tokens));
         }
@@ -161,6 +206,7 @@ fn scl_takes_any_bytes() {
     let mut random = SplitMix64(13);
     for seed in seeds {
         assert!(scala::parse_scl(seed).is_ok(), "a seed that is not a scale");
+        read_scl(seed);
         for _ in 0..MUTATIONS / 4 {
             read_scl(&mutate(&mut random, seed, &tokens));
         }
@@ -182,6 +228,7 @@ fn kbm_takes_any_bytes() {
     let mut random = SplitMix64(14);
     for seed in seeds {
         assert!(scala::parse_kbm(seed).is_ok(), "a seed that is not a mapping");
+        read_kbm(seed);
         for _ in 0..MUTATIONS / 4 {
             read_kbm(&mutate(&mut random, seed, &tokens));
         }
