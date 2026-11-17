@@ -10,22 +10,23 @@
 
     python3 scripts/fuzz_seeds.py
 
-libFuzzer starts from these inputs (ci/fuzz.sh), so that it need not find by itself the headers, byte counts
-and checksums that a parser checks before anything else. fuzz/seeds/syx/ holds DX7 dumps of voices whose steps
-are random numbers, each within the range of its parameter, laid out as [DEXED-SYSEX] lays them out (stated
-again here, apart from keptone-model and its tests): a single-voice dump, a 32-voice dump, a file of several
-messages among bytes that are none, and a dump whose checksum is wrong and some of whose bytes are out of range.
-No voice of Yamaha's is among them (docs/DESIGN.md §14). Beside them, the dumps of the performances of the DX1 and the
-TX7, of one and of 64, laid out as [TX7-MANUAL] lays them out, and the DX7II's dumps of supplements of voices, of one
-and of 32, laid out as [DX7II-MANUAL] lays them out, all of random steps; and a file of the DX7's other messages and
-its family's: parameter changes of voice parameters, of the operators' switches and of every function parameter,
-the presses of the DX7's panel buttons that make it send its bank [AJXS-ROM], switches of the DX7II's switch remote,
-the TX7's changes of a performance, of its own settings and of its operator select, the DX7II's changes of a
-supplement, dump requests [DX7II-MANUAL] [TX7-MANUAL], a performance under format number 2 and a condition
-acknowledge, with some out of range and some of no kind read. fuzz/seeds/json/ holds JSON texts of the subset that
-the native state is to be written in: an object of settings and values nested a few levels, with an integer of 64
-bits; strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a few
-levels; and numbers at the ends of binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard
+libFuzzer starts from these inputs (ci/fuzz.sh), so that it need not find by itself the headers, byte counts and
+checksums that a parser checks before anything else. fuzz/seeds/syx/ holds DX7 dumps of voices whose steps are random
+numbers, each within the range of its parameter, laid out as [DEXED-SYSEX] lays them out (stated again here, apart from
+keptone-model and its tests): a single-voice dump, a 32-voice dump, a file of several messages among bytes that are
+none, and a dump whose checksum is wrong and some of whose bytes are out of range. No voice of Yamaha's is among them
+(docs/DESIGN.md §14). Beside them, the dumps of the performances of the DX1 and the TX7, of one and of 64, laid out as
+[TX7-MANUAL] lays them out, and the DX7II's dumps of supplements of voices, of one and of 32, laid out as [DX7II-MANUAL]
+lays them out, and its universal bulk dumps of a performance, of 32 and of its system set-up, and the DX7s's of its
+system set-up [DX7S-MANUAL], all of random steps; and a file of the DX7's other messages and its family's: parameter
+changes of voice parameters, of the operators' switches and of every function parameter, the presses of the DX7's panel
+buttons that make it send its bank [AJXS-ROM], switches of the DX7II's switch remote, the TX7's changes of a
+performance, of its own settings and of its operator select, the DX7II's changes of a supplement, a performance and the
+system set-up, the DX7s's system reset, dump requests [DX7II-MANUAL] [TX7-MANUAL], a performance under format number 2
+and a condition acknowledge, with some out of range and some of no kind read. fuzz/seeds/json/ holds JSON texts of the
+subset that the native state is to be written in: an object of settings and values nested a few levels, with an integer
+of 64 bits; strings with every escape, a surrogate pair and characters of several scripts; arrays and objects nested a
+few levels; and numbers at the ends of binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard
 mappings of Scala's: equal steps in cents, just intonation in ratios, the three ends of a line, ISO 8859-1, a linear
 mapping and keys left unmapped. The script writes the same bytes every time.
 """
@@ -155,6 +156,14 @@ def main() -> int:
     # One supplement, and 32.
     supplement = dump(12, 5, random_supplement(numbers))
     supplements = dump(13, 6, [byte for _ in range(32) for byte in pack_supplement(random_supplement(numbers))])
+    # The DX7II's universal bulk dumps: a performance, 32 and the system set-up;
+    # and the DX7s's of its system set-up, without the 17 bytes that have no name.
+    performance_edit = universal(14, b"LM  8973PE", random_dx7ii_performance(numbers))
+    memory = [byte for _ in range(32) for byte in random_dx7ii_performance(numbers)]
+    performance_memory = universal(14, b"LM  8973PM", memory)
+    system = universal(14, b"LM  8973S ", random_system_setup(numbers))
+    dx7s = random_system_setup(numbers)
+    system_dx7s = universal(14, b"LM  8973S ", dx7s[:20] + dx7s[37:])
     seeds = {
         "voice.syx": voice,
         "bank.syx": bank,
@@ -166,6 +175,7 @@ def main() -> int:
         "performances.syx": performances,
         "supplement.syx": supplement,
         "supplements.syx": supplements,
+        "dx7ii.syx": performance_edit + performance_memory + system + system_dx7s,
     }
     write(SEEDS / "syx", seeds)
     write(SEEDS / "json", json_seeds())
@@ -286,6 +296,82 @@ SUPPLEMENT_PLACES = (
 )
 
 
+# The largest step of each of the DX7II performance's 51 parameters [DX7II-MANUAL] [DX7S-MANUAL]: the play mode, the
+# voices' numbers, the micro tuning's table, key and switches, the dual detune, the split point, the forced damp, the
+# foot switches, the soft pedal's range, the note shifts, the balance and the volume, the sliders' assignments and
+# switches, the pan's mode, range, assignment and envelope, and the name's twenty bytes.
+DX7II_PERFORMANCE_LARGEST = (
+    2,
+    127,
+    127,
+    74,
+    11,
+    3,
+    7,
+    127,
+    1,
+    3,
+    3,
+    3,
+    7,
+    48,
+    48,
+    100,
+    99,
+    105,
+    109,
+    15,
+    3,
+    99,
+    2,
+    *(99,) * 8,
+    *(0x7F,) * 20,
+)
+
+# The smallest and largest step of each of the DX7II system set-up's first 20 bytes; the other 82 take any seven bits.
+SYSTEM_RANGES = (
+    (0, 15),
+    (0, 1),
+    (0, 16),
+    (0, 16),
+    (0, 1),
+    (9, 31),
+    (9, 31),
+    (5, 31),
+    (5, 31),
+    (0, 2),
+    (0, 2),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (0, 15),
+    (0, 1),
+    (0, 15),
+    (0, 15),
+    (0, 15),
+    (0, 3),
+)
+
+
+def universal(channel: int, names: bytes, data: list[int]) -> bytes:
+    """A universal bulk dump of one group: its byte count, its names and data, and their checksum."""
+    counted = [*names, *data]
+    count = len(counted)
+    checksum = -sum(counted) & 0x7F
+    return bytes([0xF0, 0x43, channel, 0x7E, count >> 7, count & 0x7F, *counted, checksum, 0xF7])
+
+
+def random_dx7ii_performance(numbers: Iterator[int]) -> list[int]:
+    """The 51 bytes of a DX7II performance of random steps, each within its range."""
+    return [next(numbers) % (largest + 1) for largest in DX7II_PERFORMANCE_LARGEST]
+
+
+def random_system_setup(numbers: Iterator[int]) -> list[int]:
+    """The 102 bytes of a DX7II system set-up of random steps, each within its range."""
+    ranges = [*SYSTEM_RANGES, *((0, 0x7F),) * 82]
+    return [smallest + next(numbers) % (largest - smallest + 1) for smallest, largest in ranges]
+
+
 def random_supplement(numbers: Iterator[int]) -> list[int]:
     """The 49 bytes of the dump of one supplement of random steps, each within its range."""
     return [next(numbers) % (largest + 1) for largest in SUPPLEMENT_LARGEST]
@@ -358,6 +444,9 @@ def messages(numbers: Iterator[int]) -> bytes:
     # The DX7II's: a supplement's pitch bend range, its unison's detune, its breath controller's pitch bias out of
     # range, and a reserved number.
     dx7ii = [change(14, 0x18, 16, 12), change(14, 0x18, 72, 7), change(15, 0x18, 33, 101), change(15, 0x18, 50, 0)]
+    # Its performance's split point and second slider, its system set-up's first controller, below its range, and
+    # the DX7s's system reset.
+    dx7ii += [change(14, 0x19, 7, 60), change(14, 0x19, 18, 109), change(15, 0x19, 69, 3), change(15, 0x1B, 46, 0)]
     return b"".join((*voice, switches, *function, *panel, *remote, *requests, *beyond, *unread, *tx7, *dx7ii))
 
 

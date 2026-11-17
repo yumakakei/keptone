@@ -21,14 +21,16 @@
 //! - the dumps of the performances of the DX1 and the TX7
 //!   ([`crate::performance`]): one performance in 94 bytes, under format
 //!   number 1, and under 2, which \[DX7-MANUAL\] prints for it, and 64
-//!   performances packed into 64 bytes each; and the TX7's condition
-//!   acknowledge, which says what it is and how it is set;
+//!   performances packed into 64 bytes each; the TX7's condition acknowledge,
+//!   which says what it is and how it is set; and the DX7II's universal bulk
+//!   dumps of its performances and its system set-up, and the DX7s's of its
+//!   system set-up ([`crate::dx7ii`]);
 //! - the parameter changes: of a voice parameter, of a function parameter, of a
 //!   button of the DX7's panel, which its firmware takes as pressed or released
-//!   \[AJXS-ROM\], of a switch of the DX7II's panel by its switch remote and of
-//!   a parameter of its supplement, and the TX7's, of a performance's
-//!   parameter, of one of its own settings and of the operator its panel
-//!   edits;
+//!   \[AJXS-ROM\], of a switch of the DX7II's panel by its switch remote, of a
+//!   parameter of its supplement, its performance and its system set-up, and
+//!   the DX7s's system reset, and the TX7's, of a performance's parameter, of
+//!   one of its own settings and of the operator its panel edits;
 //! - the dump requests of the DX7II and the TX7, which the DX7 itself does not
 //!   answer, and Keptone does (docs/DESIGN.md §15).
 //!
@@ -47,7 +49,9 @@
 //!
 //! [`write_voice`], [`write_bank`], [`write_supplement`], [`write_supplements`],
 //! [`write_performance`], [`write_performances`], [`write_condition`],
-//! [`write_change`] and [`write_request`] write the messages, each value rounded to a step as
+//! [`write_dx7ii_performance`], [`write_dx7ii_performances`],
+//! [`write_system_setup`], [`write_dx7s_system_setup`], [`write_change`] and
+//! [`write_request`] write the messages, each value rounded to a step as
 //! `syx.export_rounding` says; the dumps say what they could not hold of what
 //! they were written from. A message that is valid -- its checksum right, every
 //! byte in range, no unused bit set and a switch's data 0 or 127 -- comes back
@@ -62,6 +66,7 @@
 
 use std::fmt;
 
+use crate::dx7ii::{self, SystemParameter, SystemSetup};
 use crate::function::{Function, FunctionParameter};
 use crate::performance::{DxPerformanceParameter, KeyAssign, Performance, PerformanceParameter, Unnamed};
 use crate::supplement::{Supplement, SupplementParameter};
@@ -135,6 +140,35 @@ const DX7II_GROUP: u8 = 6;
 /// The group byte's low bits and the number of the voice group's parameter
 /// 156, 1 · 128 + 28, which selects the operator a panel edits \[TX7-MANUAL\].
 const OPERATOR_SELECT: [u8; 2] = [0x01, 0x1c];
+
+/// The number of the switch remote's message that resets the DX7s, as if it
+/// were just switched on \[DX7S-MANUAL\].
+const SYSTEM_RESET: u8 = 46;
+
+/// The classification name of the DX7II's universal bulk dumps \[DX7II-MANUAL\].
+const LM: [u8; 4] = *b"LM  ";
+
+/// The data format name of the DX7II's performance edit buffer.
+const PERFORMANCE_EDIT: [u8; 6] = *b"8973PE";
+
+/// The data format name of the DX7II's 32 performances.
+const PERFORMANCE_MEMORY: [u8; 6] = *b"8973PM";
+
+/// The data format name of the DX7II's system set-up.
+const SYSTEM_SETUP: [u8; 6] = *b"8973S ";
+
+/// The bytes of one DX7II performance.
+const DX7II_PERFORMANCE_BYTES: usize = 51;
+
+/// The bytes of 32 DX7II performances, one after another.
+const DX7II_PERFORMANCES_BYTES: usize = 32 * DX7II_PERFORMANCE_BYTES;
+
+/// The bytes of the DX7II's system set-up.
+const SYSTEM_SETUP_BYTES: usize = 102;
+
+/// The bytes of the DX7s's system set-up, which has no place for the 17 of the
+/// DX7II's that have no name \[DX7S-MANUAL\] p. Add-4.
+const DX7S_SYSTEM_SETUP_BYTES: usize = 85;
 
 /// The group byte of the DX7II's switch remote, group 6 with its low bits 3
 /// \[DX7II-MANUAL\].
@@ -457,6 +491,35 @@ pub enum Finding {
         /// The step it held.
         step: u8,
     },
+    /// A universal bulk dump's group whose checksum is not the one its names
+    /// and data have.
+    UniversalChecksum {
+        /// The place of the group in the message, from 0.
+        group: u8,
+        /// The checksum its names and data have.
+        expected: u8,
+        /// The checksum it ends with.
+        found: u8,
+    },
+    /// A step of a DX7II performance's parameter beyond its range
+    /// ([`dx7ii::PerformanceParameter::largest`]).
+    Dx7iiPerformanceOutOfRange {
+        /// The place of the performance: 0 in the edit buffer or a parameter
+        /// change, 0 to 31 in the dump of 32.
+        performance: u8,
+        /// The parameter.
+        parameter: dx7ii::PerformanceParameter,
+        /// The step it held.
+        step: u8,
+    },
+    /// A step of a parameter of the DX7II's system set-up outside its range
+    /// ([`SystemParameter::smallest`] to its largest).
+    SystemOutOfRange {
+        /// The parameter.
+        parameter: SystemParameter,
+        /// The step it held.
+        step: u8,
+    },
     /// A byte of a packed supplement with bits set that the format leaves
     /// unused.
     SupplementUnusedBits {
@@ -495,6 +558,16 @@ impl fmt::Display for Finding {
                 parameter.largest()
             ),
             Self::SwitchData { data } => write!(formatter, "a switch's data is {data:#04x}, neither 0 nor 0x7f"),
+            _ => self.fmt_family(formatter),
+        }
+    }
+}
+
+impl Finding {
+    /// The description of a finding of a message of the DX7's family that the
+    /// DX7 does not read: the TX7's and the DX7II's.
+    fn fmt_family(self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             Self::PerformanceOutOfRange {
                 performance,
                 parameter,
@@ -549,11 +622,37 @@ impl fmt::Display for Finding {
                 u16::from(supplement) + 1,
                 parameter.largest()
             ),
+            Self::UniversalChecksum { group, expected, found } => write!(
+                formatter,
+                "group {}: the checksum is {found:#04x}, where the names and the data have {expected:#04x}",
+                u16::from(group) + 1
+            ),
+            Self::Dx7iiPerformanceOutOfRange {
+                performance,
+                parameter,
+                step,
+            } => write!(
+                formatter,
+                "performance {}: {parameter} is {step}, beyond its largest, {}",
+                u16::from(performance) + 1,
+                parameter.largest()
+            ),
+            Self::SystemOutOfRange { parameter, step } => write!(
+                formatter,
+                "{parameter} is {step}, outside its range, {} to {}",
+                parameter.smallest(),
+                parameter.largest()
+            ),
             Self::SupplementUnusedBits { supplement, byte, bits } => write!(
                 formatter,
                 "supplement {}: byte {byte} sets unused bits {bits:#04x}",
                 u16::from(supplement) + 1
             ),
+            Self::Checksum { .. }
+            | Self::OutOfRange { .. }
+            | Self::UnusedBits { .. }
+            | Self::FunctionOutOfRange { .. }
+            | Self::SwitchData { .. } => fmt::Display::fmt(&self, formatter),
         }
     }
 }
@@ -576,9 +675,11 @@ pub enum Error {
     /// dump holds 155 bytes of data in a message of 163, a 32-voice dump 4096
     /// in 4104, the dump of one supplement 49 in 57, the dump of 32 1120 in
     /// 1128, the dump of one performance 94 in 102, the dump of 64 4096 in
-    /// 4104, the condition acknowledge 16 in 24, a parameter change one byte
-    /// of data in 7, and a dump request is of 5 bytes, or 15 for a universal
-    /// bulk dump's.
+    /// 4104, the condition acknowledge 16 in 24, a universal bulk dump's group
+    /// the 10 bytes of its names and the data its names give, a DX7II
+    /// performance 51 bytes, 32 of them 1632 and its system set-up 102, the
+    /// DX7s's 85, a parameter change one byte of data in 7, and a dump request
+    /// is of 5 bytes, or 15 for a universal bulk dump's.
     Length,
     /// A message refused for what it held, as the options have it: a wrong
     /// checksum if `syx.accept_bad_checksum` is false, or, if `syx.out_of_range`
@@ -633,6 +734,16 @@ pub enum Content {
     Performances(Box<[Performance; 64]>),
     /// The TX7's condition acknowledge.
     Condition(Condition),
+    /// The DX7II's universal bulk dump of its performance edit buffer.
+    Dx7iiPerformance(Box<dx7ii::Performance>),
+    /// The DX7II's universal bulk dump of its 32 performances, in the order of
+    /// their places.
+    Dx7iiPerformances(Box<[dx7ii::Performance; 32]>),
+    /// The DX7II's universal bulk dump of its system set-up.
+    SystemSetup(Box<SystemSetup>),
+    /// The DX7s's universal bulk dump of its system set-up, of 85 bytes, whose
+    /// bytes that have no name, which the dump does not hold, are 0.
+    Dx7sSystemSetup(Box<SystemSetup>),
 }
 
 /// A button of the DX7's panel, by the number that a panel switch message
@@ -1024,6 +1135,68 @@ impl VoiceStep {
     }
 }
 
+/// A parameter of the DX7II's performance and a step within its range: what a
+/// parameter change of the performance sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Dx7iiPerformanceStep {
+    /// The parameter.
+    parameter: dx7ii::PerformanceParameter,
+    /// The step, no more than the parameter's largest.
+    step: u8,
+}
+
+impl Dx7iiPerformanceStep {
+    /// The parameter and step, if the step is within the parameter's range.
+    #[must_use]
+    pub fn new(parameter: dx7ii::PerformanceParameter, step: u8) -> Option<Self> {
+        (step <= parameter.largest()).then_some(Self { parameter, step })
+    }
+
+    /// The parameter.
+    #[must_use]
+    pub const fn parameter(self) -> dx7ii::PerformanceParameter {
+        self.parameter
+    }
+
+    /// The step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        self.step
+    }
+}
+
+/// A parameter of the DX7II's system set-up that a parameter change sets, its
+/// bytes 0 to 19, and a step within its range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SystemStep {
+    /// The parameter, of a byte below 20.
+    parameter: SystemParameter,
+    /// The step, from the parameter's smallest to its largest.
+    step: u8,
+}
+
+impl SystemStep {
+    /// The parameter and step, if a parameter change sets the parameter and the
+    /// step is within its range.
+    #[must_use]
+    pub fn new(parameter: SystemParameter, step: u8) -> Option<Self> {
+        (parameter.change_number().is_some() && (parameter.smallest()..=parameter.largest()).contains(&step))
+            .then_some(Self { parameter, step })
+    }
+
+    /// The parameter.
+    #[must_use]
+    pub const fn parameter(self) -> SystemParameter {
+        self.parameter
+    }
+
+    /// The step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        self.step
+    }
+}
+
 /// A parameter of the DX7II's supplement and a step within its range: what a
 /// parameter change of the supplement sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1129,6 +1302,16 @@ pub enum Change {
     /// A parameter of the DX7II's supplement, of group 6 with the group byte's
     /// low bits 0 \[DX7II-MANUAL\].
     Supplement(SupplementStep),
+    /// A parameter of the DX7II's performance, of group 6 with the group byte's
+    /// low bits 1 and numbers 0 to 50.
+    Dx7iiPerformance(Dx7iiPerformanceStep),
+    /// A parameter of the DX7II's system set-up, of group 6 with the group
+    /// byte's low bits 1 and numbers 64 to 83.
+    System(SystemStep),
+    /// The DX7s's system reset, which resets it as if it were just switched on,
+    /// by the switch remote's number 46 \[DX7S-MANUAL\]: the data, which the
+    /// DX7s ignores, kept as it comes.
+    SystemReset(Byte),
 }
 
 /// A parameter change, decoded.
@@ -1331,6 +1514,9 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
     let Some((&format, rest)) = rest.split_first() else {
         return Err(Error::Unsupported);
     };
+    if format == UNIVERSAL_FORMAT {
+        return universal_of(channel, rest, options);
+    }
     if !matches!(
         format,
         VOICE_FORMAT
@@ -1383,6 +1569,175 @@ fn dump_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Erro
         content,
         findings,
     })
+}
+
+/// The groups of a universal bulk dump's bytes after its format: each its byte
+/// count, the 10 bytes of its classification and data format names and its
+/// data, which the count counts, 61 for the 51 bytes of a performance
+/// \[DX7II-MANUAL\] p. Add-4, and its checksum, which, as in every dump, is of
+/// the bytes the count counts; as many groups as the message holds.
+fn groups_of(mut rest: &[u8]) -> Result<Vec<(&[u8], u8)>, Error> {
+    let mut groups = Vec::new();
+    while !rest.is_empty() {
+        let &[high, low, ref after @ ..] = rest else {
+            return Err(Error::Length);
+        };
+        let count = usize::from(high) << 7 | usize::from(low);
+        if count < 10 || after.len() < count {
+            return Err(Error::Length);
+        }
+        let (counted, after) = after.split_at(count);
+        let Some((&checksum, after)) = after.split_first() else {
+            return Err(Error::Length);
+        };
+        groups.push((counted, checksum));
+        rest = after;
+    }
+    Ok(groups)
+}
+
+/// The dump of a universal bulk dump's bytes after its format: one group of a
+/// performance edit buffer, 32 performances or a system set-up of the DX7II,
+/// or of a system set-up of the DX7s.
+fn universal_of(channel: Channel, rest: &[u8], options: Options) -> Result<Dump, Error> {
+    let groups = groups_of(rest)?;
+    let &[(counted, checksum)] = groups.as_slice() else {
+        return Err(if groups.is_empty() {
+            Error::Length
+        } else {
+            Error::Unsupported
+        });
+    };
+    let (names, data) = counted.split_at(10);
+    let Ok(&[c0, c1, c2, c3, f0, f1, f2, f3, f4, f5]) = <&[u8; 10]>::try_from(names) else {
+        return Err(Error::Length);
+    };
+    let kind = match ([c0, c1, c2, c3], [f0, f1, f2, f3, f4, f5]) {
+        (LM, PERFORMANCE_EDIT) => UniversalKind::Performance,
+        (LM, PERFORMANCE_MEMORY) => UniversalKind::Performances,
+        (LM, SYSTEM_SETUP) => UniversalKind::SystemSetup,
+        _ => return Err(Error::Unsupported),
+    };
+    let mut findings = Vec::new();
+    let expected = checksum_of(counted);
+    if checksum != expected {
+        let finding = Finding::UniversalChecksum {
+            group: 0,
+            expected,
+            found: checksum,
+        };
+        if !options.accept_bad_checksum {
+            return Err(Error::Refused(finding));
+        }
+        findings.push(finding);
+    }
+    let content = match kind {
+        UniversalKind::Performance => {
+            let Ok(steps) = <&[u8; DX7II_PERFORMANCE_BYTES]>::try_from(data) else {
+                return Err(Error::Length);
+            };
+            Content::Dx7iiPerformance(Box::new(dx7ii_performance_of(steps, 0, options, &mut findings)?))
+        }
+        UniversalKind::Performances => {
+            let Ok(data) = <&[u8; DX7II_PERFORMANCES_BYTES]>::try_from(data) else {
+                return Err(Error::Length);
+            };
+            let (steps, _) = data.as_chunks::<DX7II_PERFORMANCE_BYTES>();
+            let mut performances = Vec::with_capacity(32);
+            for (place, steps) in (0..).zip(steps) {
+                performances.push(dx7ii_performance_of(steps, place, options, &mut findings)?);
+            }
+            let Ok(performances) = <Box<[dx7ii::Performance; 32]>>::try_from(performances.into_boxed_slice()) else {
+                return Err(Error::Length);
+            };
+            Content::Dx7iiPerformances(performances)
+        }
+        UniversalKind::SystemSetup => match data.len() {
+            SYSTEM_SETUP_BYTES => {
+                let setup = system_setup_of(data, SystemParameter::all(), options, &mut findings)?;
+                Content::SystemSetup(Box::new(setup))
+            }
+            DX7S_SYSTEM_SETUP_BYTES => {
+                let setup = system_setup_of(data, SystemParameter::in_dx7s_dump(), options, &mut findings)?;
+                Content::Dx7sSystemSetup(Box::new(setup))
+            }
+            _ => return Err(Error::Length),
+        },
+    };
+    Ok(Dump {
+        channel,
+        content,
+        findings,
+    })
+}
+
+/// What a universal bulk dump holds, by its names.
+#[derive(Debug, Clone, Copy)]
+enum UniversalKind {
+    Performance,
+    Performances,
+    SystemSetup,
+}
+
+/// The DX7II performance of its 51 bytes, each checked against its
+/// parameter's range.
+fn dx7ii_performance_of(
+    steps: &[u8; DX7II_PERFORMANCE_BYTES],
+    place: u8,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<dx7ii::Performance, Error> {
+    let mut performance = dx7ii::Performance::zero();
+    for (parameter, &step) in dx7ii::PerformanceParameter::all().zip(steps) {
+        if !performance.set_step(parameter, step) {
+            let finding = Finding::Dx7iiPerformanceOutOfRange {
+                performance: place,
+                parameter,
+                step,
+            };
+            note(finding, options, findings)?;
+        }
+    }
+    Ok(performance)
+}
+
+/// The system set-up of a dump's bytes, which are those of `parameters`, each
+/// checked against its parameter's range; the parameters the dump does not
+/// hold are 0.
+fn system_setup_of(
+    steps: &[u8],
+    parameters: impl Iterator<Item = SystemParameter>,
+    options: Options,
+    findings: &mut Vec<Finding>,
+) -> Result<SystemSetup, Error> {
+    let mut setup = SystemSetup::zero();
+    for (parameter, &step) in parameters.zip(steps) {
+        if !setup.set_step(parameter, step) {
+            note(Finding::SystemOutOfRange { parameter, step }, options, findings)?;
+        }
+    }
+    Ok(setup)
+}
+
+/// A universal bulk dump of one group, on a channel: its names, its data, and
+/// their checksum.
+fn universal_message(channel: Channel, format: [u8; 6], data: &[u8]) -> Vec<u8> {
+    let mut counted = Vec::with_capacity(10 + data.len());
+    counted.extend_from_slice(&LM);
+    counted.extend_from_slice(&format);
+    counted.extend_from_slice(data);
+    let count = counted.len();
+    let mut message = Vec::with_capacity(count + 7);
+    message.extend_from_slice(&[START, YAMAHA, DUMP << 4 | channel.0, UNIVERSAL_FORMAT]);
+    // A count below 2^14, as every group's is.
+    message.extend_from_slice(&[
+        u8::try_from(count >> 7 & 0x7f).unwrap_or(0x7f),
+        u8::try_from(count & 0x7f).unwrap_or(0x7f),
+    ]);
+    message.extend_from_slice(&counted);
+    message.push(checksum_of(&counted));
+    message.push(END);
+    message
 }
 
 /// What a dump of a kind holds, of its data, each byte checked as the options
@@ -1499,6 +1854,10 @@ fn target_of(group: u8, number: u8) -> Option<Target> {
             .or_else(|| Button::new(number).map(Target::Panel)),
         (TX_GROUP, 1) => TxFunctionParameter::new(number).map(Target::Tx),
         (DX7II_GROUP, 0) => SupplementParameter::new(number).map(Target::Supplement),
+        (DX7II_GROUP, 1) => dx7ii::PerformanceParameter::new(number)
+            .map(Target::Dx7iiPerformance)
+            .or_else(|| SystemParameter::of_change(number).map(Target::System)),
+        _ if group == SWITCH_REMOTE && number == SYSTEM_RESET => Some(Target::SystemReset),
         _ if group == SWITCH_REMOTE => RemoteSwitch::new(number).map(Target::Remote),
         _ => None,
     }
@@ -1515,6 +1874,9 @@ enum Target {
     Tx(TxFunctionParameter),
     OperatorSelect,
     Supplement(SupplementParameter),
+    Dx7iiPerformance(dx7ii::PerformanceParameter),
+    System(SystemParameter),
+    SystemReset,
 }
 
 impl Target {
@@ -1591,6 +1953,30 @@ impl Target {
                 };
                 (Change::Supplement(step), finding)
             }
+            Self::Dx7iiPerformance(parameter) => {
+                let largest = parameter.largest();
+                let finding = (data > largest).then_some(Finding::Dx7iiPerformanceOutOfRange {
+                    performance: 0,
+                    parameter,
+                    step: data,
+                });
+                let step = Dx7iiPerformanceStep {
+                    parameter,
+                    step: data.min(largest),
+                };
+                (Change::Dx7iiPerformance(step), finding)
+            }
+            Self::System(parameter) => {
+                let (smallest, largest) = (parameter.smallest(), parameter.largest());
+                let finding = (!(smallest..=largest).contains(&data))
+                    .then_some(Finding::SystemOutOfRange { parameter, step: data });
+                let step = SystemStep {
+                    parameter,
+                    step: data.max(smallest).min(largest),
+                };
+                (Change::System(step), finding)
+            }
+            Self::SystemReset => (Change::SystemReset(Byte(data)), None),
         }
     }
 }
@@ -1691,6 +2077,98 @@ pub fn write_supplements(
     (message(channel, SUPPLEMENTS_FORMAT, SUPPLEMENTS_COUNT, &data), rounded)
 }
 
+/// The DX7II's universal bulk dump of its performance edit buffer, on a
+/// channel: a message of 69 bytes. Each value is rounded to a step by
+/// `rounding`, and the parameters whose values lay between steps are given
+/// beside it.
+#[must_use]
+pub fn write_dx7ii_performance(
+    performance: &dx7ii::Performance,
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<(u8, dx7ii::PerformanceParameter)>) {
+    let mut rounded = Vec::new();
+    let steps = steps_of_dx7ii_performance(performance, 0, rounding, &mut rounded);
+    (universal_message(channel, PERFORMANCE_EDIT, &steps), rounded)
+}
+
+/// The DX7II's universal bulk dump of 32 performances, on a channel: a
+/// message of 1650 bytes. Each value is rounded to a step by `rounding`, and
+/// the parameters whose values lay between steps are given beside it, by the
+/// place of their performance.
+#[must_use]
+pub fn write_dx7ii_performances(
+    performances: &[dx7ii::Performance; 32],
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<(u8, dx7ii::PerformanceParameter)>) {
+    let mut rounded = Vec::new();
+    let mut data = Vec::with_capacity(DX7II_PERFORMANCES_BYTES);
+    for (place, performance) in (0..).zip(performances) {
+        data.extend_from_slice(&steps_of_dx7ii_performance(performance, place, rounding, &mut rounded));
+    }
+    (universal_message(channel, PERFORMANCE_MEMORY, &data), rounded)
+}
+
+/// The DX7II's universal bulk dump of its system set-up, on a channel: a
+/// message of 120 bytes. Each value is rounded to a step by `rounding`, and the
+/// parameters whose values lay between steps are given beside it.
+#[must_use]
+pub fn write_system_setup(
+    setup: &SystemSetup,
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<SystemParameter>) {
+    let steps: Vec<u8> = SystemParameter::all()
+        .map(|parameter| setup.step(parameter, rounding))
+        .collect();
+    let rounded = SystemParameter::all()
+        .filter(|&parameter| !setup.is_step(parameter))
+        .collect();
+    (universal_message(channel, SYSTEM_SETUP, &steps), rounded)
+}
+
+/// The DX7s's universal bulk dump of its system set-up, on a channel: a
+/// message of 103 bytes, which has no place for the bytes that have no name.
+/// Each value is rounded to a step by `rounding`, and the parameters whose
+/// values lay between steps, and those of the bytes that have no name that
+/// are not 0, are given beside it.
+#[must_use]
+pub fn write_dx7s_system_setup(
+    setup: &SystemSetup,
+    channel: Channel,
+    rounding: Rounding,
+) -> (Vec<u8>, Vec<SystemParameter>) {
+    let steps: Vec<u8> = SystemParameter::in_dx7s_dump()
+        .map(|parameter| setup.step(parameter, rounding))
+        .collect();
+    let lost = SystemParameter::all()
+        .filter(|&parameter| match parameter.byte() {
+            20..=36 => setup.value(parameter) != 0.0,
+            _ => !setup.is_step(parameter),
+        })
+        .collect();
+    (universal_message(channel, SYSTEM_SETUP, &steps), lost)
+}
+
+/// The steps of a DX7II performance's parameters, and the parameters whose
+/// values they round.
+fn steps_of_dx7ii_performance(
+    performance: &dx7ii::Performance,
+    place: u8,
+    rounding: Rounding,
+    rounded: &mut Vec<(u8, dx7ii::PerformanceParameter)>,
+) -> [u8; DX7II_PERFORMANCE_BYTES] {
+    let mut steps = [0; DX7II_PERFORMANCE_BYTES];
+    for (parameter, step) in dx7ii::PerformanceParameter::all().zip(&mut steps) {
+        *step = performance.step(parameter, rounding);
+        if !performance.is_step(parameter) {
+            rounded.push((place, parameter));
+        }
+    }
+    steps
+}
+
 /// The dump of one performance, on a channel: a message of 102 bytes, under
 /// format 1. Each value is rounded to a step by `rounding`, and what the dump
 /// could not hold of the performance is given beside it.
@@ -1765,6 +2243,13 @@ pub fn write_change(channel: Channel, change: Change) -> Vec<u8> {
             (VOICE_GROUP << 2 | high, number, select.0)
         }
         Change::Supplement(step) => (DX7II_GROUP << 2, step.parameter.number(), step.step),
+        Change::Dx7iiPerformance(step) => (DX7II_GROUP << 2 | 1, step.parameter.number(), step.step),
+        Change::System(step) => (
+            DX7II_GROUP << 2 | 1,
+            SystemParameter::FIRST_CHANGE + step.parameter.byte(),
+            step.step,
+        ),
+        Change::SystemReset(data) => (SWITCH_REMOTE, SYSTEM_RESET, data.0),
     };
     vec![START, YAMAHA, CHANGE << 4 | channel.0, group, number, data, END]
 }

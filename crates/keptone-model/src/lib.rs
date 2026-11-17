@@ -21,13 +21,17 @@
 //!   function data each, and their numbers;
 //! - [`supplement`]: the DX7II's supplement of a voice, its additional
 //!   parameters, of range types as well, and their numbers;
+//! - [`dx7ii`]: the DX7II's performances and its system set-up, and their
+//!   numbers;
 //! - [`syx`]: the DX7's system-exclusive messages and its family's, read from
 //!   `.syx` files and from hosts, however many a file holds, and written back
 //!   byte for byte: the dumps of voices, of the DX7II's supplements and of
-//!   performances, the parameter changes of voices, of function data, of
-//!   supplements and of performances, the presses of the DX7's panel buttons
-//!   and of the DX7II's switches, the TX7's own settings and condition, and
-//!   dump requests;
+//!   performances, the DX7II's universal bulk dumps of its performances and
+//!   its system set-up, and the DX7s's of its system set-up, the parameter
+//!   changes of voices, of function data, of supplements, of performances
+//!   and of the system set-up, the presses of the DX7's panel buttons and of
+//!   the DX7II's switches, the DX7s's system reset, the TX7's own settings
+//!   and condition, and dump requests;
 //! - [`json`]: the subset of JSON that the native state and the themes are
 //!   written in, read by hand, nested as deep as `json.max_depth` lets it be
 //!   without taking the thread's stack;
@@ -40,6 +44,7 @@
 //! allocation.
 #![forbid(unsafe_code)]
 
+pub mod dx7ii;
 pub mod function;
 pub mod json;
 pub mod performance;

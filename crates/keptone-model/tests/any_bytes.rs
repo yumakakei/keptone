@@ -21,8 +21,8 @@ mod properties;
 use std::path::Path;
 
 use common::{
-    SplitMix64, dump, random_bank, random_performance_steps, random_performances, random_supplement_steps,
-    random_supplements, random_voice,
+    SplitMix64, dump, random_bank, random_dx7ii_performance, random_dx7s_system_setup, random_performance_steps,
+    random_performances, random_supplement_steps, random_supplements, random_system_setup, random_voice, universal,
 };
 use keptone_model::json;
 use keptone_model::scala;
@@ -73,6 +73,37 @@ fn regressions(parser: &str) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// What the mutations of `syx_takes_any_bytes` put into its inputs: the bytes
+/// that start and end a message, the headers of the dumps and of the parameter
+/// changes and requests of several groups, a universal bulk dump's names, and
+/// the steps at the ends of the ranges.
+const SYX_TOKENS: [&[u8]; 24] = [
+    &[0xf0],
+    &[0xf7],
+    &[0xf0, 0x43, 0x00, 0x00, 0x01, 0x1b],
+    &[0xf0, 0x43, 0x00, 0x09, 0x20, 0x00],
+    &[0xf0, 0x43, 0x00, 0x01, 0x00, 0x5e],
+    &[0xf0, 0x43, 0x00, 0x02, 0x20, 0x00],
+    &[0xf0, 0x43, 0x00, 0x7d, 0x00, 0x10],
+    &[0xf0, 0x43, 0x00, 0x05, 0x00, 0x31],
+    &[0xf0, 0x43, 0x00, 0x06, 0x08, 0x60],
+    &[0xf0, 0x43, 0x10, 0x18],
+    &[0xf0, 0x43, 0x10, 0x19],
+    &[0xf0, 0x43, 0x00, 0x7e],
+    b"LM  8973P",
+    b"LM  8973S ",
+    &[0xf0, 0x43, 0x10, 0x04],
+    &[0xf0, 0x43, 0x10, 0x08],
+    &[0xf0, 0x43, 0x10, 0x11],
+    &[0xf0, 0x43, 0x10, 0x1b],
+    &[0xf0, 0x43, 0x20],
+    &[0x7f],
+    &[0x80],
+    &[0x63],
+    &[0x64],
+    b"LM  ",
+];
+
 #[test]
 fn syx_takes_any_bytes() {
     let mut random = SplitMix64(11);
@@ -105,6 +136,9 @@ fn syx_takes_any_bytes() {
         &[0xf0, 0x43, 0x17, 0x01, 0x1c, 0x03, 0xf7],
         &[0xf0, 0x43, 0x18, 0x18, 0x10, 0x0c, 0xf7],
         &[0xf0, 0x43, 0x18, 0x18, 0x49, 0x01, 0xf7],
+        &[0xf0, 0x43, 0x19, 0x19, 0x12, 0x6d, 0xf7],
+        &[0xf0, 0x43, 0x19, 0x19, 0x45, 0x09, 0xf7],
+        &[0xf0, 0x43, 0x1a, 0x1b, 0x2e, 0x00, 0xf7],
         &[0xf0, 0x43, 0x25, 0x00, 0xf7],
         &[0xf0, 0x43, 0x26, 0x09, 0xf7],
         &[0xf0, 0x43, 0x28, 0x01, 0xf7],
@@ -126,28 +160,16 @@ fn syx_takes_any_bytes() {
     ]
     .concat();
     let (_, supplements) = random_supplements(&mut random, 6);
-    let tokens: [&[u8]; 20] = [
-        &[0xf0],
-        &[0xf7],
-        &[0xf0, 0x43, 0x00, 0x00, 0x01, 0x1b],
-        &[0xf0, 0x43, 0x00, 0x09, 0x20, 0x00],
-        &[0xf0, 0x43, 0x00, 0x01, 0x00, 0x5e],
-        &[0xf0, 0x43, 0x00, 0x02, 0x20, 0x00],
-        &[0xf0, 0x43, 0x00, 0x7d, 0x00, 0x10],
-        &[0xf0, 0x43, 0x00, 0x05, 0x00, 0x31],
-        &[0xf0, 0x43, 0x00, 0x06, 0x08, 0x60],
-        &[0xf0, 0x43, 0x10, 0x18],
-        &[0xf0, 0x43, 0x10, 0x04],
-        &[0xf0, 0x43, 0x10, 0x08],
-        &[0xf0, 0x43, 0x10, 0x11],
-        &[0xf0, 0x43, 0x10, 0x1b],
-        &[0xf0, 0x43, 0x20],
-        &[0x7f],
-        &[0x80],
-        &[0x63],
-        &[0x64],
-        b"LM  ",
-    ];
+    // The DX7II's universal bulk dumps of its performance edit buffer, its 32
+    // performances and its system set-up, and the DX7s's of its system set-up.
+    let performances_of_32: Vec<u8> = (0..32).flat_map(|_| random_dx7ii_performance(&mut random)).collect();
+    let dx7ii = [
+        universal(7, b"LM  8973PE", &random_dx7ii_performance(&mut random)),
+        universal(8, b"LM  8973PM", &performances_of_32),
+        universal(9, b"LM  8973S ", &random_system_setup(&mut random)),
+        universal(10, b"LM  8973S ", &random_dx7s_system_setup(&mut random)),
+    ]
+    .concat();
     for seed in [
         &voice[..],
         &bank,
@@ -156,6 +178,7 @@ fn syx_takes_any_bytes() {
         &performance,
         &performances,
         &supplements,
+        &dx7ii,
     ] {
         assert!(
             syx::read(seed, Options::default()).any(|message| message.result.is_ok()),
@@ -163,7 +186,7 @@ fn syx_takes_any_bytes() {
         );
         read_syx(seed);
         for _ in 0..MUTATIONS {
-            read_syx(&mutate(&mut random, seed, &tokens));
+            read_syx(&mutate(&mut random, seed, &SYX_TOKENS));
         }
     }
     for input in regressions("syx") {

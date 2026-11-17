@@ -120,6 +120,26 @@ fn written_again(dump: &Dump) -> Vec<u8> {
             assert_eq!(rounded, []);
             written
         }
+        Content::Dx7iiPerformance(performance) => {
+            let (written, rounded) = syx::write_dx7ii_performance(performance, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::Dx7iiPerformances(performances) => {
+            let (written, rounded) = syx::write_dx7ii_performances(performances, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::SystemSetup(setup) => {
+            let (written, rounded) = syx::write_system_setup(setup, channel, rounding);
+            assert_eq!(rounded, []);
+            written
+        }
+        Content::Dx7sSystemSetup(setup) => {
+            let (written, lost) = syx::write_dx7s_system_setup(setup, channel, rounding);
+            assert_eq!(lost, []);
+            written
+        }
     }
 }
 

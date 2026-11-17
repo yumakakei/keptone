@@ -448,3 +448,108 @@ pub fn random_supplements(random: &mut SplitMix64, channel: u8) -> (Vec<Vec<u8>>
     let message = dump(channel, 6, &data);
     (steps, message)
 }
+
+/// The smallest and largest step of each of the DX7II performance's 51
+/// parameters, in the order of the PCED format, as \[DX7II-MANUAL\] p. Add-10
+/// and \[DX7S-MANUAL\] p. Add-11 give them, the wider where they differ: the
+/// play mode 0–2; the voices' numbers 0–127; the micro tuning's table 0–74,
+/// key 0–11 and switches 0–3; the dual detune 0–7; the split point 0–127; the
+/// forced damp 0–1; the sustain switches, the foot switch's assignment and
+/// switches 0–3; the soft pedal's range 0–7; the note shifts 0–48; the balance
+/// 0–100 and the total volume 0–99; the sliders' assignments 0–105 and 0–109
+/// and their switches 0–15; the pan's mode 0–3, range 0–99, assignment 0–2
+/// and envelope 0–99; the name's twenty bytes of seven bits.
+const DX7II_PERFORMANCE_LARGEST: [u8; 31] = [
+    2, 127, 127, 74, 11, 3, 7, 127, 1, 3, 3, 3, 7, 48, 48, 100, 99, 105, 109, 15, 3, 99, 2, 99, 99, 99, 99, 99, 99, 99,
+    99,
+];
+
+/// The largest step of the DX7II performance's parameter of this number, below
+/// 51.
+pub fn dx7ii_performance_largest(number: usize) -> u8 {
+    DX7II_PERFORMANCE_LARGEST.get(number).copied().unwrap_or(0x7f)
+}
+
+/// The range of each of the DX7II system set-up's first 20 bytes, its
+/// parameters 64 to 83 \[DX7II-MANUAL\] p. Add-13 \[DX7S-MANUAL\] p. Add-14,
+/// the wider where they differ: the transmit channel 0–15; its switch 0–1; the
+/// receive channels 0–16; the omni 0–1; the MIDI controllers' numbers 9–31 and
+/// the sliders' 5–31 (11–31 on the DX7II); the key filter and the program
+/// change mode 0–2; the local switch and the blocks 0–1; the system channel
+/// 0–15 and its switch 0–1; the cartridge banks 0–15; the memory protect 0–3.
+/// The bytes after them, 20 to 101, take any seven bits.
+const SYSTEM_RANGES: [(u8, u8); 20] = [
+    (0, 15),
+    (0, 1),
+    (0, 16),
+    (0, 16),
+    (0, 1),
+    (9, 31),
+    (9, 31),
+    (5, 31),
+    (5, 31),
+    (0, 2),
+    (0, 2),
+    (0, 1),
+    (0, 1),
+    (0, 1),
+    (0, 15),
+    (0, 1),
+    (0, 15),
+    (0, 15),
+    (0, 15),
+    (0, 3),
+];
+
+/// The smallest and largest step of the DX7II system set-up's byte of this
+/// number, below 102.
+pub fn system_range(byte: usize) -> (u8, u8) {
+    SYSTEM_RANGES.get(byte).copied().unwrap_or((0, 0x7f))
+}
+
+/// A universal bulk dump of one group, on a channel \[DX7II-MANUAL\]: F0, 43,
+/// the sub-status 0 and the channel, 7E, the byte count of the names and the
+/// data, the classification name and the data format name, the data, the
+/// checksum of the names and the data, F7.
+pub fn universal(channel: u8, names: &[u8; 10], data: &[u8]) -> Vec<u8> {
+    let counted: Vec<u8> = names.iter().chain(data).copied().collect();
+    let count = counted.len();
+    let mut message = vec![
+        0xf0,
+        0x43,
+        channel,
+        0x7e,
+        u8::try_from(count >> 7).expect("a count below 2^14"),
+        u8::try_from(count & 0x7f).expect("seven bits"),
+    ];
+    message.extend_from_slice(&counted);
+    message.push(checksum(&counted));
+    message.push(0xf7);
+    message
+}
+
+/// The 51 bytes of a DX7II performance of random steps, each within its range.
+pub fn random_dx7ii_performance(random: &mut SplitMix64) -> Vec<u8> {
+    (0..51)
+        .map(|number| random.up_to(dx7ii_performance_largest(number)))
+        .collect()
+}
+
+/// The 102 bytes of a DX7II system set-up of random steps, each within its
+/// range.
+pub fn random_system_setup(random: &mut SplitMix64) -> Vec<u8> {
+    (0..102)
+        .map(|byte| {
+            let (smallest, largest) = system_range(byte);
+            smallest + random.up_to(largest - smallest)
+        })
+        .collect()
+}
+
+/// The 85 bytes of a DX7s system set-up of random steps, each within its
+/// range: the DX7II's but for the 17, 20 to 36, that have no name
+/// \[DX7S-MANUAL\].
+pub fn random_dx7s_system_setup(random: &mut SplitMix64) -> Vec<u8> {
+    let steps = random_system_setup(random);
+    [&steps[..20], &steps[37..]].concat()
+}

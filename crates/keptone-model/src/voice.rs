@@ -318,7 +318,7 @@ pub struct Envelope {
 
 impl Envelope {
     /// Every rate and level 0.
-    const ZERO: Self = Self {
+    pub(crate) const ZERO: Self = Self {
         rates: [Value::ZERO; 4],
         levels: [Value::ZERO; 4],
     };
