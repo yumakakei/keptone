@@ -17,16 +17,16 @@ Every value that `docs/MATH.md` tags **verify** has a row here. A row records th
 | V1 | 1, 3.4 | Full-scale gain 2 → modulation index 2 turns (4π rad) | MSFA `exp2.cc`, `fm_op_kernel.cc` | SHIRRIFF-EXP; AJXS-ROM operator output scaling | open | |
 | V2 | 2.2 | Detune law $`0.0209\,\mathrm{e}^{-0.396p}p\cdot(d - 7)/7`$ | MSFA `osc_freq` (measured on one DX7) | AJXS-ROM pitch computation (`VOICE_CONVERT_NOTE_TO_PITCH` and detune) | open | |
 | V3 | 2.3 | Fixed-mode detune (only for d > 7) and fixed operators ignore PEG/LFO | MSFA | AJXS-ROM | open | |
-| V4 | 2.4 | Pitch-modulation sensitivity table and depth scaling (/256 octaves) | MSFA `pitchmodsenstab`, `Dx7Note::compute` | AJXS-ROM LFO pitch modulation; DX7-MANUAL ranges | open | |
+| V4 | 2.4 | Pitch-modulation sensitivity table and depth scaling (/256 octaves) | MSFA `pitchmodsenstab`, `Dx7Note::compute` | AJXS-ROM LFO pitch modulation; DX7-MANUAL ranges | decided | The firmware's sensitivities are MSFA's table, and a depth of 0 to 99 is ⌊165x/64⌋ (`PATCH_ACTIVATE_SCALE_VALUE`); it multiplies the depth, the LFO's wave and the sensitivity in 8 bits (`MOD_PITCH_LOAD_TO_EGS`), whose floors MATH §15 removes [AJXS-ROM]. |
 | V5 | 3.2 | Keyboard level scaling constants (329, exp table, offset 17) | MSFA `ScaleLevel`/`ScaleCurve` | AJXS-ROM keyboard scaling; DX7-MANUAL | open | |
 | V6 | 3.2 | Velocity table and scaling | MSFA `velocity_data`, `ScaleVelocity` | AJXS-ROM velocity handling | open | |
 | V7 | 4.1 | EG clock: 49 096 (LEVIEN-EG) vs 44 100-normalised (MSFA) | LEVIEN-EG | AJXS-ROM EG update rate; MRG-EG rate-50 decay (τ = 961 samples at 44.1 kHz) | open | |
 | V8 | 4.4 | Static-segment delays (full table) | MSFA `statics` (partial, rates < 77) | AJXS-ROM; measurement | open | |
-| V9 | 5 | Pitch-EG rate table, level table, constant 21.3 | MSFA `pitchenv.cc` | AJXS-ROM pitch EG | open | |
+| V9 | 5 | Pitch-EG rate table, level table, constant 21.3 | MSFA `pitchenv.cc` | AJXS-ROM pitch EG | decided | The firmware's tables are MSFA's. Its level moves by pr/4096 octave at every second interrupt of the timer, 3140 cycles of the CPU's 1.1783 MHz clock (9.4265 MHz/8 [VDX7, DX7-SERVICE]) and some 25 until the handler resets its counter (`HANDLER_OCF`): 22.0, which refutes MSFA's 21.3. It starts at L4 at every key-on but a legato one, holds at L3 while the key or the pedal holds the note, and has no waits (`VOICE_ADD_POLY`, `VOICE_ADD_MONO`, `PITCH_EG_PROCESS`) [AJXS-ROM]. |
 | V10 | 6.1 | LFO frequency table | MSFA `lfoSource` (measured) | AJXS-ROM LFO speed table | open | |
 | V11 | 6.2 | LFO waveform phase conventions (triangle start, saw directions) | MSFA `Lfo::getsample` | AJXS-ROM | open | |
 | V12 | 6.4 | LFO delay law and unit constant 25 190 424 s⁻¹ | MSFA `Lfo::reset`/`getdelay` | AJXS-ROM | open | |
-| V13 | 7.1 | Controller depths, assign routing, max(LFO, controller) rule | MSFA | AJXS-ROM; DX7-MANUAL function parameters | open | |
+| V13 | 7.1 | Controller depths, assign routing, max(LFO, controller) rule | MSFA | AJXS-ROM; DX7-MANUAL function parameters | decided | A controller's depth is its position times its range scaled as ⌊165x/64⌋ (`MOD_CALCULATE_SOURCE_SCALED_INPUT`); the depths assigned to a destination add, saturating at 255, and the LFO's depth is added to their sum, saturating again (`MOD_PITCH_LOAD_TO_EGS`, `MOD_AMP_LOAD_TO_EGS`), which refutes MSFA's max; the EG bias is the ranges of its controllers less their depths (`MOD_PROCESS_INPUT_SOURCES`) [AJXS-ROM]. |
 | V14 | 7.2 | Amplitude-modulation depth law, A_max, EG bias | MSFA (ad hoc fit) | AJXS-ROM | open | |
 | V15 | 7.3 | Portamento law, modes, glissando | MSFA `porta.cpp` (fit) | AJXS-ROM; DX7-MANUAL | open | |
 | V16 | 8.1 | 32 algorithm graphs incl. multi-operator loops in 4 and 6 | DX7-MANUAL chart | SHIRRIFF-ALG; MSFA `FmCore::algorithms` | open | |

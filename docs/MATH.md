@@ -138,11 +138,11 @@ p_{\text{mod}}(t) = P_{\text{EG}}(t) + p_{\text{LFO}}(t) + p_{\text{bend}}(t) + 
 ```
 
 - $`P_{\text{EG}}`$: the pitch EG (§5).
-- $`p_{\text{LFO}}(t) = \sigma_{\text{PMS}} \cdot \mathrm{max}(d_{\text{PMD}}w(t), d_{\text{ctrl}}(t))\cdot \ell(t)`$:
+- $`p_{\text{LFO}}(t) = \sigma_{\text{PMS}}\cdot D(t)\cdot \ell(t)`$, with the depth $`D = \mathrm{min}(255/256,\ d_{\text{PMD}}w + d_{\text{ctrl}})`$: the firmware adds the controllers' depth to the LFO's and saturates the sum [AJXS-ROM `MOD_PITCH_LOAD_TO_EGS`], where MSFA takes the larger of the two:
   - $`\ell \in [-1, 1]`$ is the LFO waveform and $`w \in [0, 1]`$ its delay fade (§6).
-  - $`d_{\text{PMD}} = \lfloor 165\,\text{PMD}/64\rfloor/256`$.
-  - $`\sigma_{\text{PMS}} = \text{pmstab}[\text{PMS}]/256`$ octaves with pmstab = (0, 10, 20, 33, 55, 92, 153, 255) [MSFA `pitchmodsenstab`, `Dx7Note::compute`; verify].
-  - $`d_{\text{ctrl}}`$ is the controller pitch depth (§7).
+  - $`d_{\text{PMD}} = \lfloor 165\,\text{PMD}/64\rfloor/256`$ [AJXS-ROM `PATCH_ACTIVATE_SCALE_VALUE`].
+  - $`\sigma_{\text{PMS}} = \text{pmstab}[\text{PMS}]/256`$ octaves with pmstab = (0, 10, 20, 33, 55, 92, 153, 255) [MSFA `pitchmodsenstab`, `Dx7Note::compute`], the firmware's values as well [AJXS-ROM].
+  - $`d_{\text{ctrl}}`$ is the depth of the controllers assigned to the pitch (§7.1).
 - $`p_{\text{bend}}`$: the bend, as a fraction of the range (function parameter 65, 0–12 semitones; per-direction ranges are settings). STEP (66) quantises it when non-zero. A continuous bend is the default. It is $`k_{\text{bend}}/12`$, and 0 under `tuning.modulation = keys` (§2.1).
 - $`p_{\text{note}}`$: the per-note pitch, $`k_{\text{note}}/12`$ (DESIGN §7.3), and 0 under `keys` (§2.1).
 - $`p_{\text{porta}}`$: portamento (§7.3), and 0 under `keys` (§2.1).
@@ -298,9 +298,10 @@ A change to a rate or level during a segment re-anchors the closed form at the c
 P_{\text{EG}} \in [-4, +4]\ \text{octaves},\qquad \text{level}(L) = \text{pt}[L]/32
 ```
 
-- pt is MSFA's `pitchenv_tab` (−128…127; pt[50] = 0). The speed is $`\text{pr}[R]/21.3`$ octaves per second, with pr MSFA's `pitchenv_rate` [MSFA `pitchenv.cc`; verify, including the 21.3].
+- pt and pr are MSFA's `pitchtab` and `ratetab` [MSFA `pitchenv.cc`], which are the firmware's values as well [AJXS-ROM `PITCH_EG_PROCESS`]: pt = (−128, −116, −104, −95, −85, −76, −68, −61, −56, −52, −49, −46, −43, −41, −39, −37, −35, −33, −32, −31, −30, −29, −28, −27, −26, −25, −24, −23, −22, −21, −20, −19, −18, −17, −16, −15, −14, −13, −12, −11, −10, −9, −8, −7, −6, −5, −4, −3, −2, −1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 38, 40, 43, 46, 49, 53, 58, 65, 73, 82, 92, 103, 115, 127), and pr = (1, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 16, 16, 17, 18, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 31, 33, 34, 36, 37, 38, 39, 41, 42, 44, 46, 47, 49, 51, 53, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 79, 82, 85, 88, 91, 94, 98, 102, 106, 110, 115, 120, 125, 130, 135, 141, 147, 153, 159, 165, 171, 178, 185, 193, 202, 211, 232, 243, 254, 255).
+- The speed is $`\text{pr}[R]/22.0`$ octaves per second. The firmware moves the level by pr[R]/4096 octave at every second interrupt of its timer, whose period is 3140 cycles of the CPU's clock, 9.4265 MHz/8 [VDX7, DX7-SERVICE], and the cycles until the interrupt's handler resets the counter, some 25 [AJXS-ROM `HANDLER_OCF`]: $`8192 \cdot 3165/1\,178\,312.5 \approx 22.0`$, where MSFA took 21.3.
 - Linear in pitch, in both directions.
-- Starts at L4 at key-on, moves to L1, L2, L3, and goes to L4 at key-off.
+- Starts at L4 at every key-on of a voice, but for a mono part's legato key-on, which another held key precedes; moves to L1, L2 and L3, holds at L3 while the key or the sustain pedal holds the note, and goes to L4 at key-off [AJXS-ROM `VOICE_ADD_POLY`, `VOICE_ADD_MONO`, `PITCH_EG_PROCESS`]. A segment whose target is the level it starts at ends at once: the pitch envelope has no waits (§4.4 is the operators').
 - Closed form per segment, like §4.
 - Fractional L and R interpolate the tables.
 
@@ -344,22 +345,22 @@ Let $`a = 99 - \text{DELAY}`$. If $`a = 99`$, then $`w \equiv 1`$. Otherwise [MS
 
 ### 7.1 Controller routing
 
-Function parameters 70–77 set range and assign for four controllers: mod wheel, foot, breath, aftertouch. The assign bits route to pitch, amplitude and EG bias [DEXED-SYSEX, DX7-MANUAL]. MPE and CLAP note expressions (pressure, timbre, tuning) map to the same destinations per voice (DESIGN §7.3). Each controller contributes a depth in [0, 1]. Per destination, the DX7 takes the larger of the LFO depth and the controller depth (§2.4) [MSFA; verify].
+Function parameters 70–77 set range and assign for four controllers: mod wheel, foot, breath, aftertouch. The assign bits route to pitch, amplitude and EG bias [DEXED-SYSEX, DX7-MANUAL]. MPE and CLAP note expressions (pressure, timbre, tuning) map to the same destinations per voice (DESIGN §7.3). A controller at position $`x`$, from 0 at rest to 1 at its far end, contributes the depth $`x\cdot r`$, its range scaled as the LFO's depths are, $`r = \lfloor 165\,\text{RANGE}/64\rfloor/256`$ [AJXS-ROM `MOD_CALCULATE_SOURCE_SCALED_INPUT`, `PATCH_ACTIVATE_SCALE_VALUE`]. The depths of the controllers assigned to a destination add, the sum saturating at 255/256 [AJXS-ROM `MOD_PITCH_SUM_MOD_SOURCE`, `MOD_AMP_SUM_MOD_SOURCE`]: $`d_{\text{ctrl}}`$ of the pitch (§2.4) and of the amplitude (§7.2), to which the LFO's depth is then added. The EG bias is $`b = \mathrm{max}(0,\ \mathrm{min}(255/256,\ \sum_c r_c) - \sum_c x_c r_c)`$ over the controllers assigned to it: a bias controller at rest attenuates by its whole range and at its far end not at all [AJXS-ROM `MOD_PROCESS_INPUT_SOURCES`].
 
 ### 7.2 Amplitude modulation and EG bias
 
 Amplitude modulation lowers $`T`$ by
 
 ```math
-\Delta T_{\text{AM}}(t) = A_{\mathrm{max}}\cdot \alpha_{\text{AMS}}\cdot \mathrm{max}(d_{\text{AMD}}w(t), d_{\text{ctrl}})\cdot \frac{1 - \ell(t)}{2}
+\Delta T_{\text{AM}}(t) = A_{\mathrm{max}}\cdot \alpha_{\text{AMS}}\cdot \mathrm{min}(255/256,\ d_{\text{AMD}}w(t) + d_{\text{ctrl}})\cdot \frac{1 - \ell(t)}{2}
 ```
 
 It is unipolar: it only attenuates.
 
 - $`\alpha_{\text{AMS}} = (0, 66, 109, 255)/255`$ [MSFA `ampmodsenstab`].
 - $`d_{\text{AMD}} = \lfloor 165\,\text{AMD}/64\rfloor/256`$.
-- EG bias lowers $`T`$ by a controller amount on operators with AMS > 0.
-- **verify:** MSFA applies AM through an ad-hoc exponential fit (its own comment says so). Derive $`A_{\mathrm{max}}`$, the depth law and the EG-bias law from [AJXS-ROM]. Until then $`A_{\mathrm{max}}`$ = `am.max_steps`, provisional default 2048 (48 dB), with a test that fails once a verified value replaces it.
+- EG bias lowers $`T`$ on operators with AMS > 0 by an amount from the bias $`b`$ of §7.1.
+- **verify:** MSFA applies AM through an ad-hoc exponential fit (its own comment says so). The firmware adds $`b`$ to the LFO's part, which it first keeps within the room that $`b`$ leaves, and gives the EGS the sum through a table of its ROM [AJXS-ROM `MOD_AMP_LOAD_TO_EGS`]; how the EGS turns that into $`T`$ for each AMS, and so $`A_{\mathrm{max}}`$ and the law of the depth, is the EGS's (VERIFICATION V14). Until then $`A_{\mathrm{max}}`$ = `am.max_steps`, provisional default 2048 (48 dB), with a test that fails once a verified value replaces it.
 
 ### 7.3 Portamento and voice modes
 
@@ -713,6 +714,8 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The 49 096 Hz sampling and its aliasing.
 - The key after transposition held in a byte: the firmware clamps a key above 127 to 127, and a key below 0, which wraps around, to 127 as well [AJXS-ROM `VOICE_ADD`].
 - The steps of the parameters, between which every law moves continuously (§0.6).
+- The 8 bits in which the firmware multiplies the LFO's depth, its wave and its sensitivity, with their floors and a wave from −128 to 127 [AJXS-ROM `MOD_PITCH_LOAD_TO_EGS`].
+- The pitch envelope's steps at the firmware's 188 Hz, and the runs of it and of the portamento that the firmware skips while MIDI data wait to be read [AJXS-ROM `HANDLER_OCF`].
 - The DX7's 32 levels of velocity [VDX7 FAQ].
 - The attack's integer multiplier, which changes its speed in bands of 256 steps [LEVIEN-EG].
 - The floor at which the DX7 holds a decayed operator, about 84 dB below full scale, until its voice is stolen (§4.6).
