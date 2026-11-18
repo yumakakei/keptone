@@ -436,7 +436,7 @@ so that 15 gives 99 and the steps between give values between the range's steps.
 
 ### 8.1 Algorithm data
 
-The 32 algorithms are data: edges $`j \to k`$, the carrier set, and the feedback edges. Derive them from [DX7-MANUAL]'s chart and check them against two independent encodings, [SHIRRIFF-ALG] and [MSFA]'s `FmCore::algorithms`. A test asserts that all three agree. Algorithms 4 and 6 have feedback loops that span several operators [MSFA flags; DX7-MANUAL]. The rest have at most a self-loop.
+The 32 algorithms are data: edges $`j \to k`$, the carrier set, and the feedback edges. Derive them from [DX7-MANUAL]'s chart and check them against two independent encodings, [SHIRRIFF-ALG] and [MSFA]'s `FmCore::algorithms` [verify] (VERIFICATION V16). A test asserts that all three agree in one canonical form, each algorithm's edges, each of unit gain, its carriers and its feedback edges, into which MSFA's flags and the OPS's control bits that [SHIRRIFF-ALG] reads are decoded. Algorithms 4 and 6 have feedback loops that span several operators [MSFA flags; DX7-MANUAL]. The rest have at most a self-loop. A feedback edge whose FB is 0 is not in the graph (§9.1).
 
 ### 8.2 Evaluation order
 
@@ -444,14 +444,19 @@ The 32 algorithms are data: edges $`j \to k`$, the carrier set, and the feedback
 2. Topologically order the SCCs.
 3. In each sample, evaluate the SCCs in that order, because phase modulation uses the *same-instant* output of the modulator.
 4. Solve each SCC that contains feedback by §9. Every other operator uses §10 (or a point sample when `adaa.order = 0`).
+5. An operator's $`\mu_k`$ adds its modulators' outputs in the order of their operators' numbers, OP1 first, and a voice adds its carriers in that order (§14), so that each sum's order is fixed (§0.2).
 
 ### 8.3 Per-voice algorithm
 
-The OPS can run a different algorithm in each voice; the DX7 does not use this [SHIRRIFF-REG]. `graph.algorithm_scope = patch | voice`. With `voice`, a voice keeps the algorithm it started with when the patch changes mid-note.
+The OPS can run a different algorithm in each voice; the DX7 does not use this [SHIRRIFF-REG]. A voice plays its part's compiled patch (DESIGN §6.2), and a patch that changes while it sounds (§0.3) acts on it from the change's instant: its phases and its envelopes go on, re-anchored as §4.7 says, and an operator whose strongly connected component the change alters, as a new algorithm or a feedback to or from 0 does, starts its feedback state anew there, as a new voice's starts (§9.6). `graph.algorithm_scope = patch | voice`, default `patch`. With `voice`, a sounding voice keeps the graph that it started with, its algorithm and its feedback edges, and takes the rest of the new patch.
 
 ### 8.4 User graphs
 
 Any directed graph over $`N`$ operators (`graph.operators`, default 6) is accepted. The rules above apply unchanged. A graph comes with its own feedback gains and carrier set (DESIGN §11.2).
+
+### 8.5 Operator switches
+
+An operator switched off (parameter 155 [DX7-MANUAL]) gives nothing, as a carrier or as a modulator, while its envelope and its phase go on, so that switched on again it goes on from where they are; a voice's end does not wait for a carrier switched off (§13.3). A switch acts at once: the operator's gain is multiplied by a factor that moves linearly between 0 and 1 over `param.level_glide_s` (§4.7), so that switching does not click. The DX7's firmware gives a switched-off operator the attenuation 0xFF at its voice's key-on [AJXS-ROM `VOICE_ADD_LOAD_OPERATOR_DATA_TO_EGS`], so that a switch reaches a sounding note at its next key-on; Keptone's reaches it at once.
 
 ## 9. Feedback (`keptone-engine::feedback`, `keptone-math::kepler`)
 
@@ -461,7 +466,7 @@ Any directed graph over $`N`$ operators (`graph.operators`, default 6) is accept
 y[n] = g\,\sin\left(2\pi\left(\theta[n] + \kappa\,\frac{y[n-1] + y[n-2]}{2}\right)\right),\qquad \kappa = 2^{\text{FB} - 8}\ \text{turns per unit},\ \text{FB} = 1\dots 7
 ```
 
-FB = 0 means no feedback. The mean of the last two outputs is Tomisawa's anti-hunting filter [LEVIEN-HW, AJXS-ANALYSIS, MSFA `compute_fb`; verify κ]. In radians the loop gain is
+FB = 0 means no feedback: the operator has no feedback edge (§8.1). Between the steps κ is interpolated (§0.6), from 0 at FB 0, so that a feedback grows from nothing; above 7 the steps go on as the formula gives them, and below 0 along the first step, so that κ falls below 0 and the feedback is inverted. The mean of the last two outputs is Tomisawa's anti-hunting filter [LEVIEN-HW, AJXS-ANALYSIS, MSFA `compute_fb`; verify κ]. In radians the loop gain is
 
 ```math
 \beta = 2\pi\kappa g
@@ -473,7 +478,7 @@ At full scale, $`g = 2`$:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | β | 0.098 | 0.196 | 0.393 | 0.785 | 1.571 | 3.142 | 6.283 |
 
-β is proportional to the operator's *current* gain, so it moves with the envelope during a note.
+β is proportional to the operator's *current* gain, so it moves with the envelope during a note. Where κ is below 0, so is β: the regimes and the models of §9.3 to §9.7 take β by its magnitude, and §9.4 solves the operator half a turn away.
 
 ### 9.2 The ideal operator
 
@@ -509,6 +514,7 @@ Safeguarded Newton on $`h(\Theta) - \Phi`$:
 - If a Newton step leaves the bracket, take the bracket's top instead while it is still $`\mathrm{min}(\Phi + \beta, \pi)`$, from which Newton converges monotonically, and bisect otherwise [ODELL-GOODING]. Bisection alone, specified here first, crept up to the top linearly where $`\Theta \approx \pi/2`$, the root then lying within about 10⁻¹² of $`\Phi + \beta`$, and took up to 14 iterations on the grid of §16.
 - Near the cusp $`h(\Theta) - \Phi`$ cancels. Evaluate it as $`(1 - \beta)\Theta + \beta\cdot(\Theta - \sin\,\Theta) - \Phi`$, with $`\Theta - \sin\,\Theta`$ from its own Taylor polynomial below $`\Theta = \pi/2`$, and $`h'`$ as $`1 - \beta + 2\beta\,\sin^2(\Theta/2)`$ [MARKLEY], so that the residual errs by less than $`u\left|\Phi\right|`$ and the stopping rule can be met.
 - Stop when $`\left|\text{step}\right| \le 2u\,\mathrm{max}(1, \left|\Theta\right|)`$, with $`u = 2^{-53}`$, or after `feedback.max_iterations` (default 16).
+- A negative β (§9.1) is solved as its magnitude half a turn away: $`\Theta = \Psi + \pi`$, with $`\Psi - \left|\beta\right|\sin\,\Psi = \Phi - \pi`$, so that $`y = -g\,\sin\,\Psi`$.
 - `keptone-math::kepler` works in turns, $`\Theta = 2\pi\tau`$ and $`\Phi = 2\pi\varphi`$, where sin2pi and cos2pi reduce exactly; Newton's iteration and the stopping rule carry over as they are.
 - The tests record the distribution of iteration counts and fail if any case in the test grid needs more than 8.
 
@@ -720,7 +726,7 @@ The parts that take a note (§13.5) are served in the order of their indices. A 
 
 ### 13.3 End of a voice
 
-A voice ends when every carrier is in segment 3 with $`T \lt T_{\text{end}}`$ and no key or sustain holds it. Its end is reported to the host (CLAP note-end). It is tested at every engine sample, so that a voice ends at the same sample whatever the blocks (§0.3).
+A voice ends when every carrier is in segment 3 with $`T \lt T_{\text{end}}`$, or switched off, its factor at 0 (§8.5), and no key or sustain holds it. Its end is reported to the host (CLAP note-end). It is tested at every engine sample, so that a voice ends at the same sample whatever the blocks (§0.3).
 
 ### 13.4 Subnormals and stopping
 
@@ -777,6 +783,7 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The attack's integer multiplier, which changes its speed in bands of 256 steps [LEVIEN-EG].
 - The floor at which the DX7 holds an operator's level, 90 dB below full scale, until its voice is stolen: the level falls on below it, and the envelope keeps the floor's timing (§4.6).
 - The bend's 7 bits and the dead zone at its centre [AJXS-ROM `PITCH_BEND_PARSE`].
+- The operator switches' reaching a sounding note at its next key-on alone [AJXS-ROM `VOICE_ADD_LOAD_OPERATOR_DATA_TO_EGS`] (§8.5).
 - The block-rate control and the 1024-point sine table of MSFA-based emulators.
 
 **Kept** (they define patches): every law and table in §2–§9, the attack jump, the static segment delays, the envelope's timing at the floor, sustain after release with L4 > 0, the shared LFO, and the DX7's keyboard scaling, velocity and rate scaling curves. The attack jump, the static segments and the shared LFO each have a setting that lets the user step away from them.
