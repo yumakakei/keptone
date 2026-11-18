@@ -83,13 +83,27 @@ y_k(t) = g_k(t)\,\sin(2\pi[\theta_k(t) + \mu_k(t)]),\qquad \theta_k(t) = \theta_
 
 ### 2.1 Key to frequency
 
-The note number after transposition is $`k' = k + (\text{TRANSPOSE} - 24)`$ (TRANSPOSE 0–48; 24 means none) [DEXED-SYSEX, MSFA]. Its pitch is
+The note number after transposition is
+
+```math
+k' = k + \tau(\text{TRANSPOSE} - 24) + \tau(s)
+```
+
+where TRANSPOSE (0–48 on its scale; 24 means none) is the voice's, which the DX7's firmware adds to the key before it takes the key's pitch [AJXS-ROM `VOICE_ADD`, DEXED-SYSEX], $`s`$ is the note shift of the part that plays the note (§13.5), and $`\tau`$ takes a shift in keys or in the tuning's octaves (below). $`k'`$ is a real number and is never clamped (§15). Its pitch is
 
 ```math
 p_{\text{key}}(k') = \text{tuning}(k')
 ```
 
 By default `tuning` is 12-TET with A4 = `tuning.a4_hz` = 440 Hz: $`p = \log_2\,440 + (k' - 69)/12`$. Alternatives: a Scala `.scl` + `.kbm` pair [SCALA-SCL, SCALA-KBM], or MTS-ESP [MTS-ESP] (optional, off by default). A tuning is a function from real note values to pitch, so it applies to fractional notes from bends and glides too (§2.5).
+
+A shift is in keys. With `tuning.transpose_octave = keys`, the default, $`\tau(\sigma) = \sigma`$, as on the DX7. With `period`, each whole octave of a shift, twelve keys, moves by the tuning's period instead, so that an octave of transposition spans the tuning's period, as it does under 12-TET:
+
+```math
+\tau(\sigma) = \sigma + (P - 12)\,\mathrm{trunc}(\sigma/12)
+```
+
+where trunc takes the integer part, toward 0, and $`P`$ is the period in keys: 12 under 12-TET; under Scala, the keyboard mapping's size, or the scale's count of pitches where the mapping is linear [SCALA-KBM]; and under MTS-ESP, the size of its master's keyboard mapping, or 12 where the master gives none [MTS-ESP]. $`\tau`$ splits the transpose and the note shift each into its own octaves and keys.
 
 ### 2.2 Operator frequency, ratio mode (OSC MODE = 0)
 
@@ -141,6 +155,16 @@ The drift over a note is bounded by the rounding of the additions: under $`\sqrt
 
 **Initial phase** (OSC KEY SYNC, parameter 136). On: $`\theta_k = 0`$ at key-on. Off: the phase continues from the voice slot's previous note (DX7). `osc.free_phase_start = continue | zero | random`; `random` draws from §6.3's generator.
 
+### 2.6 Key of the keyboard scalings
+
+The keyboard scalings of the level (§3.2) and of the rates (§4.1) take a key $`k_{\mathrm{s}}`$, a real number on the scale of 12-TET's keys, which `scaling.key` gives:
+
+- `key`, the default: the key after transposition, $`k_{\mathrm{s}} = k'`$. The DX7's firmware takes the level scaling from the transposed key's pitch, once at key-on and before the pitch envelope and the master tune reach it [AJXS-ROM `VOICE_ADD`]. Neither the tuning nor the voice's pitch modulation moves a scaling.
+- `onset-pitch`: the pitch that the tuning gives the key at key-on, measured in 12-TET's semitones from the tuning's reference key $`k_{\mathrm{r}}`$: $`k_{\mathrm{s}} = k_{\mathrm{r}} + 12(\text{tuning}(k' + k_{\text{note}}) - \text{tuning}(k_{\mathrm{r}}))`$, where $`k_{\text{note}}`$ is the note's per-note pitch at key-on, in keys, 0 where it has none (DESIGN §7.3). $`k_{\mathrm{r}}`$ is the key whose pitch the tuning fixes: 69 under 12-TET, the reference key of the keyboard mapping under Scala [SCALA-KBM], and under MTS-ESP its master's reference key, or 69 where the master gives none [MTS-ESP]. So neither `tuning.a4_hz` nor the master tune moves a scaling, and under 12-TET without a per-note pitch $`k_{\mathrm{s}} = k'`$.
+- `pitch`: the voice's pitch at each sample, measured in the same way, $`k_{\mathrm{s}}(t) = k_{\mathrm{r}} + 12(\text{tuning}(k' + k_{\text{note}}(t)) + p_{\text{mod}}(t) - p_{\text{tune}} - \text{tuning}(k_{\mathrm{r}}))`$: the pitch that §2.2 gives a ratio-mode operator, without its frequency ratio, its detune and the master tune. The scalings then follow the bend, the portamento, the pitch envelope, the LFO and the per-note pitch, and the offset $`O`$ and the rates move with them, as §4.7 says of a live change.
+
+$`k_{\mathrm{s}}`$ is the voice's, the same for each of its operators, those in the fixed mode included, as the DX7's firmware takes one key for all six [AJXS-ROM `VOICE_ADD`].
+
 ## 3. Levels (`keptone-engine::level`)
 
 ### 3.1 The 0–99 to level-curve map
@@ -154,13 +178,13 @@ s(L) = \begin{cases} [0, 5, 9, 13, 17, 20, 23, 25, 27, 29, 31, 33, 35, 37, 39, 4
 ### 3.2 Operator offset from output level, key scaling and velocity
 
 ```math
-O = 32\,\mathrm{min}(127, s(\text{OL}) + \text{KLS}(k)) + V(v)
+O = 32\,\mathrm{min}(127, s(\text{OL}) + \text{KLS}(k_{\mathrm{s}})) + V(v)
 ```
 
 $`O`$ is clamped at 0 [MSFA `Dx7Note::init`]. Then:
 
 - **Keyboard level scaling** [MSFA `ScaleLevel`, `ScaleCurve`; DX7-MANUAL; verify].
-  - Let $`o = k - \text{BP} - 17`$, where BP 0–99 is the break point (BP 39 is C3).
+  - Let $`o = k_{\mathrm{s}} - \text{BP} - 17`$, where $`k_{\mathrm{s}}`$ is the key of the scalings (§2.6) and BP 0–99 is the break point (BP 39 is C3).
   - If $`o \ge 0`$: $`\text{KLS} = C_{\mathrm{R}}(\lfloor (o+1)/3\rfloor, \text{RD})`$. Otherwise: $`\text{KLS} = C_{\mathrm{L}}(\lfloor (1-o)/3\rfloor, \text{LD})`$.
   - For curve $`c \in \{-\text{LIN}, -\text{EXP}, +\text{EXP}, +\text{LIN}\}`$, group $`u`$, depth $`D`$:
     - linear: $`\lfloor 329uD / 2^{12}\rfloor`$
@@ -195,10 +219,12 @@ State: the segment index $`i \in \{0, 1, 2, 3\}`$ (targets L1…L4), the start s
 ### 4.1 Rate
 
 ```math
-q_i = \mathrm{min}(63, \lfloor 41 R_i / 64\rfloor + \text{RS}(k)),\qquad \text{RS}(k) = \lfloor \text{KRS} \cdot \mathrm{clamp}(\lfloor k/3\rfloor - 7, 0, 31)/8 \rfloor
+q_i = \mathrm{min}(63, \lfloor 41 R_i / 64\rfloor + \text{RS}(k_{\mathrm{s}})),\qquad \text{RS}(k_{\mathrm{s}}) = \lfloor \text{KRS} \cdot \mathrm{clamp}(\lfloor k_{\mathrm{s}}/3\rfloor - 7, 0, 31)/8 \rfloor
 ```
 
-[LEVIEN-EG, MSFA `ScaleRate`]. With `eg.rate_quantize = false` the floors are dropped, so a fractional $`R`$ is continuous.
+[LEVIEN-EG, MSFA `ScaleRate`]. With `eg.rate_quantize = false` the floors are dropped, so a fractional $`R`$ is continuous. $`k_{\mathrm{s}}`$ is the key of the scalings (§2.6).
+
+**verify.** The DX7's firmware writes only the rate scaling's sensitivity to the EGS, which scales the rates itself [AJXS-ROM `PATCH_ACTIVATE_OPERATOR_KBD_SCALING_RATE`], presumably by the key code of its voice frequency register ("Key Code Log F"). The firmware writes that register with the key's pitch, the portamento, the pitch envelope and the master tune, while the LFO and the bend go to the EGS's pitch modulation registers [AJXS-ROM `VOICE_ADD_LOAD_FREQ_TO_EGS`, `PORTA_PROCESS`]. Whether the EGS takes the key so, and when it reads the register, is to be found. Until then the rates take $`k_{\mathrm{s}}`$, as the level does.
 
 **Decay speed** (steps per second):
 
@@ -663,6 +689,7 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The finite phase accumulator.
 - The residual output that some algorithms (16–18) never let fall to zero [PLOGUE-OPS7 discussion].
 - The 49 096 Hz sampling and its aliasing.
+- The key after transposition held in a byte: the firmware clamps a key above 127 to 127, and a key below 0, which wraps around, to 127 as well [AJXS-ROM `VOICE_ADD`].
 - The block-rate control and the 1024-point sine table of MSFA-based emulators.
 
 **Kept** (they define patches): every law and table in §2–§9, the attack jump, the static segment delays, sustain after release with L4 > 0, the shared LFO, and the DX7's keyboard scaling, velocity and rate scaling curves. Each has a setting that lets the user step away from it.
@@ -693,7 +720,7 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 
 ## 17. Settings index
 
-Every setting is stored in the plugin state and has a host parameter where continuous automation makes sense. Defaults are chosen for the main use (playing DX7 patches cleanly). Anything else is the user's choice.
+Every setting is stored in the plugin state and has a host parameter where continuous automation makes sense. Defaults are chosen for the main use (playing DX7 patches cleanly). Anything else is the user's choice. A setting's row is its number, which its ID holds (DESIGN §7.4): a setting added later takes the next row, whatever its section, and none is taken away.
 
 | Setting | Default | Values | § |
 | --- | --- | --- | --- |
@@ -752,3 +779,5 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `syx.export_rounding` | nearest | nearest / floor | DESIGN §7.4 |
 | `syx.performance_sensitivity` | linear | linear / firmware | 7.4 |
 | `json.max_depth` | 64 | ≥ 0 | DESIGN §11.1 |
+| `tuning.transpose_octave` | keys | keys / period | 2.1 |
+| `scaling.key` | key | key / onset-pitch / pitch | 2.6 |

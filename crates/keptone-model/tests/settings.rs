@@ -128,7 +128,16 @@ fn numbers_names_and_ids() {
     for (number, spec) in (0..).zip(SPECS) {
         assert_eq!(settings.get(number), Some(spec.default));
     }
-    assert_eq!(settings.get(55), None);
+    assert_eq!(settings.get(beyond()), None);
+    // A setting added later takes the next number, whatever its section.
+    assert_eq!(settings::number_of("json.max_depth"), Some(54));
+    assert_eq!(settings::number_of("tuning.transpose_octave"), Some(55));
+    assert_eq!(settings::number_of("scaling.key"), Some(56));
+}
+
+/// The number after the last setting's.
+fn beyond() -> u16 {
+    u16::try_from(settings::COUNT).expect("a few settings")
 }
 
 /// The number of a setting of a name.
@@ -166,6 +175,11 @@ fn each_setting_takes_its_values() {
         ("voice.steal", Value::Choice(4), false),
         ("scaling.exact", Value::Switch(true), true),
         ("scaling.exact", Value::Choice(1), false),
+        ("scaling.key", Value::Choice(2), true),
+        ("scaling.key", Value::Choice(3), false),
+        ("scaling.key", Value::Switch(true), false),
+        ("tuning.transpose_octave", Value::Choice(1), true),
+        ("tuning.transpose_octave", Value::Choice(2), false),
     ];
     for (name, value, takes) in cases {
         let before = settings.clone();
@@ -176,7 +190,7 @@ fn each_setting_takes_its_values() {
             assert_eq!(settings, before, "{name} = {value:?}");
         }
     }
-    assert!(!settings.set(55, Value::Switch(true)));
+    assert!(!settings.set(beyond(), Value::Switch(true)));
     // −0 is taken as +0.
     assert!(settings.set(number("output.gain"), Value::Number(-0.0)));
     let Some(Value::Number(gain)) = settings.get(number("output.gain")) else {

@@ -32,4 +32,5 @@ Every value that `docs/MATH.md` tags **verify** has a row here. A row records th
 | V16 | 8.1 | 32 algorithm graphs incl. multi-operator loops in 4 and 6 | DX7-MANUAL chart | SHIRRIFF-ALG; MSFA `FmCore::algorithms` | open | |
 | V17 | 9.1 | Feedback scaling κ = 2^(FB−8) turns per unit, the two-sample mean | MSFA `compute_fb`; LEVIEN-HW | AJXS-ANALYSIS; Shirriff OPS feedback path | open | |
 | V18 | 13.2 | Voice allocation and stealing (`voice.steal = dx7`) | — | AJXS-ROM voice allocation | open | |
-| V19 | 2.1 | TRANSPOSE centre 24 | MSFA / DEXED-SYSEX | DX7-MANUAL | open | |
+| V19 | 2.1 | TRANSPOSE centre 24 | MSFA / DEXED-SYSEX | DX7-MANUAL; AJXS-ROM `VOICE_ADD` | decided | 24 is none: the firmware adds TRANSPOSE to the key and subtracts 24 before it takes the key's pitch [AJXS-ROM], as Dexed does; MSFA applies no transpose. |
+| V20 | 4.1 | The key of the rate scaling: $`k_{\mathrm{s}}`$ of §2.6, the transposed key by default, as the level scaling's | AJXS-ROM `VOICE_ADD` (the level scaling's key) | AJXS-ANALYSIS and DX7-SERVICE on the EGS; a DX7's decay times under its pitch envelope and its portamento | open | |
