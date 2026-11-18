@@ -376,18 +376,23 @@ Function parameters 70–77 set range and assign for four controllers: mod wheel
 
 ### 7.2 Amplitude modulation and EG bias
 
-Amplitude modulation lowers $`T`$ by
+The DX7's firmware gives the EGS one value for the amplitude modulation and the EG bias together [AJXS-ROM `MOD_AMP_LOAD_TO_EGS`]. The depths of the LFO and of the controllers, $`a = \mathrm{min}(255/256,\ d_{\text{AMD}}w + d_{\text{ctrl}})`$ (§6.4, §7.1), are kept within the room that the bias $`b`$ of §7.1 leaves and scaled by the LFO's wave, and the bias is added, so that the operator keeps the part of its amplitude
 
 ```math
-\Delta T_{\text{AM}}(t) = A_{\mathrm{max}}\cdot \alpha_{\text{AMS}}\cdot \mathrm{min}(255/256,\ d_{\text{AMD}}w(t) + d_{\text{ctrl}})\cdot \frac{1 - \ell(t)}{2}
+r(t) = 1 - b - \mathrm{min}(a,\ 255/256 - b)\cdot \frac{1 - \ell(t)}{2}
 ```
 
-It is unipolar: it only attenuates.
+never less than 1/256. The firmware gives the EGS $`r`$ as its logarithm, $`-32\log_2\,r`$ in units of 1/32 of an octave, through a table of its ROM; Keptone takes the logarithm itself (§0.4). The operator's level is lowered by
 
-- $`\alpha_{\text{AMS}} = (0, 66, 109, 255)/255`$ [MSFA `ampmodsenstab`].
-- $`d_{\text{AMD}} = \lfloor 165\,\text{AMD}/64\rfloor/256`$.
-- EG bias lowers $`T`$ on operators with AMS > 0 by an amount from the bias $`b`$ of §7.1.
-- **verify:** MSFA applies AM through an ad-hoc exponential fit (its own comment says so). The firmware adds $`b`$ to the LFO's part, which it first keeps within the room that $`b`$ leaves, and gives the EGS the sum through a table of its ROM [AJXS-ROM `MOD_AMP_LOAD_TO_EGS`]; how the EGS turns that into $`T`$ for each AMS, and so $`A_{\mathrm{max}}`$ and the law of the depth, is the EGS's (VERIFICATION V14). Until then $`A_{\mathrm{max}}`$ = `am.max_steps`, provisional default 2048 (48 dB), with a test that fails once a verified value replaces it.
+```math
+\Delta T_{\text{AM}}(t) = \frac{A_{\mathrm{max}}}{8}\cdot \alpha_{\text{AMS}}\cdot \log_2\frac{1}{r(t)}
+```
+
+so that, with $`A_{\mathrm{max}}`$ at its default and $`\alpha_{\text{AMS}}`$ at 1, the operator keeps the amplitude $`r`$, the tremolo and the bias linear in amplitude; the deepest, $`r = 1/256`$, lowers the level by $`A_{\mathrm{max}}\alpha_{\text{AMS}}`$ steps. For AMS above 0 they only attenuate, and an operator whose AMS is 0 takes neither. They lower the operator's level and not its envelope: they move neither the envelope's timing (§4.6) nor a voice's end (§13.3).
+
+- $`d_{\text{AMD}} = \lfloor 165\,\text{AMD}/64\rfloor/256`$ [AJXS-ROM `PATCH_ACTIVATE_SCALE_VALUE`].
+- $`\alpha_{\text{AMS}} = (0, 66, 109, 255)/255`$ [MSFA `ampmodsenstab`; verify]: the firmware writes the AMS to the EGS beside the rate scaling's sensitivity [AJXS-ROM `PATCH_ACTIVATE_OPERATOR_KBD_SCALING_RATE`], and the EGS scales the value by it. Between the steps $`\alpha`$ is interpolated (§0.6), and beyond them it goes on along its end steps (§0.5), so that below 0 the modulation and the bias raise the level instead.
+- $`A_{\mathrm{max}}`$ = `am.max_steps`, provisional default 2048, the firmware's 8 octaves taken whole at AMS 3 [verify] (VERIFICATION V14), with a test that fails once a verified value replaces it.
 
 ### 7.3 Portamento and voice modes
 
@@ -741,6 +746,7 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The 49 096 Hz sampling and its aliasing.
 - The key after transposition held in a byte: the firmware clamps a key above 127 to 127, and a key below 0, which wraps around, to 127 as well [AJXS-ROM `VOICE_ADD`].
 - The steps of the parameters, between which every law moves continuously (§0.6).
+- The 8 bits in which the firmware combines the amplitude modulation and the EG bias, and the steps of the table of its ROM that takes their logarithm [AJXS-ROM `MOD_AMP_LOAD_TO_EGS`].
 - The 8 bits in which the firmware multiplies the LFO's depth, its wave and its sensitivity, with their floors and a wave from −128 to 127 [AJXS-ROM `MOD_PITCH_LOAD_TO_EGS`].
 - The LFO's steps at the firmware's 372 Hz, its 16-bit phase and 8-bit wave with the 64 steps of its sine's quarter, the 8-bit linear congruential generator of its sample and hold, and the 8-bit fade of its delay, which stops at 255/256 [AJXS-ROM `LFO_GET_AMPLITUDE`].
 - The pitch envelope's steps at the firmware's 188 Hz, and the runs of it and of the portamento that the firmware skips while MIDI data wait to be read [AJXS-ROM `HANDLER_OCF`].
