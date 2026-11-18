@@ -10,7 +10,7 @@ specification: the GNU General Public License, version 3 or any later version
 
 # Verification log
 
-Every value that `docs/MATH.md` tags **verify** has a row here. A row records the provisional value, its source, the independent source consulted, what that source says, and the decision. A row is closed only when the decision is made and the code and tests follow it. The milestone that first uses a value cannot close while its row is open (DESIGN §16).
+Every value that `docs/MATH.md` tags **verify** has a row here. A row records the provisional value, its source, the independent source consulted, what that source says, and the decision. A row is open while it waits for its sources; decided once the decision is made, until the code and the tests follow it; provisional where no independent source can settle the value, which then stays, pinned by a test that fails once a verified value is entered; and closed once the code and the tests follow the decision. The milestone that first uses a value cannot close while its row is open (DESIGN §16).
 
 | # | MATH § | Item | Provisional (source) | Check against | Status | Decision |
 | --- | --- | --- | --- | --- | --- | --- |

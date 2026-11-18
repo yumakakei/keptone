@@ -58,9 +58,9 @@ Each constant or law carries one tag:
 - **[DX7-MANUAL]**, **[DEXED-SYSEX]**: published specifications.
 - **[LEVIEN-…]**, **[MRG-EG]**: measurements of real hardware.
 - **[MSFA]**: values in Raph Levien's engine, partly measured, partly fitted.
-- **verify**: provisional. Before a milestone that uses the value is closed, check it against an independent source ([AJXS-ROM] or measurement). Record the outcome in `docs/VERIFICATION.md`: the source consulted, what it says, whether the value changed. Where two sources disagree, the code keeps the value of the stronger source, the other becomes a setting, and the disagreement stays documented.
+- **verify**: provisional. Before a milestone that uses the value is closed, check it against an independent source ([AJXS-ROM], a published analysis of the hardware, or a measurement). Record the outcome in `docs/VERIFICATION.md`: the source consulted, what it says, whether the value changed. Where two sources disagree, the code keeps the value of the stronger source and the disagreement stays documented; a value that the stronger source refutes is dropped, not kept as a choice, and a setting that is a number keeps the verified value as its default. Where no independent source can settle a value, it stays provisional: its row says so and why, and a test pins it, so that it fails once a verified value is entered.
 
-Read [AJXS-ROM] as documentation and write independent code. Never transcribe it.
+Read [AJXS-ROM] as documentation and write independent code. Never transcribe it. Where the firmware computes a law from a table of its ROM, Keptone writes the law as it behaves, in a form of its own, and copies no table of the ROM's (DESIGN §14).
 
 ### 0.5 The values of parameters
 

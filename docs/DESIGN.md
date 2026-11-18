@@ -454,7 +454,7 @@ GitHub Actions, plain git checkout, no third-party actions:
 - GPL-3.0-or-later; REUSE with SPDX headers on every file.
 - No Yamaha firmware, ROM tables or factory voices in the repository or the packages. The project's own original bank is made later.
 - Tables taken from MSFA (Apache-2.0) are cited where they are used.
-- Firmware behaviour is learned from [AJXS-ROM] and written independently. Never translate its code: algorithms are not copyrightable, but a line-by-line translation could be a derivative of Yamaha's firmware.
+- Firmware behaviour is learned from [AJXS-ROM] and written independently. Never translate its code: algorithms are not copyrightable, but a line-by-line translation could be a derivative of Yamaha's firmware. A law that the firmware computes from a table of its ROM is written in a form of Keptone's own that behaves as it does, never as a copy of the table (MATH §0.4).
 - [VDX7] needs a ROM the user owns. It may be used locally to measure timings, never in CI or the product.
 - "DX7", "Yamaha" and the names of the other instruments appear only descriptively ("compatible with DX7 SysEx"), as text: never in the product name, and never as a logo, the front panels (UI.md §2.6) included. "VST" is used per Steinberg's rules if at all.
 
@@ -504,7 +504,7 @@ These are recorded here and settled by the author (and GRØVeN where it is their
 
 ## 16. Milestones
 
-Each milestone ends with its tests green in CI and its docs updated. An item tagged **verify** in MATH that a milestone uses is resolved in `docs/VERIFICATION.md` before the milestone closes.
+Each milestone ends with its tests green in CI and its docs updated. An item tagged **verify** in MATH that a milestone uses is resolved in `docs/VERIFICATION.md` before the milestone closes: decided, or provisional where no independent source can settle it (MATH §0.4).
 
 | M | Content | Exit criteria |
 | --- | --- | --- |
