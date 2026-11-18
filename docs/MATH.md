@@ -188,15 +188,15 @@ $`k_{\mathrm{s}}`$ is the voice's, the same for each of its operators, those in 
 s(L) = \begin{cases} [0, 5, 9, 13, 17, 20, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 42, 43, 45, 46]_L & L \lt 20 \\ 28 + L & L \ge 20 \end{cases}
 ```
 
-[MSFA `scaleoutlevel`, LEVIEN-EG]. Between integers, $`s`$ is interpolated linearly (§0.6).
+[MSFA `scaleoutlevel`, LEVIEN-EG], the firmware's values as well, whose table holds $`127 - s(L)`$ [AJXS-ROM `TABLE_LOG`]. Between integers, $`s`$ is interpolated linearly (§0.6), and an envelope's level, which takes $`\lfloor s/2\rfloor`$, is interpolated as a whole (§3.3).
 
 ### 3.2 Operator offset from output level, key scaling and velocity
 
 ```math
-O = 32\,\mathrm{min}(127, s(\text{OL}) + \text{KLS}(k_{\mathrm{s}})) + V(v)
+O = 32\,\mathrm{min}(127, \lambda) + V(v)\quad(\lambda \ge 1),\qquad \lambda = s(\text{OL}) + \text{KLS}(k_{\mathrm{s}})
 ```
 
-$`O`$ is clamped at 0 [MSFA `Dx7Note::init`]. Then:
+For $`\lambda \ge 1`$, $`O`$ is clamped at 0 [MSFA `Dx7Note::init`]. $`\lambda`$ is the operator's level before its velocity, 0 to 127 on the DX7, whose firmware gives an operator whose $`\lambda`$ is 0 the attenuation 0xFF, at any velocity, as it gives one switched off [AJXS-ROM `PATCH_ACTIVATE_OPERATOR_KBD_SCALING_LEVEL`, `VOICE_ADD_LOAD_OPERATOR_DATA_TO_EGS`]: an output level of 0 is off where the scaling does not raise it, and sounds where a positive curve does. Below $`\lambda = 1`$ the level is interpolated in the gain (§3.4), from silence at 0 to the gain at 1, $`O = O_1 + 256\log_2\,\lambda`$ with $`O_1`$ the offset at $`\lambda = 1`$, and at or below 0 the operator is silent. Then:
 
 - **Keyboard level scaling** [MSFA `ScaleLevel`, `ScaleCurve`; DX7-MANUAL; verify].
   - Let $`o = k_{\mathrm{s}} - \text{BP} - 17`$, where $`k_{\mathrm{s}}`$ is the key of the scalings (§2.6) and BP 0–99 is the break point (BP 39 is C3).
@@ -213,10 +213,10 @@ $`O`$ is clamped at 0 [MSFA `Dx7Note::init`]. Then:
 ### 3.3 Total level of an EG level
 
 ```math
-T(L_i) = 64\lfloor s(L_i)/2\rfloor + O - 4256,\qquad T \ge T_{\mathrm{min}} = 16
+T(L) = E(L) + O - 4256,\qquad E(L) = 64\lfloor s(L)/2\rfloor
 ```
 
-[MSFA `Env::advance`, LEVIEN-EG]. Full scale (L = OL = 99, no scaling or velocity) is $`T_{\text{full}} = 4032 + 4064 - 4256 = 3840`$. Velocity can push $`T`$ above $`T_{\text{full}}`$ (by up to 224 steps) [LEVIEN-EG]. The clip at $`T_{\mathrm{min}}`$ is the DX7's floor, about 84 dB below full scale. See §4.6 for what replaces it.
+[MSFA `Env::advance`, LEVIEN-EG]. $`E`$ is the envelope's part of $`T`$, and $`\lfloor s/2\rfloor`$ the level that the firmware gives the EGS, as the attenuation $`63 - \lfloor s/2\rfloor`$, its table's $`127 - s`$ halved [AJXS-ROM `PATCH_ACTIVATE_OPERATOR_EG_LEVEL`]. At an integer L, $`E`$ is the DX7's, and between integers it is interpolated as a whole (§0.6), not through an interpolated $`s`$, whose floor would keep the steps. Full scale (L = OL = 99, no scaling or velocity) is $`T_{\text{full}} = 4032 + 4064 - 4256 = 3840`$. Velocity can push $`T`$ above $`T_{\text{full}}`$ (by up to 224 steps) [LEVIEN-EG]. A level below 1 is interpolated in the gain, and one at or below 0 is silent (§4.6). The DX7 holds $`T`$ no lower than its floor $`T_{\mathrm{F}} = 16`$, 90 dB below full scale; Keptone keeps the floor's timing and removes it from the level (§4.6, §15).
 
 ### 3.4 Gain
 
@@ -228,7 +228,7 @@ g = 2^{T/256 - 14}
 
 ## 4. Operator envelope (`keptone-engine::eg`)
 
-State: the segment index $`i \in \{0, 1, 2, 3\}`$ (targets L1…L4), the segment's start, an instant $`(n_0, \eta_0)`$ (§0.1), and the start level $`T_0`$. During a segment, $`T`$ at the engine sample $`n`$ is the closed form below evaluated at $`t = (n - n_0 - \eta_0)/f_{\mathrm{e}}`$, the time since the start. It is never an accumulated sum (§0.3). A segment that reaches its target, or a wait that ends (§4.4), starts the next at that instant, between two samples where it falls there.
+State: the segment index $`i \in \{0, 1, 2, 3\}`$ (targets L1…L4), the segment's start, an instant $`(n_0, \eta_0)`$ (§0.1), and the start level $`T_0`$. During a segment, $`T`$ at the engine sample $`n`$ is the closed form below evaluated at $`t = (n - n_0 - \eta_0)/f_{\mathrm{e}}`$, the time since the start. It is never an accumulated sum (§0.3). A segment ends where its level, as the DX7 takes it, has reached its target and its wait is over (§4.4, §4.6), and the next starts at that instant, between two samples where it falls there.
 
 ### 4.1 Rate
 
@@ -236,9 +236,9 @@ State: the segment index $`i \in \{0, 1, 2, 3\}`$ (targets L1…L4), the segment
 q_i = \mathrm{min}(63, \lfloor 41 R_i / 64\rfloor + \text{RS}(k_{\mathrm{s}})),\qquad \text{RS}(k_{\mathrm{s}}) = \lfloor \text{KRS} \cdot \mathrm{clamp}(\lfloor k_{\mathrm{s}}/3\rfloor - 7, 0, 31)/8 \rfloor
 ```
 
-[LEVIEN-EG, MSFA `ScaleRate`]. Between integers of $`R_i`$, of the key and of KRS, $`q_i`$ is interpolated (§0.6), so that a rate between steps is continuous. $`k_{\mathrm{s}}`$ is the key of the scalings (§2.6).
+[LEVIEN-EG, MSFA `ScaleRate`; verify]. Between integers of $`R_i`$, of the key and of KRS, $`q_i`$ is interpolated (§0.6), so that a rate between steps is continuous. $`k_{\mathrm{s}}`$ is the key of the scalings (§2.6).
 
-**verify.** The DX7's firmware writes only the rate scaling's sensitivity to the EGS, which scales the rates itself [AJXS-ROM `PATCH_ACTIVATE_OPERATOR_KBD_SCALING_RATE`], presumably by the key code of its voice frequency register ("Key Code Log F"). The firmware writes that register with the key's pitch, the portamento, the pitch envelope and the master tune, while the LFO and the bend go to the EGS's pitch modulation registers [AJXS-ROM `VOICE_ADD_LOAD_FREQ_TO_EGS`, `PORTA_PROCESS`]. Whether the EGS takes the key so, and when it reads the register, is to be found. Until then the rates take $`k_{\mathrm{s}}`$, as the level does.
+**verify** (VERIFICATION V20). The DX7's firmware writes only the rate scaling's sensitivity to the EGS, which scales the rates itself [AJXS-ROM `PATCH_ACTIVATE_OPERATOR_KBD_SCALING_RATE`]: RS is the EGS's law, as [LEVIEN-EG] and [MSFA] give it, MSFA with a variant that moves some of its steps by one (`SUPER_PRECISE`), and its key is presumably the key code of the EGS's voice frequency register ("Key Code Log F"). The firmware writes that register with the key's pitch, the portamento, the pitch envelope and the master tune, while the LFO and the bend go to the EGS's pitch modulation registers [AJXS-ROM `VOICE_ADD_LOAD_FREQ_TO_EGS`, `PORTA_PROCESS`]. Whether the EGS takes the key so, and when it reads the register, is to be found. Until then the rates take $`k_{\mathrm{s}}`$, as the level does.
 
 **Decay speed** (steps per second):
 
@@ -261,15 +261,21 @@ The DX7's decays are exponential in amplitude, so they are linear in $`T`$ [LEVI
 
 ### 4.3 Attack (target above current)
 
-**Jump.** At the start of a rising segment, if $`T \lt T_{\text{jump}} = T_{\mathrm{min}} + 1700`$, set $`T \leftarrow T_{\text{jump}}`$ [LEVIEN-EG; MSFA's `jumptarget` 1716]. `eg.attack_jump = true`.
+**Jump.** Whenever a segment rises, at its start or where a change re-anchors it (§4.7), a level below $`T_{\text{jump}} = 1716`$, 1700 steps above the DX7's floor (§4.6), jumps to $`T_{\text{jump}}`$ [LEVIEN-EG; MSFA's `jumptarget`], as MSFA tests it at every sample of a rise; a target below $`T_{\text{jump}}`$ is then taken at once, as MSFA takes it [MSFA `Env::getsample`]. `eg.attack_jump = true` by default; with `false`, a rise follows the law below from where it starts.
 
 **Law.**
 
 ```math
-\frac{\mathrm{d}T}{\mathrm{d}t} = \rho\left(2 + \frac{T_{\text{full}} - T}{256}\right)\quad\Longrightarrow\quad T(t) = T^{\ast} - (T^{\ast} - T_0)\mathrm{e}^{-\rho t/256},\qquad T^{\ast} = T_{\text{full}} + 512
+\frac{\mathrm{d}T}{\mathrm{d}t} = \rho\cdot\mathrm{max}\left(1,\ 2 + \frac{T_{\text{full}} - T}{256}\right)
 ```
 
-The segment reaches its target at
+Up to $`T_{\text{full}} + 256`$, where the multiplier comes down to 1, the level follows
+
+```math
+T(t) = T^{\ast} - (T^{\ast} - T_0)\mathrm{e}^{-\rho t/256},\qquad T^{\ast} = T_{\text{full}} + 512
+```
+
+and above it rises at the speed $`\rho`$, so that it reaches every target. A target up to $`T_{\text{full}} + 256`$ is reached at
 
 ```math
 t^{\ast} = \frac{256}{\rho}\,\ln\,\frac{T^{\ast} - T_0}{T^{\ast} - T_{\text{target}}}
@@ -278,27 +284,30 @@ t^{\ast} = \frac{256}{\rho}\,\ln\,\frac{T^{\ast} - T_0}{T^{\ast} - T_{\text{targ
 It is computed as $`(256\ln\,2/\rho)\,\mathrm{log2p1}((T_{\text{target}} - T_0)/(T^{\ast} - T_{\text{target}}))`$ (§12.4), which keeps its accuracy where the start is near the target.
 
 - The hardware uses the integer multiplier $`2 + \lfloor (T_{\text{full}} - T)/256\rfloor`$ [LEVIEN-EG], which changes the attack's speed in bands of 256 steps; the law above is the continuous one that the bands step (§15).
-- Targets stay below $`T^{\ast}`$, because the largest reachable $`T`$ is $`4032 + 32\cdot127 + 224 - 4256 = 4064 \lt 4352`$.
+- The DX7's targets stay below $`T_{\text{full}} + 256`$: the largest it reaches is $`4032 + 32\cdot127 + 224 - 4256 = 4064`$, in the band whose multiplier is 1. A level beyond the scale can lie above (§0.5), and there the speed stays that band's, where the formula's would fall to 0 at $`T^{\ast}`$ and never reach a target there.
 
 ### 4.4 Segments that do not move
 
-When a segment's target equals the current level, or segment 0 has L1 = 0, the DX7 waits a rate-dependent time before advancing. Patches use this as a delay. MSFA has a partial measured table (`statics`, rates < 77, in samples at 44.1 kHz; 20·(99 − R) above that; 1/20 of the time for the first segment) [MSFA `ACCURATE_ENVELOPE`; verify, complete from AJXS-ROM]. `eg.static_segments = dx7 | none`, default `dx7`. Durations are converted to seconds, and a wait ends at its instant (§0.3).
+A segment that does not move, its target being the level it starts at, both as the DX7 takes them (§4.6), waits before it ends; patches use this as a delay. It waits as long as it would take to move $`W = 480`$ steps at its speed, $`W/\rho(q_i)`$, and in segment 0 a twentieth of that [MSFA `ACCURATE_ENVELOPE`; verify]: MSFA's waits, measured on two TF1s for rates below 77, are 40 s at rate 0 and lie within −6 % and +10 % of this law (VERIFICATION V8). A segment that moves by $`m`$ steps, less than one, waits $`(1 - m)\,W/\rho(q_i)`$: the DX7's levels are whole steps at its parameters' steps, so that two that differ do so by a step at least, and between the steps the wait vanishes continuously (§0.6). A key-off ends a wait (§4.5). `eg.static_segments = dx7 | none`, default `dx7`; with `none`, no segment waits. A wait ends at its instant (§0.3).
 
 ### 4.5 Key events
 
-- **Key-on:** go to segment 0 from the current $`T`$ (for a retriggered voice) or from $`T(L_4)`$ (for a new voice).
-- **Key-off:** go to segment 3 (target L4) from the current $`T`$, using the rise or fall law by direction.
+- **Key-on:** segment 0 starts from the level the voice is at, as the DX7's firmware has the EGS start it, with a key-off and then a key-on [AJXS-ROM `VOICE_ADD_POLY`]: from where its envelope is, for a voice taken while it sounds (§13.2), and from $`T(L_4)`$, for a voice whose note has ended or that has had none. A mono part's legato note sends no key event, and the envelopes go on [AJXS-ROM `VOICE_ADD_MONO`] (§7.3).
+- **Hold:** after segment 2 the level holds at L3 while the key is down or the sustain pedal holds the note [AJXS-ROM `VOICE_REMOVE`].
+- **Key-off:** once neither the key nor the pedal holds the note, segment 3 (target L4) starts from the current $`T`$, by the rise or the fall law as its direction says; a key-off during a wait ends the wait.
 - After segment 3 the level holds at L4. A non-zero L4 sustains after release (DX7 behaviour, kept).
 
 ### 4.6 The floor
 
-The DX7 holds a decayed operator at $`T_{\mathrm{min}}`$, about −84 dB, until the voice is stolen. Cutting a voice from there is a small step.
+The DX7 holds an operator's level no lower than its floor $`T_{\mathrm{F}} = 16`$, 90 dB below full scale [MSFA `Env::advance`, LEVIEN-EG]: a segment whose target lies below $`T_{\mathrm{F}}`$ ends where its level reaches $`T_{\mathrm{F}}`$, one that starts there toward a target there waits (§4.4), and a decayed operator rests there until its voice is stolen.
 
-An EG level of 0 targets $`-\infty`$, so the decay continues past $`T_{\mathrm{min}}`$ at the same speed (§15). A level between 0 and 1 is interpolated in the gain $`g`$ (§3.4), from 0 at level 0 to the gain of level 1, so that its target falls continuously to $`-\infty`$ (§0.6). The operator is inactive once $`T \lt T_{\text{end}}`$ (`eg.end_db`, default −200 dB relative to $`g = 1`$).
+Keptone removes the floor from the level and keeps its timing. A segment starts, waits and ends where the DX7's would, with its level and its target each taken no lower than $`T_{\mathrm{F}}`$; the level itself goes on below $`T_{\mathrm{F}}`$ toward the target of the segment it is in, by that segment's law (§4.2, §4.3), and stays where it reaches it; and a segment that rises, as the DX7 takes it, starts its level from $`\mathrm{max}(T, T_{\mathrm{F}})`$. So $`\mathrm{max}(T, T_{\mathrm{F}})`$ is the DX7's level at every instant: a patch's segments keep the DX7's times, and below the floor the level falls on toward its target instead of resting (§15).
+
+An EG level of 0 targets $`-\infty`$, toward which the level falls at its segment's speed. A level between 0 and 1 is interpolated in the gain $`g`$ (§3.4), from 0 at level 0 to the gain of level 1, so that its target falls continuously to $`-\infty`$ (§0.6), and a level at or below 0 is silent. An operator whose $`T`$ lies below $`T_{\text{end}}`$ (`eg.end_db`, default −200 dB relative to $`g = 1`$) has gain 0, until a segment takes $`T`$ above it.
 
 ### 4.7 Live parameter changes
 
-A change to a rate or level during a segment re-anchors the closed form at the change's instant (§0.3), from the $`T`$ there, toward the new target at the new speed. A change to output level, scaling or velocity sensitivity moves $`O`$, and so every target. `param.level_glide_s`, default 0.002, ramps $`O`$ linearly in $`T`$ over that time, so host automation does not click. Set it to 0 to switch instantly.
+A change to a rate or level during a segment re-anchors the closed form at the change's instant (§0.3), from the $`T`$ there, toward the new target at the new speed; a change to the pitch envelope's re-anchors it in the same way (§5). The envelope's own state is $`E`$, its part of $`T = E + O - 4256`$ (§3.3). A change to the output level, the scaling or the velocity sensitivity moves $`O`$, and with it $`T`$ and every target, and leaves the envelope's segments where they were; `param.level_glide_s`, default 0.002, ramps such a change linearly in $`T`$ over that time, so that host automation does not click, and 0 makes it at once. The laws that depend on $`T`$ within a segment, the attack's speed (§4.3), the floor (§4.6) and the wait (§4.4), take $`O`$ as it was at the segment's start. Under `scaling.key = pitch`, $`O`$ and the rates follow the key of the scalings at every instant (§2.6), without the glide, and a segment's laws take $`\int\rho\,\mathrm{d}t`$ in place of $`\rho t`$, evaluated as §2.5 evaluates the phase. A change to a pitch parameter (§2) acts at once, the phases going on (§2.5); one that moves $`k_{\mathrm{s}}`$, as the transpose does under `scaling.key = key`, moves $`O`$ as a change to the scaling does and the rates at once.
 
 ## 5. Pitch envelope (`keptone-engine::peg`)
 
@@ -680,7 +689,7 @@ A voice ends when every carrier is in segment 3 with $`T \lt T_{\text{end}}`$ an
 
 No recursive state is allowed to decay into subnormals:
 
-- Gains are bounded below by $`T_{\text{end}}`$, so $`g \ge 2^{-33}`$ at the default.
+- A gain is 0 where its envelope's level lies below $`T_{\text{end}}`$ (§4.6), and at least $`10^{-10}`$ above it at the default, before amplitude modulation lowers it by a bounded amount (§7.2).
 - The relaxation state of §9.6 and every decimator state are set to exact zero when their voice or the whole engine has been silent for `engine.idle_s` (default 0.5 s), counted in engine samples from the one at which they fell silent.
 - In addition, at every engine sample $`n`$ that is a multiple of 64, counted from the engine's first, every IIR state whose magnitude is below $`2^{-500}`$ is set to zero. The rule is a function of the state and of $`n`$ alone, so block independence (§0.3) holds.
 
@@ -726,11 +735,11 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The pitch envelope's steps at the firmware's 188 Hz, and the runs of it and of the portamento that the firmware skips while MIDI data wait to be read [AJXS-ROM `HANDLER_OCF`].
 - The DX7's 32 levels of velocity [VDX7 FAQ].
 - The attack's integer multiplier, which changes its speed in bands of 256 steps [LEVIEN-EG].
-- The floor at which the DX7 holds a decayed operator, about 84 dB below full scale, until its voice is stolen (§4.6).
+- The floor at which the DX7 holds an operator's level, 90 dB below full scale, until its voice is stolen: the level falls on below it, and the envelope keeps the floor's timing (§4.6).
 - The bend's 7 bits and the dead zone at its centre [AJXS-ROM `PITCH_BEND_PARSE`].
 - The block-rate control and the 1024-point sine table of MSFA-based emulators.
 
-**Kept** (they define patches): every law and table in §2–§9, the attack jump, the static segment delays, sustain after release with L4 > 0, the shared LFO, and the DX7's keyboard scaling, velocity and rate scaling curves. The attack jump, the static segments and the shared LFO each have a setting that lets the user step away from them.
+**Kept** (they define patches): every law and table in §2–§9, the attack jump, the static segment delays, the envelope's timing at the floor, sustain after release with L4 > 0, the shared LFO, and the DX7's keyboard scaling, velocity and rate scaling curves. The attack jump, the static segments and the shared LFO each have a setting that lets the user step away from them.
 
 ## 16. Tests and tolerances
 
