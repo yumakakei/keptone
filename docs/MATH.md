@@ -164,7 +164,7 @@ Each operator keeps $`\theta_k \in [0, 1)`$ in binary64. Per engine sample: $`\t
 \Delta = \int_{t_{n-1}}^{t_n} f_k\,\mathrm{d}\tau
 ```
 
-computed for $`p_{\text{mod}}`$ as the functions of continuous time that §2.4 sums, between the samples too. The integral is split at every instant inside the sample where one of them has a corner or a jump: a corner of the pitch envelope, a corner or an edge of the LFO's wave (§6.2), the end of a stage of the LFO's delay (§6.4) and the end of a glide. On a piece where the pitch is linear in time, as the pitch envelope makes it (§5), the integral of $`2^{p}`$ is in closed form, $`\int_0^{h} 2^{a + b\tau}\,\mathrm{d}\tau = 2^{a}h\cdot E(bh)`$ for a piece of length $`h`$ that starts at the pitch $`a`$ with the slope $`b`$, where $`E(z) = \mathrm{exp2m1}(z)/(z\ln\,2)`$ and $`E(0) = 1`$ (§12.5), which keeps its accuracy however slowly the pitch moves; on any other piece a 3-point Gauss–Legendre rule is used, whose error is far below binary64's resolution for audio-rate pitch changes (§16). A signal that jumps takes its new value from the jump's instant on. The phase is also evaluated at **fractional** times $`t_n - s`$ for delay alignment (§10.5), from the same closed forms.
+computed for $`p_{\text{mod}}`$ as the functions of continuous time that §2.4 sums, between the samples too. The integral is split at every instant inside the sample where one of them has a corner or a jump: a corner of the pitch envelope, a corner or an edge of the LFO's wave (§6.2), the end of a stage of the LFO's delay (§6.4) and the end of a glide. On a piece where the pitch is linear in time, as the pitch envelope makes it (§5), the integral of $`2^{p}`$ is in closed form, $`\int_0^{h} 2^{a + b\tau}\,\mathrm{d}\tau = 2^{a}h\cdot E(bh)`$ for a piece of length $`h`$ that starts at the pitch $`a`$ with the slope $`b`$, where $`E(z) = \mathrm{exp2m1}(z)/(z\ln\,2)`$ and $`E(0) = 1`$ (§12.5), which keeps its accuracy however slowly the pitch moves; on any other piece, as a sine LFO makes it, a 3-point Gauss–Legendre rule is used, on pieces short enough beside the LFO's period that its error stays far below binary64's resolution (§16): a whole sample, for the LFO's speeds on its scale. However many of the LFO's periods a sample holds, the integral stays as exact, and the work does not grow with them: whole periods, which differ from one another only by the rest of the pitch, linear on the piece, and by the depth that a fade moves (§6.4), are summed from one period's integral, as a geometric series and a series that converges fast; the sample and hold alone, whose every period has a value of its own, adds a term for each of its values in the sample. A signal that jumps takes its new value from the jump's instant on. The phase is also evaluated at **fractional** times $`t_n - s`$ for delay alignment (§10.5), from the same closed forms.
 
 The drift over a note is bounded by the rounding of the additions: under $`\sqrt{N}\cdot 2^{-53}`$ turns after $`N`$ samples, about $`10^{-11}`$ turns after an hour at 192 kHz. A compensated (two-sum) accumulator is a setting `osc.phase_accumulator = plain | compensated`, default `plain`.
 
@@ -326,19 +326,26 @@ P_{\text{EG}} \in [-4, +4]\ \text{octaves},\qquad \text{level}(L) = \text{pt}[L]
 
 ### 6.1 Frequency
 
-$`f_{\text{LFO}} = \text{lf}[\text{SPEED}]`$ Hz, with lf MSFA's measured `lfoSource` table (0.0625 Hz … 49.26 Hz) [MSFA `lfo.cc`; verify]. A fractional speed interpolates in $`\log\,f`$. The LFO's phase is in turns, $`\phi = \phi_0 + f_{\text{LFO}}\cdot(t - t_0)`$ in closed form from its last start $`t_0`$, an instant (§0.1): the engine's first sample, where $`\phi = 0`$, a key-on that resets it (§6.5), or a change of speed, which carries the phase over without a jump.
+The DX7's firmware advances the LFO's phase, 16 bits, at every interrupt of its timer, the one that runs the pitch envelope at every second (§5), $`f_{\text{tick}} = 9.4265\,\text{MHz}/(8\cdot 3165) \approx 372.3`$ Hz [AJXS-ROM `HANDLER_OCF`, `LFO_GET_AMPLITUDE`; VDX7, DX7-SERVICE], by an increment that it computes from the speed $`S`$ [AJXS-ROM `PATCH_ACTIVATE_SCALE_LFO_SPEED`]:
+
+```math
+f_{\text{LFO}} = \frac{f_{\text{tick}}}{65536}\cdot\begin{cases} 11\,\mathrm{max}(1, a) & a \lt 160 \\ a\cdot(11 + \lfloor (a - 160)/4\rfloor) & a \ge 160 \end{cases},\qquad a = \lfloor 165S/64\rfloor
+```
+
+so that speed 0 has a period of 16 s and speed 99 a frequency of 49.25 Hz. MSFA's measured table lies within 0.3 % of this law at every speed [MSFA `lfo.cc`] (VERIFICATION V10). A fractional speed interpolates in $`\log\,f`$ between the steps around it (§0.6). Below 0 the speed goes on along its first step, halving at each, and above 99 the law goes on as written, however many of the LFO's periods a sample then holds (§2.5): the engine's rate bounds only how well the sidebands that the LFO makes are sampled (§10, §11.1), not the LFO. Where a sample's advance of the phase, $`f_{\text{LFO}}/f_{\mathrm{e}}`$, reaches $`2^{53}`$ turns, beyond binary64's resolution of a turn, the phase stands still, as an operator's does (§2.2), and a frequency beyond binary64's largest number is taken at that number. The LFO's phase is in turns, $`\phi = \phi_0 + f_{\text{LFO}}\cdot(t - t_0)`$ in closed form from its last start $`t_0`$, an instant (§0.1): the engine's first sample, where $`\phi = 0`$, a key-on that resets it (§6.5), or a change of speed, which carries the phase over without a jump. The product $`f_{\text{LFO}}\cdot(t - t_0)`$ is formed exactly, as the sum of two binary64 numbers with a fused multiply–add (§0.2), and reduced to its fraction, so that the phase keeps its precision however long the LFO runs.
 
 ### 6.2 Waveforms, $`\ell \in [-1, 1]`$
 
-| Wave | Definition |
+| Wave | $`\ell`$ at a phase $`\phi`$ taken in [0, 1) |
 | --- | --- |
-| triangle | ±1 peaks at phase 0 and ½; the phase of the peaks follows MSFA, verify |
-| saw down / saw up | linear ramps |
-| square | ±1 |
-| sine | $`\sin\,2\pi\phi`$ |
-| sample & hold | a new value at each wrap of the phase, held for one cycle |
+| triangle | $`\left\|4\phi - 2\right\| - 1`$: +1 at 0, −1 at ½ |
+| saw down | $`1 - 2\phi`$ |
+| saw up | $`2\phi - 1`$ |
+| square | −1 below ½, +1 from ½ on |
+| sine | $`-\sin\,2\pi\phi`$ |
+| sample & hold | a new value at each wrap of the phase and at each reset (§6.5), held until the next |
 
-Waveform edges are not band-limited: the LFO is a control signal, a function of continuous time whose corners and edges split the phase's integral (§2.5); at an edge it takes its new value from the edge's instant on.
+The phase is counted from where the firmware's key sync puts it, half a turn into the firmware's own [AJXS-ROM `LFO_GET_AMPLITUDE`, `VOICE_ADD_POLY`] (VERIFICATION V11): the firmware's triangle has its minimum at its phase 0, its saws jump at half a turn, where its square turns from +1 to −1 and its S&H draws a new value, and its key sync sets its phase just below half a turn, so that its waves start where these start at 0. Waveform edges are not band-limited: the LFO is a control signal, a function of continuous time whose corners and edges split the phase's integral (§2.5); at an edge it takes its new value from the edge's instant on.
 
 ### 6.3 Random source
 
@@ -346,17 +353,20 @@ SplitMix64, the generator KIRAL's tests use, read at counters, so that a value n
 
 ### 6.4 Delay fade $`w(t)`$
 
-Let $`a = 99 - \text{DELAY}`$. If $`a = 99`$, then $`w \equiv 1`$. Otherwise [MSFA `Lfo::reset`, `Lfo::getdelay`; verify the unit constant 25 190 424 s⁻¹]:
+At every interrupt of §6.1 the firmware adds to a 16-bit counter the increment $`i_{\mathrm{d}} = (16 + (a \bmod 16))\cdot 2^{2 + \lfloor a/16\rfloor}`$, $`a = 99 - \text{DELAY}`$; once the counter overflows, it raises an 8-bit fade by $`\mathrm{max}(1, \lfloor i_{\mathrm{d}}/256\rfloor)`$ at every interrupt, up to 255, and scales the LFO's depths by it (§2.4, §7.2) [AJXS-ROM `PATCH_ACTIVATE_SCALE_LFO_DELAY`, `LFO_GET_AMPLITUDE`, `MOD_PITCH_LOAD_TO_EGS`, `MOD_AMP_LOAD_TO_EGS`]. So:
 
-- $`u_1 = (16 + (a \bmod 16))\cdot 2^{1 + \lfloor a/16\rfloor}`$.
-- $`u_2 = \mathrm{max}(128, 128\lfloor u_1/128\rfloor)`$.
-- Stage 1 lasts $`t_1 = 2^{31}/(25190424u_1)`$ s, with $`w = 0`$.
-- Stage 2 lasts $`t_2 = 2^{31}/(25190424u_2)`$ s, with $`w`$ rising linearly from 0 to 1.
+- Stage 1 lasts $`t_1 = 2^{16}/(i_{\mathrm{d}}f_{\text{tick}})`$ s, with $`w = 0`$.
+- Stage 2 lasts $`t_2 = 256/(\mathrm{max}(1, \lfloor i_{\mathrm{d}}/256\rfloor)f_{\text{tick}})`$ s, with $`w`$ rising linearly from 0 to 1.
+- DELAY 99 gives 2.75 s and 0.69 s, and DELAY 1 38 ms each. With DELAY 0 there is no delay, $`w \equiv 1`$: the firmware restarts no delay of a patch whose DELAY is 0 [AJXS-ROM `VOICE_ADD_POLY`].
+- Between the steps of DELAY, $`t_1`$ and $`t_2`$ are interpolated (§0.6). At or below 0 there is no delay, and above 99 the law goes on as written, with Euclid's division for $`a`$ below 0, so that $`t_1`$ doubles every 16 steps and $`t_2`$ stays 0.69 s.
+
+MSFA's constant 25 190 424 s⁻¹, which its comment takes from a period of 15.5 s at speed 0, is $`2^{16}f_{\text{tick}}`$ for a tick 3.2 % faster than the firmware's; the firmware's tick, which gives speed 0 the 16 s of MSFA's own table, replaces it (VERIFICATION V12).
 
 ### 6.5 Sync and scope
 
-- LFO SYNC = 1 resets the phase at key-on.
-- The DX7 has one LFO shared by all voices, and each part has one shared by its voices (§13.5). `lfo.scope = part | voice`, default `part`. With `part`, the key-on sync resets the part's LFO.
+- Every key-on of a poly part, and every key-on of a mono part but a legato one, which another held key precedes, restarts the LFO's delay and, with LFO SYNC, resets its phase to 0, where the S&H draws a new value [AJXS-ROM `VOICE_ADD_POLY`, `VOICE_ADD_MONO`].
+- A change of DELAY carries the delay's progress over, the part of its stage that has passed going on at the new duration, as a change of speed carries the phase over (§6.1); a change to DELAY 0 ends the delay at once.
+- The DX7 has one LFO shared by all voices, and each part has one shared by its voices (§13.5). `lfo.scope = part | voice`, default `part`. With `part`, a key-on restarts the part's LFO for all its voices. With `voice`, each voice has an LFO of its own, whose delay starts at its key-on and whose phase, with LFO SYNC, starts at 0 there; without LFO SYNC, every voice takes the part's phase, which no key-on resets.
 
 ## 7. Controllers and amplitude modulation (`keptone-engine::control`)
 
@@ -732,6 +742,7 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The key after transposition held in a byte: the firmware clamps a key above 127 to 127, and a key below 0, which wraps around, to 127 as well [AJXS-ROM `VOICE_ADD`].
 - The steps of the parameters, between which every law moves continuously (§0.6).
 - The 8 bits in which the firmware multiplies the LFO's depth, its wave and its sensitivity, with their floors and a wave from −128 to 127 [AJXS-ROM `MOD_PITCH_LOAD_TO_EGS`].
+- The LFO's steps at the firmware's 372 Hz, its 16-bit phase and 8-bit wave with the 64 steps of its sine's quarter, the 8-bit linear congruential generator of its sample and hold, and the 8-bit fade of its delay, which stops at 255/256 [AJXS-ROM `LFO_GET_AMPLITUDE`].
 - The pitch envelope's steps at the firmware's 188 Hz, and the runs of it and of the portamento that the firmware skips while MIDI data wait to be read [AJXS-ROM `HANDLER_OCF`].
 - The DX7's 32 levels of velocity [VDX7 FAQ].
 - The attack's integer multiplier, which changes its speed in bands of 256 steps [LEVIEN-EG].
