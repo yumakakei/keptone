@@ -133,6 +133,7 @@ fn numbers_names_and_ids() {
     assert_eq!(settings::number_of("json.max_depth"), Some(47));
     assert_eq!(settings::number_of("tuning.transpose_octave"), Some(48));
     assert_eq!(settings::number_of("scaling.key"), Some(49));
+    assert_eq!(settings::number_of("tuning.modulation"), Some(50));
 }
 
 /// The number after the last setting's.
@@ -180,6 +181,8 @@ fn each_setting_takes_its_values() {
         ("scaling.key", Value::Switch(true), false),
         ("tuning.transpose_octave", Value::Choice(1), true),
         ("tuning.transpose_octave", Value::Choice(2), false),
+        ("tuning.modulation", Value::Choice(1), true),
+        ("tuning.modulation", Value::Choice(2), false),
     ];
     for (name, value, takes) in cases {
         let before = settings.clone();

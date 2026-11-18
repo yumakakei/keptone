@@ -99,7 +99,7 @@ where TRANSPOSE (0–48 on its scale; 24 means none) is the voice's, which the D
 p_{\text{key}}(k') = \text{tuning}(k')
 ```
 
-By default `tuning` is 12-TET with A4 = `tuning.a4_hz` = 440 Hz: $`p = \log_2\,440 + (k' - 69)/12`$. Alternatives: a Scala `.scl` + `.kbm` pair [SCALA-SCL, SCALA-KBM], or MTS-ESP [MTS-ESP] (optional, off by default). A tuning is a function from real note values to pitch, so it applies to fractional notes from bends and glides too (§2.5).
+By default `tuning` is 12-TET with A4 = `tuning.a4_hz` = 440 Hz: $`p = \log_2\,440 + (k' - 69)/12`$. Alternatives: a Scala `.scl` + `.kbm` pair [SCALA-SCL, SCALA-KBM], or MTS-ESP [MTS-ESP] (optional, off by default). A tuning is a function from real note values to pitch. `tuning.modulation` says where the bend, the portamento and the per-note pitch (DESIGN §7.3) move a note, each a number $`k_{\text{bend}}`$, $`k_{\text{porta}}`$ and $`k_{\text{note}}`$ of semitones or keys. With `pitch`, the default, they are intervals added to its pitch, $`p_{\text{bend}}`$, $`p_{\text{porta}}`$ and $`p_{\text{note}}`$ of §2.4, each its number over 12 in octaves, so that a bend's range is in semitones under any tuning and a glide is linear in pitch between two notes' pitches, as the DX7 adds its bend apart from the key's pitch [AJXS-ROM]. With `keys` they are keys added to the note before the tuning, $`p_{\text{key}} = \text{tuning}(k' + k_{\text{bend}} + k_{\text{porta}} + k_{\text{note}})`$, and their intervals in §2.4 are 0, so that a bend's range is in the tuning's keys and a glide moves through the note values between two keys. Under 12-TET the two are the same.
 
 A shift is in keys. With `tuning.transpose_octave = keys`, the default, $`\tau(\sigma) = \sigma`$, as on the DX7. With `period`, each whole octave of a shift, twelve keys, moves by the tuning's period instead, so that an octave of transposition spans the tuning's period, as it does under 12-TET:
 
@@ -122,18 +122,18 @@ p_k = p_{\text{key}} + c(\text{COARSE}) + \log_2(1 + \text{FINE}/100) + \delta(\
 ### 2.3 Operator frequency, fixed mode (OSC MODE = 1)
 
 ```math
-p_k = \log_2\,10\cdot((\text{COARSE} \bmod 4) + \text{FINE}/100) + \delta_{\text{fixed}} + p_{\text{bend}}(t) + p_{\text{tune}}
+p_k = \log_2\,10\cdot((\text{COARSE} \bmod 4) + \text{FINE}/100) + \delta_{\text{fixed}} + p_{\text{bend}}(t) + p_{\text{note}}(t) + p_{\text{tune}}
 ```
 
 So 1, 10, 100 and 1000 Hz, each times $`10^{\text{FINE}/100}`$ [MSFA, DX7-MANUAL].
 
 - $`\delta_{\text{fixed}}`$ [MSFA; verify]: $`13457 \cdot 2^{-24}(\text{DETUNE} - 7)`$ octaves for DETUNE > 7, else 0. The asymmetry is suspect. Setting `osc.fixed_detune = msfa | symmetric | none`.
-- Fixed operators follow pitch bend and master tune, but not the pitch EG or the LFO [MSFA; verify against AJXS-ROM].
+- Fixed operators follow the pitch bend and the master tune, but not the pitch EG, the LFO or the portamento [MSFA; verify against AJXS-ROM], and they follow the per-note pitch as they follow the bend [DEXED]. Under `tuning.modulation = keys`, $`p_{\text{bend}} + p_{\text{note}}`$ there is the interval that the bend and the per-note pitch give the voice's key, $`\text{tuning}(k' + k_{\text{bend}} + k_{\text{note}}) - \text{tuning}(k')`$ (§2.1).
 
 ### 2.4 Pitch modulation (ratio-mode operators)
 
 ```math
-p_{\text{mod}}(t) = P_{\text{EG}}(t) + p_{\text{LFO}}(t) + p_{\text{bend}}(t) + p_{\text{tune}} + p_{\text{porta}}(t)
+p_{\text{mod}}(t) = P_{\text{EG}}(t) + p_{\text{LFO}}(t) + p_{\text{bend}}(t) + p_{\text{note}}(t) + p_{\text{tune}} + p_{\text{porta}}(t)
 ```
 
 - $`P_{\text{EG}}`$: the pitch EG (§5).
@@ -142,8 +142,10 @@ p_{\text{mod}}(t) = P_{\text{EG}}(t) + p_{\text{LFO}}(t) + p_{\text{bend}}(t) + 
   - $`d_{\text{PMD}} = \lfloor 165\,\text{PMD}/64\rfloor/256`$.
   - $`\sigma_{\text{PMS}} = \text{pmstab}[\text{PMS}]/256`$ octaves with pmstab = (0, 10, 20, 33, 55, 92, 153, 255) [MSFA `pitchmodsenstab`, `Dx7Note::compute`; verify].
   - $`d_{\text{ctrl}}`$ is the controller pitch depth (§7).
-- $`p_{\text{bend}}`$: the bend, as a fraction of the range (function parameter 65, 0–12 semitones; per-direction ranges are settings). STEP (66) quantises it when non-zero. A continuous bend is the default.
-- $`p_{\text{porta}}`$: portamento (§7.3).
+- $`p_{\text{bend}}`$: the bend, as a fraction of the range (function parameter 65, 0–12 semitones; per-direction ranges are settings). STEP (66) quantises it when non-zero. A continuous bend is the default. It is $`k_{\text{bend}}/12`$, and 0 under `tuning.modulation = keys` (§2.1).
+- $`p_{\text{note}}`$: the per-note pitch, $`k_{\text{note}}/12`$ (DESIGN §7.3), and 0 under `keys` (§2.1).
+- $`p_{\text{porta}}`$: portamento (§7.3), and 0 under `keys` (§2.1).
+- $`p_{\text{tune}}`$: the master tune, $`c/1200`$ octaves for $`c`$ cents, 0 by default: a value of Keptone's system set-up, the same for every part and every tuning. The DX7's master tune of ±75 cents [DX7-MANUAL], the master tune that the data of the DX7II, the TX7 and the TX802 carry, 0 to 127 [DX7II-MANUAL, TX7-MANUAL, TX802-SYSEX], and MIDI's tuning messages set it, as the system set-up writes with M5. It moves every operator, those in the fixed mode too (§2.3), and neither scaling (§2.6).
 
 ### 2.5 Phase
 
@@ -164,8 +166,8 @@ The drift over a note is bounded by the rounding of the additions: under $`\sqrt
 The keyboard scalings of the level (§3.2) and of the rates (§4.1) take a key $`k_{\mathrm{s}}`$, a real number on the scale of 12-TET's keys, which `scaling.key` gives:
 
 - `key`, the default: the key after transposition, $`k_{\mathrm{s}} = k'`$. The DX7's firmware takes the level scaling from the transposed key's pitch, once at key-on and before the pitch envelope and the master tune reach it [AJXS-ROM `VOICE_ADD`]. Neither the tuning nor the voice's pitch modulation moves a scaling.
-- `onset-pitch`: the pitch that the tuning gives the key at key-on, measured in 12-TET's semitones from the tuning's reference key $`k_{\mathrm{r}}`$: $`k_{\mathrm{s}} = k_{\mathrm{r}} + 12(\text{tuning}(k' + k_{\text{note}}) - \text{tuning}(k_{\mathrm{r}}))`$, where $`k_{\text{note}}`$ is the note's per-note pitch at key-on, in keys, 0 where it has none (DESIGN §7.3). $`k_{\mathrm{r}}`$ is the key whose pitch the tuning fixes: 69 under 12-TET, the reference key of the keyboard mapping under Scala [SCALA-KBM], and under MTS-ESP its master's reference key, or 69 where the master gives none [MTS-ESP]. So neither `tuning.a4_hz` nor the master tune moves a scaling, and under 12-TET without a per-note pitch $`k_{\mathrm{s}} = k'`$.
-- `pitch`: the voice's pitch at each sample, measured in the same way, $`k_{\mathrm{s}}(t) = k_{\mathrm{r}} + 12(\text{tuning}(k' + k_{\text{note}}(t)) + p_{\text{mod}}(t) - p_{\text{tune}} - \text{tuning}(k_{\mathrm{r}}))`$: the pitch that §2.2 gives a ratio-mode operator, without its frequency ratio, its detune and the master tune. The scalings then follow the bend, the portamento, the pitch envelope, the LFO and the per-note pitch, and the offset $`O`$ and the rates move with them, as §4.7 says of a live change.
+- `onset-pitch`: the pitch that the tuning gives the key with its per-note pitch at key-on, measured in 12-TET's semitones from the tuning's reference key $`k_{\mathrm{r}}`$: $`k_{\mathrm{s}} = k_{\mathrm{r}} + 12(p_0 - \text{tuning}(k_{\mathrm{r}}))`$, where $`p_0`$ is $`\text{tuning}(k') + p_{\text{note}}`$ at key-on, or $`\text{tuning}(k' + k_{\text{note}})`$ under `tuning.modulation = keys` (§2.1). $`k_{\mathrm{r}}`$ is the key whose pitch the tuning fixes: 69 under 12-TET, the reference key of the keyboard mapping under Scala [SCALA-KBM], and under MTS-ESP its master's reference key, or 69 where the master gives none [MTS-ESP]. So neither `tuning.a4_hz` nor the master tune moves a scaling, and under 12-TET without a per-note pitch $`k_{\mathrm{s}} = k'`$.
+- `pitch`: the voice's pitch at each sample, measured in the same way, $`k_{\mathrm{s}}(t) = k_{\mathrm{r}} + 12(p_{\text{key}}(t) + p_{\text{mod}}(t) - p_{\text{tune}} - \text{tuning}(k_{\mathrm{r}}))`$: the pitch that §2.2 gives a ratio-mode operator, without its frequency ratio, its detune and the master tune, $`p_{\text{key}}`$ and $`p_{\text{mod}}`$ as §2.1 and §2.4 give them. The scalings then follow the bend, the portamento, the pitch envelope, the LFO and the per-note pitch, and the offset $`O`$ and the rates move with them, as §4.7 says of a live change.
 
 $`k_{\mathrm{s}}`$ is the voice's, the same for each of its operators, those in the fixed mode included, as the DX7's firmware takes one key for all six [AJXS-ROM `VOICE_ADD`].
 
@@ -359,7 +361,7 @@ It is unipolar: it only attenuates.
 ### 7.3 Portamento and voice modes
 
 - Function parameters: mono/poly (64), portamento mode (67: retain/follow; fingered in mono), glissando (68), time (69) [DEXED-SYSEX].
-- Glide speed is $`v(\text{TIME})`$ semitones per second, linear in pitch. MSFA fits $`2100\cdot 2^{-0.062c}`$ over a 0–127 control $`c`$ (glissando $`1300\cdot2^{-0.062c}`$). Map TIME 0–99 onto it with $`c = 127\,\text{TIME}/99`$ [MSFA `porta.cpp`; verify against AJXS-ROM].
+- Glide speed is $`v(\text{TIME})`$ semitones per second, linear in pitch, or keys per second, linear in the note value, under `tuning.modulation = keys` (§2.1). MSFA fits $`2100\cdot 2^{-0.062c}`$ over a 0–127 control $`c`$ (glissando $`1300\cdot2^{-0.062c}`$). Map TIME 0–99 onto it with $`c = 127\,\text{TIME}/99`$ [MSFA `porta.cpp`; verify against AJXS-ROM].
 - Glissando quantises the glide to the tuning's notes.
 
 ### 7.4 Performances of the DX1 and the TX7
@@ -779,3 +781,4 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `json.max_depth` | 64 | ≥ 0 | DESIGN §11.1 |
 | `tuning.transpose_octave` | keys | keys / period | 2.1 |
 | `scaling.key` | key | key / onset-pitch / pitch | 2.6 |
+| `tuning.modulation` | pitch | pitch / keys | 2.1 |

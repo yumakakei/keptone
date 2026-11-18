@@ -209,7 +209,7 @@ LV2: not planned (CLAP and VST3 cover the Linux hosts in use). AAX: no. AUv3: on
 ### 7.3 Expression
 
 - MPE (MIDI 1.0 zones), CLAP note expressions (tuning, pressure, brightness, volume, pan, vibrato) and MIDI 2.0 per-note controllers map to per-voice destinations (MATH §7.1).
-- Per-note pitch is a real-valued note into the tuning (MATH §2.1).
+- Per-note pitch is a real number of semitones added to a note's pitch, or of keys added to its note before the tuning, as `tuning.modulation` says (MATH §2.1).
 - A part that receives an MPE zone takes the notes of all of its channels (§6.4).
 
 ### 7.4 Parameters

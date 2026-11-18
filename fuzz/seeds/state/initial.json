@@ -51,7 +51,8 @@
     "syx.performance_sensitivity": "linear",
     "json.max_depth": 64,
     "tuning.transpose_octave": "keys",
-    "scaling.key": "key"
+    "scaling.key": "key",
+    "tuning.modulation": "pitch"
   },
   "tuning": {
     "scale": null,

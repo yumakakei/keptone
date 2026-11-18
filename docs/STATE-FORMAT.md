@@ -85,6 +85,7 @@ Keptone writes the members of each object in the order this document gives them,
 | 47 | `json.max_depth` | an integer of at least 0 |
 | 48 | `tuning.transpose_octave` | `"keys"`, `"period"` |
 | 49 | `scaling.key` | `"key"`, `"onset-pitch"`, `"pitch"` |
+| 50 | `tuning.modulation` | `"pitch"`, `"keys"` |
 
 ## 4. Tuning
 

@@ -146,7 +146,7 @@ const fn count(name: &'static str, least: u64, default: u64) -> Spec {
 }
 
 /// How many settings there are.
-pub const COUNT: usize = 50;
+pub const COUNT: usize = 51;
 
 /// Every setting, in the order of MATH §17's table; a setting's place is its
 /// number.
@@ -219,6 +219,7 @@ pub const SPECS: [Spec; COUNT] = [
     count("json.max_depth", 0, 64),
     choice("tuning.transpose_octave", &["keys", "period"]),
     choice("scaling.key", &["key", "onset-pitch", "pitch"]),
+    choice("tuning.modulation", &["pitch", "keys"]),
 ];
 
 /// The number of a setting of a name, if one has it.
