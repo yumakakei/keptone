@@ -267,16 +267,23 @@ fn pitches_between_steps() {
     let (mut tuning, _) = tuning_of(&universal(0, EDIT, &data), STRICT);
     tuning.keys[3] = KeyPitch::new(100.5).expect("a pitch");
     tuning.keys[90] = KeyPitch::new(10793.75).expect("a pitch");
+    // Beyond the scale, its nearer end (docs/MATH.md §0.5).
+    tuning.keys[5] = KeyPitch::new(-3.0).expect("a pitch");
+    tuning.keys[6] = KeyPitch::new(1e300).expect("a pitch");
     for (rounding, steps) in [(Rounding::Nearest, [100, 10794]), (Rounding::Floor, [100, 10793])] {
         let (written, rounded) = syx::write_micro_tuning(&tuning, channel(0), rounding);
-        assert_eq!(rounded, [key(3), key(90)]);
+        assert_eq!(rounded, [key(3), key(5), key(6), key(90)]);
+        assert!(written[1..written.len() - 1].iter().all(|&byte| byte < 0x80));
         let (read, _) = tuning_of(&written, STRICT);
         assert_eq!([read.keys[3], read.keys[90]], steps.map(pitch));
+        assert_eq!([read.keys[5], read.keys[6]], [0, 10794].map(pitch));
         let step = MicroTuningStep::of(&tuning, key(90), rounding);
         assert_eq!((step.key(), step.step()), (key(90), steps[1]));
+        assert_eq!(MicroTuningStep::of(&tuning, key(6), rounding).step(), 10794);
     }
-    // A pitch is a number of [0, 10794], never −0.
-    assert!(KeyPitch::new(-0.5).is_none() && KeyPitch::new(10794.5).is_none() && KeyPitch::new(f64::NAN).is_none());
+    // A pitch is any finite number, never −0.
+    assert!(KeyPitch::new(-0.5).is_some() && KeyPitch::new(10794.5).is_some() && KeyPitch::new(f64::NAN).is_none());
+    assert!(KeyPitch::new(f64::INFINITY).is_none());
     assert!(KeyPitch::new(-0.0).expect("zero").get().is_sign_positive());
     assert!(KeyPitch::from_step(10795).is_none());
 }

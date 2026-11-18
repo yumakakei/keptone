@@ -53,23 +53,28 @@ fn parameters_are_named() {
 }
 
 #[test]
-fn values_are_numbers_of_their_range() {
-    assert_eq!(Value::<99>::new(0.0).map(Value::get), Some(0.0));
-    assert_eq!(Value::<99>::new(42.25).map(Value::get), Some(42.25));
-    assert_eq!(Value::<99>::new(99.0).map(Value::get), Some(99.0));
-    // −0 is taken as +0, so that equal values have equal bits.
-    assert_eq!(Value::<99>::new(-0.0).map(|value| value.get().to_bits()), Some(0));
-    for outside in [
+fn values_are_any_finite_numbers() {
+    // On the scale, between its steps and beyond its ends (docs/MATH.md §0.5).
+    for value in [
+        0.0,
+        42.25,
+        99.0,
         99.000_000_000_000_01,
         -f64::from_bits(1),
         -1.0,
-        f64::NAN,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
+        1e300,
+        f64::MAX,
+        -f64::MAX,
     ] {
-        assert!(Value::<99>::new(outside).is_none(), "{outside}");
+        let bits = Value::<99>::new(value).map(|value| value.get().to_bits());
+        assert_eq!(bits, Some(value.to_bits()), "{value}");
     }
-    assert!(Value::<7>::new(7.5).is_none());
+    // −0 is taken as +0, so that equal values have equal bits.
+    assert_eq!(Value::<99>::new(-0.0).map(|value| value.get().to_bits()), Some(0));
+    for not_finite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(Value::<99>::new(not_finite).is_none(), "{not_finite}");
+    }
+    assert_eq!(Value::<7>::new(7.5).map(Value::get), Some(7.5));
     assert_eq!(Value::<7>::from_step(7), Value::new(7.0));
     assert!(Value::<7>::from_step(8).is_none());
     assert!(Value::<48>::from_step(49).is_none());
@@ -91,6 +96,15 @@ fn values_round_to_steps() {
         (98.500_000_000_000_01, 99, 98),
         (98.999_999_999_999_99, 99, 98),
         (99.0, 99, 99),
+        // Beyond the scale, its nearer end.
+        (99.25, 99, 99),
+        (99.5, 99, 99),
+        (150.0, 99, 99),
+        (1e300, 99, 99),
+        (f64::MAX, 99, 99),
+        (-0.25, 0, 0),
+        (-3.5, 0, 0),
+        (-f64::MAX, 0, 0),
     ];
     for (value, nearest, floor) in cases {
         let value = Value::<99>::new(value).expect("a value");

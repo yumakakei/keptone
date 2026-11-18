@@ -16,7 +16,8 @@
 //! place, random valid dumps come back byte for byte, a byte that sends no four
 //! bits is reported and taken as `syx.out_of_range` says, what is of no kind or
 //! of the wrong length is refused, the parameter change carries every
-//! parameter, and an offset's byte holds it in two's complement.
+//! parameter, and an offset's byte holds it in two's complement, the offset a
+//! binary64 that may lie between the integers, as a level may.
 
 mod common;
 
@@ -74,9 +75,9 @@ fn scalings_of(message: &[u8], options: Options) -> (Vec<FractionalScaling>, Vec
 }
 
 /// The 246 bytes of a fractional scaling, in the order of its dump.
-fn bytes_of(scaling: &FractionalScaling) -> Vec<f64> {
+fn bytes_of(scaling: &FractionalScaling) -> Vec<u8> {
     ScalingParameter::all()
-        .map(|parameter| scaling.value(parameter))
+        .map(|parameter| scaling.step(parameter, Rounding::Nearest))
         .collect()
 }
 
@@ -96,16 +97,16 @@ fn each_byte_lands_in_its_place() {
     assert_eq!(findings, []);
     let [op1, _, _, _, op5, op6] = &scaling.operators;
     assert_eq!(
-        (op6.offset.byte(), op6.levels[0]),
-        (0x80, Value::from_step(0xff).expect("a level"))
+        (op6.offset.get(), op6.levels[0]),
+        (-128.0, Value::from_step(0xff).expect("a level"))
     );
     assert_eq!(
-        (op5.offset.byte(), op1.levels[39]),
-        (0x7f, Value::from_step(1).expect("a level"))
+        (op5.offset.get(), op1.levels[39]),
+        (127.0, Value::from_step(1).expect("a level"))
     );
-    assert_eq!(bytes_of(&scaling), bytes.map(f64::from));
+    assert_eq!(bytes_of(&scaling), bytes);
     // OP4's offset, at 82, and its 18th group, at 100.
-    assert_eq!(scaling.operators[3].offset.byte(), bytes[82]);
+    assert_eq!(scaling.operators[3].offset.byte(Rounding::Nearest), bytes[82]);
     assert_eq!(scaling.operators[3].levels[17].get(), f64::from(bytes[100]));
 }
 
@@ -118,7 +119,7 @@ fn dumps_come_back_byte_for_byte() {
         let message = universal(on, EDIT, &scaling_bytes(&bytes));
         let (scaling, findings) = scaling_of(&message, STRICT);
         assert_eq!(findings, []);
-        assert_eq!(bytes_of(&scaling), bytes.map(f64::from));
+        assert_eq!(bytes_of(&scaling), bytes);
         let written = syx::write_fractional_scaling(&scaling, channel(on), Rounding::Nearest);
         assert_eq!(written, (message, Vec::new()));
     }
@@ -132,7 +133,7 @@ fn dumps_come_back_byte_for_byte() {
         assert_eq!(findings, []);
         assert_eq!(scalings.len(), usize::from(count));
         for (scaling, bytes) in scalings.iter().zip(&bytes) {
-            assert_eq!(bytes_of(scaling), bytes.map(f64::from));
+            assert_eq!(bytes_of(scaling), *bytes);
         }
         let written = syx::write_fractional_scalings(&scalings, channel(count % 16), Rounding::Nearest);
         assert_eq!(written, (message, Vec::new()));
@@ -151,15 +152,64 @@ fn offsets_in_twos_complement() {
         (0xff, -1.0),
     ];
     for (byte, offset) in offsets {
-        assert_eq!((Offset::new(byte).byte(), Offset::new(byte).value()), (byte, offset));
+        assert_eq!(Offset::of_byte(byte).get(), offset);
+        let offset = Offset::new(offset).expect("an offset");
+        assert_eq!(
+            (offset.byte(Rounding::Nearest), offset.byte(Rounding::Floor)),
+            (byte, byte)
+        );
     }
     // OP6's offset at 0xFF and OP1's at 0x80, in a dump.
     let mut bytes = [0; 246];
     bytes[0] = 0xff;
     bytes[205] = 0x80;
     let (scaling, _) = scaling_of(&universal(0, EDIT, &scaling_bytes(&bytes)), STRICT);
-    assert_eq!(scaling.operators[5].offset.value(), -1.0);
-    assert_eq!(scaling.operators[0].offset.value(), -128.0);
+    assert_eq!(scaling.operators[5].offset.get(), -1.0);
+    assert_eq!(scaling.operators[0].offset.get(), -128.0);
+}
+
+#[test]
+fn offsets_between_the_integers() {
+    // Any finite binary64, on the scale of −128 to +127 and beyond it, −0
+    // taken as 0 (docs/MATH.md §0.5).
+    for value in [-128.0, 127.0, -0.5, 126.75, 127.5, -128.5, 1e300, -f64::MAX] {
+        assert_eq!(Offset::new(value).map(Offset::get), Some(value), "{value}");
+    }
+    assert!(Offset::new(f64::NAN).is_none() && Offset::new(f64::INFINITY).is_none());
+    assert_eq!(Offset::new(-0.0).map(|offset| offset.get().to_bits()), Some(0));
+    // Rounded to a byte as syx.export_rounding says, halfway to the even:
+    // −0.5 to 0 or down to −1, −1.5 to −2 either way, +126.5 to +126.
+    // Beyond the scale, its nearer end.
+    for (value, nearest, floor) in [
+        (-0.5, 0x00, 0xff),
+        (-1.5, 0xfe, 0xfe),
+        (126.5, 0x7e, 0x7e),
+        (-127.25, 0x81, 0x80),
+        (127.5, 0x7f, 0x7f),
+        (1e300, 0x7f, 0x7f),
+        (-128.5, 0x80, 0x80),
+        (-f64::MAX, 0x80, 0x80),
+    ] {
+        let offset = Offset::new(value).expect("an offset");
+        assert_eq!(
+            (offset.byte(Rounding::Nearest), offset.byte(Rounding::Floor)),
+            (nearest, floor),
+            "{value}"
+        );
+    }
+    // In a dump, rounded and reported, as a level is.
+    let mut scaling = scaling_of(&universal(0, EDIT, &scaling_bytes(&[0; 246])), STRICT).0;
+    scaling.operators[0].offset = Offset::new(-0.5).expect("an offset");
+    assert!(!scaling.is_step(parameter(205)) && scaling.is_step(parameter(0)));
+    // An integer beyond the scale is no step either.
+    scaling.operators[1].offset = Offset::new(128.0).expect("an offset");
+    assert!(!scaling.is_step(parameter(164)));
+    scaling.operators[1].offset = Offset::ZERO;
+    for (rounding, halves) in [(Rounding::Nearest, [0x30, 0x30]), (Rounding::Floor, [0x3f, 0x3f])] {
+        let (written, rounded) = syx::write_fractional_scaling(&scaling, channel(0), rounding);
+        assert_eq!(rounded, [parameter(205)]);
+        assert_eq!(written[16 + 410..16 + 412], halves);
+    }
 }
 
 #[test]
@@ -178,7 +228,7 @@ fn bytes_that_send_no_four_bits() {
     let message = universal(0, EDIT, &data);
     let (scaling, findings) = scaling_of(&message, Options::default());
     assert_eq!(findings, [sent(0, 0, 0x2f), sent(0, 1, 0x40), sent(0, 2, 0x7f)]);
-    assert_eq!(bytes_of(&scaling)[..4], [0x05, 0x5f, 0x5f, 0x55].map(f64::from));
+    assert_eq!(bytes_of(&scaling)[..4], [0x05, 0x5f, 0x5f, 0x55]);
     assert_eq!(syx::decode(&message, STRICT), Err(Error::Refused(findings[0])));
     // In a cartridge, by the place of its fractional scaling.
     let valid = scaling_bytes(&[0x55; 246]);
@@ -290,7 +340,7 @@ fn parameters_and_values_between_steps() {
     for (place, name) in names {
         assert_eq!(parameter(place).to_string(), name);
     }
-    // A level between steps is rounded and reported; an offset is a byte.
+    // A level between steps is rounded and reported.
     let mut random = SplitMix64(73);
     let (mut scaling, _) = scaling_of(
         &universal(0, EDIT, &scaling_bytes(&random_scaling_bytes(&mut random))),
@@ -304,4 +354,21 @@ fn parameters_and_values_between_steps() {
         assert_eq!(ScalingStep::of(&scaling, parameter(245), rounding).step(), step);
     }
     assert!(scaling.is_step(parameter(0)) && !scaling.is_step(parameter(245)));
+}
+
+#[test]
+fn levels_beyond_their_scale() {
+    // A level far above its scale of 0 to 255 and one far below it, written as
+    // its ends and reported (docs/MATH.md §0.5).
+    let mut scaling = scaling_of(&universal(0, EDIT, &scaling_bytes(&[7; 246])), STRICT).0;
+    scaling.operators[2].levels[0] = Value::new(1e300).expect("a level");
+    scaling.operators[2].levels[1] = Value::new(-f64::MAX).expect("a level");
+    // OP3's groups 1 and 2 are parameters 124 and 125.
+    for rounding in [Rounding::Nearest, Rounding::Floor] {
+        let (written, rounded) = syx::write_fractional_scaling(&scaling, channel(0), rounding);
+        assert!(matches!(written.as_slice(), [0xf0, data @ .., 0xf7] if data.iter().all(|&byte| byte < 0x80)));
+        assert_eq!(rounded, [parameter(124), parameter(125)]);
+        let back = scaling_of(&written, STRICT).0;
+        assert_eq!(bytes_of(&back)[123..126], [7, 255, 0]);
+    }
 }

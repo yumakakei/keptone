@@ -495,3 +495,49 @@ fn every_step_at_its_largest() {
         voices
     );
 }
+
+/// Whether a message is a system-exclusive one: F0, data bytes below 0x80 and
+/// F7.
+fn is_sysex(message: &[u8]) -> bool {
+    matches!(message, [0xf0, data @ .., 0xf7] if data.iter().all(|&byte| byte < 0x80))
+}
+
+#[test]
+fn values_beyond_their_scales_are_written_as_their_ends() {
+    // Every number of a voice far beyond its scale, above it for a parameter
+    // of an even number and below it for one of an odd, the enumerations and
+    // the switches as they were (docs/MATH.md §0.5).
+    let mut random = SplitMix64(5);
+    let mut voice = voice_of(dump_in(
+        syx::decode(&random_voice(&mut random, 0), STRICT).expect("a valid dump"),
+    ));
+    let mut beyond = Vec::new();
+    for parameter in Parameter::all().take(145) {
+        let above = parameter.number().is_multiple_of(2);
+        if voice.set_value(parameter, if above { 1e300 } else { -f64::MAX }) {
+            beyond.push((parameter, above));
+        }
+    }
+    // Each operator's 18 numbers and the voice's own 15.
+    assert_eq!(beyond.len(), 6 * 18 + 15);
+    for rounding in [Rounding::Nearest, Rounding::Floor] {
+        let (message, loss) = syx::write_voice(&voice, Channel::default(), rounding);
+        assert!(is_sysex(&message));
+        let rounded: Vec<(u8, Parameter)> = beyond.iter().map(|&(parameter, _)| (0, parameter)).collect();
+        assert_eq!(loss.rounded, rounded);
+        let back = voice_of(dump_in(syx::decode(&message, STRICT).expect("a valid dump")));
+        for &(parameter, above) in &beyond {
+            let end = if above { f64::from(parameter.largest()) } else { 0.0 };
+            assert_eq!(back.value(parameter).to_bits(), end.to_bits(), "{parameter}");
+        }
+        // Packed in a bank, the same, no field spilling into another.
+        let voices: [Voice; 32] = std::array::from_fn(|_| voice.clone());
+        let (message, loss) = syx::write_bank(&voices, Channel::default(), rounding);
+        assert!(is_sysex(&message));
+        assert_eq!(loss.rounded.len(), 32 * beyond.len());
+        let packed = bank_of(dump_in(syx::decode(&message, STRICT).expect("a valid dump")));
+        for read in &*packed {
+            assert_eq!(steps_of(read), steps_of(&back));
+        }
+    }
+}

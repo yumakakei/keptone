@@ -61,6 +61,10 @@ Each constant or law carries one tag:
 
 Read [AJXS-ROM] as documentation and write independent code. Never transcribe it.
 
+### 0.5 The values of parameters
+
+A parameter that is a number takes any finite binary64 (DESIGN §7.4): a value on its instrument's scale, such as 0–99, between the scale's steps, or beyond its ends, so that the user is free to take it where the instruments could not, whatever it means there. The scale is the range of the instrument's data, the steps its dumps hold, and the range that the editor and a host show; it is not a limit. A value is held as itself, in the unit of its scale: binary64 holds 53 significant bits at every magnitude, so that a value held scaled, larger or smaller, would be no finer. The laws of §2–§14 are written for the scales. How each continues beyond its scale, its formula extended, its table continued or a limit of the instrument kept, is written with the engine (M3, and M9a for the family's data, DESIGN §15); and where a result would leave binary64, as a frequency beyond its largest number, the engine's law says what it is instead, so that every output stays finite. Enumerations, switches, counts and indices keep their ranges: they name things, and outside their ranges they name nothing. The settings of §17 keep their bounds, which the methods ask for.
+
 ## 1. Overview of a voice
 
 A voice holds six operators $`k = 1 \dots 6`$, the DX7's OP1…OP6 (the number of operators is a setting for user graphs, §8.4). Operator $`k`$ outputs

@@ -249,8 +249,25 @@ fn part_with_supplement() -> Part {
 fn values_of(kind: Kind) -> (Vec<f64>, Vec<f64>) {
     let common = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
     let (takes, refuses) = match kind {
-        Kind::Number(most) => (vec![0.0, most / 2.0 + 0.25, most], vec![-1.0, most + 1.0, -0.5]),
-        Kind::Signed(most) => (vec![-most, 0.5, most], vec![-most - 1.0, most + 0.5]),
+        // Any finite number, on the scale and beyond its ends (docs/MATH.md
+        // §0.5).
+        Kind::Number(most) => (
+            vec![
+                0.0,
+                most / 2.0 + 0.25,
+                most,
+                -1.0,
+                most + 1.0,
+                -0.5,
+                f64::MAX,
+                -f64::MAX,
+            ],
+            Vec::new(),
+        ),
+        Kind::Signed(most) => (
+            vec![-most, 0.5, most, -most - 1.0, most + 0.5, f64::MAX, -f64::MAX],
+            Vec::new(),
+        ),
         Kind::Integer(least, most) => (
             vec![f64::from(least), f64::from(most)],
             vec![f64::from(least) - 1.0, f64::from(most) + 1.0, f64::from(least) + 0.5],

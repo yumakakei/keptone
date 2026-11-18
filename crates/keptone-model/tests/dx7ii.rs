@@ -454,3 +454,64 @@ fn names_and_values_between_steps() {
     assert_eq!(rounded, [SystemParameter::new(37).expect("a parameter")]);
     assert_eq!(written[16 + 37], 64);
 }
+
+/// Whether a message is a system-exclusive one: F0, data bytes below 0x80 and
+/// F7.
+fn is_sysex(message: &[u8]) -> bool {
+    matches!(message, [0xf0, data @ .., 0xf7] if data.iter().all(|&byte| byte < 0x80))
+}
+
+/// A number far beyond a scale: above it or below it.
+fn far<const MAX: u8>(above: bool) -> Value<MAX> {
+    Value::new(if above { 1e300 } else { -f64::MAX }).expect("a finite number")
+}
+
+/// The end of a scale that a number beyond it is written as.
+fn end<const MAX: u8>(above: bool) -> Value<MAX> {
+    Value::from_step(if above { MAX } else { 0 }).expect("a step")
+}
+
+#[test]
+fn values_beyond_their_scales_are_written_as_their_ends() {
+    // Every number of a performance and of the system set-up far beyond its
+    // scale, above it or below it (docs/MATH.md §0.5).
+    let mut random = SplitMix64(91);
+    let (mut performance, _) = performance_of(&universal(0, EDIT, &random_dx7ii_performance(&mut random)), STRICT);
+    let mut expected = performance.clone();
+    performance.dual_detune = far(true);
+    performance.soft_pedal_range = far(false);
+    performance.note_shift_a = far(true);
+    performance.note_shift_b = far(false);
+    performance.balance = far(true);
+    performance.total_volume = far(false);
+    performance.pan_range = far(true);
+    expected.dual_detune = end(true);
+    expected.soft_pedal_range = end(false);
+    expected.note_shift_a = end(true);
+    expected.note_shift_b = end(false);
+    expected.balance = end(true);
+    expected.total_volume = end(false);
+    expected.pan_range = end(true);
+    for place in 0..4 {
+        performance.pan_envelope.rates[place] = far(true);
+        performance.pan_envelope.levels[place] = far(false);
+        expected.pan_envelope.rates[place] = end(true);
+        expected.pan_envelope.levels[place] = end(false);
+    }
+    let (mut setup, _) = setup_of(&universal(0, SYSTEM, &random_system_setup(&mut random)), STRICT);
+    for rounding in [Rounding::Nearest, Rounding::Floor] {
+        let (message, rounded) = syx::write_dx7ii_performance(&performance, channel(0), rounding);
+        assert!(is_sysex(&message));
+        assert_eq!(rounded.len(), 15);
+        let (back, findings) = performance_of(&message, STRICT);
+        assert_eq!((back, findings), (expected.clone(), Vec::new()));
+        for above in [true, false] {
+            setup.master_tune = far(above);
+            let (message, rounded) = syx::write_system_setup(&setup, channel(0), rounding);
+            assert!(is_sysex(&message));
+            assert_eq!(rounded, [SystemParameter::new(37).expect("the master tune")]);
+            let (back, findings) = setup_of(&message, STRICT);
+            assert_eq!((back.master_tune, findings), (end(above), Vec::new()));
+        }
+    }
+}

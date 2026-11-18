@@ -549,3 +549,65 @@ fn byte_counts_of_no_dump() {
         assert_eq!(syx::decode(&message, Options::default()), Err(Error::Length));
     }
 }
+
+/// Whether a message is a system-exclusive one: F0, data bytes below 0x80 and
+/// F7.
+fn is_sysex(message: &[u8]) -> bool {
+    matches!(message, [0xf0, data @ .., 0xf7] if data.iter().all(|&byte| byte < 0x80))
+}
+
+/// A number far beyond a scale: above it or below it.
+fn far<const MAX: u8>(above: bool) -> Value<MAX> {
+    Value::new(if above { 1e300 } else { -f64::MAX }).expect("a finite number")
+}
+
+/// The end of a scale that a number beyond it is written as.
+fn end<const MAX: u8>(above: bool) -> Value<MAX> {
+    Value::from_step(if above { MAX } else { 0 }).expect("a step")
+}
+
+#[test]
+fn values_beyond_their_scales_are_written_as_their_ends() {
+    // Every number of side A far above its scale and of side B far below it
+    // (docs/MATH.md §0.5).
+    let mut random = SplitMix64(36);
+    let (mut performance, _) = performance_of(&dump(0, 1, &random_performance_steps(&mut random)), STRICT);
+    let mut expected = performance.clone();
+    for ((side, wanted), above) in performance.sides.iter_mut().zip(&mut expected.sides).zip([true, false]) {
+        side.pitch_bend_range = far(above);
+        side.pitch_bend_step = far(above);
+        side.portamento_time = far(above);
+        side.attenuation = far(above);
+        wanted.pitch_bend_range = end(above);
+        wanted.pitch_bend_step = end(above);
+        wanted.portamento_time = end(above);
+        wanted.attenuation = end(above);
+        for (effect, wanted) in [
+            (&mut side.modulation_wheel, &mut wanted.modulation_wheel),
+            (&mut side.foot_controller, &mut wanted.foot_controller),
+            (&mut side.aftertouch, &mut wanted.aftertouch),
+            (&mut side.breath_controller, &mut wanted.breath_controller),
+        ] {
+            effect.sensitivity = far(above);
+            wanted.sensitivity = end(above);
+        }
+    }
+    for rounding in [Rounding::Nearest, Rounding::Floor] {
+        let (message, loss) = syx::write_performance(&performance, channel(0), rounding);
+        assert!(is_sysex(&message));
+        assert_eq!(loss.rounded.len(), 2 * 8);
+        let (back, findings) = performance_of(&message, STRICT);
+        assert_eq!(findings, []);
+        assert_eq!(back, expected);
+    }
+    // A conversion between scales that overflows binary64 gives its largest
+    // finite number, never an infinity.
+    let most = Value::<15>::new(f64::MAX).expect("a sensitivity");
+    for scale in [SensitivityScale::Linear, SensitivityScale::Firmware] {
+        assert_eq!(scale.range(most).get().to_bits(), f64::MAX.to_bits());
+    }
+    let mut function = performance.sides[0].function(SensitivityScale::Linear);
+    function.modulation_wheel.range = Value::new(f64::MAX).expect("a range");
+    let side = Side::of_function(&function, value(0));
+    assert_eq!(side.modulation_wheel.sensitivity.get().to_bits(), f64::MAX.to_bits());
+}

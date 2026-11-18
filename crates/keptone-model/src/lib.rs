@@ -9,18 +9,21 @@
 //! Keptone's patch model, its formats, and the parsers that build it.
 //!
 //! Every input becomes a typed value at exactly one boundary per format, and
-//! every field of a value is a range type, so that a value out of range cannot
-//! be represented (docs/DESIGN.md §2, §11). So far, in milestone M2
+//! every field of a value is typed: a number is any finite binary64, on its
+//! instrument's scale or beyond it (docs/MATH.md §0.5), and an enumeration, a
+//! switch or an index is one of what there is, so that nothing that the engine
+//! cannot take can be represented (docs/DESIGN.md §2, §11). So far, in milestone
+//! M2
 //! (docs/DESIGN.md §16):
 //!
-//! - [`voice`]: the DX7's voice, every parameter a range type, and the numbers
+//! - [`voice`]: the DX7's voice, every parameter typed, and the numbers
 //!   the DX7 gives its parameters;
-//! - [`function`]: the DX7's function data, of range types as well, and their
+//! - [`function`]: the DX7's function data, typed as well, and their
 //!   numbers;
 //! - [`performance`]: the performances of the DX1 and the TX7, two sides of
 //!   function data each, and their numbers;
 //! - [`supplement`]: the DX7II's supplement of a voice, its additional
-//!   parameters, of range types as well, and their numbers;
+//!   parameters, typed as well, and their numbers;
 //! - [`dx7ii`]: the DX7II's performances, its system set-up, its micro
 //!   tunings and its fractional scalings, and their numbers;
 //! - [`tx802`]: the TX802's performances, of eight tone generators, and its

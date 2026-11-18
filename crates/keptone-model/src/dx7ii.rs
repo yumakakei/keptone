@@ -7,7 +7,7 @@
 // (LICENSES/GPL-3.0-or-later.txt).
 
 //! The DX7II's performances, its system set-up, its micro tunings and its
-//! fractional scalings, every parameter of which is a range type.
+//! fractional scalings, every parameter of which is typed.
 //!
 //! A [`Performance`] is the DX7II's way of playing its voices, the PCED and
 //! PMEM formats of \[DX7II-MANUAL\]: one voice, or two, A and B, together or
@@ -37,7 +37,7 @@
 
 use std::fmt;
 
-use crate::voice::{Envelope, Rounding, Value};
+use crate::voice::{self, Envelope, Rounding, Value};
 
 /// A whole number from 0 to `MAX` that names a thing, a voice, a key, a
 /// channel or a controller, which no value between two of them would mean.
@@ -341,16 +341,18 @@ impl Performance {
     }
 
     /// The step of a parameter, as a dump or a parameter change carries it: its
-    /// value rounded by `rounding`.
+    /// value rounded by `rounding`, a value beyond the parameter's scale taken
+    /// as its nearer end.
     #[must_use]
     pub fn step(&self, parameter: PerformanceParameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        rounding.apply(self.value(parameter)).min(parameter.largest())
     }
 
-    /// Whether a parameter's value is a step, which a dump holds exactly.
+    /// Whether a parameter's value is a step, an integer on its scale, which a
+    /// dump holds exactly.
     #[must_use]
     pub fn is_step(&self, parameter: PerformanceParameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        voice::is_step_of(self.value(parameter), parameter.largest())
     }
 
     /// Sets a parameter to a step. If the step is no more than the parameter's
@@ -692,16 +694,18 @@ impl SystemSetup {
     }
 
     /// The step of a parameter, as a dump or a parameter change carries it: its
-    /// value rounded by `rounding`.
+    /// value rounded by `rounding`, a value beyond the parameter's scale taken
+    /// as its nearer end.
     #[must_use]
     pub fn step(&self, parameter: SystemParameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        rounding.apply(self.value(parameter)).min(parameter.largest())
     }
 
-    /// Whether a parameter's value is a step, which a dump holds exactly.
+    /// Whether a parameter's value is a step, an integer on its scale, which a
+    /// dump holds exactly.
     #[must_use]
     pub fn is_step(&self, parameter: SystemParameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        voice::is_step_of(self.value(parameter), parameter.largest())
     }
 
     /// Sets a parameter to a step. If the step is within the parameter's range
@@ -869,15 +873,15 @@ impl fmt::Display for SystemParameter {
     }
 }
 
-/// A key's pitch in a micro tuning: a number from 0 to 10794 on the DX7II's
-/// scale of them \[DX7II-MANUAL\] p. Add-14, which its dumps and its parameter
-/// change send as two bytes, the high seven bits, no more than 84, and the low
-/// seven.
+/// A key's pitch in a micro tuning: a number on the DX7II's scale of them, 0 to
+/// 10794 \[DX7II-MANUAL\] p. Add-14, or beyond it, any finite binary64
+/// (docs/MATH.md §0.5), which its dumps and its parameter change send as two
+/// bytes, the high seven bits, no more than 84, and the low seven.
 ///
 /// The DX7II knows only the scale's steps, the integers 0 to 10794. A value may
 /// lie between them; the pitch a value gives is for the engine to say
-/// (docs/DESIGN.md §6.4). A value is never NaN, never below 0 and never above
-/// 10794, nor ever −0.
+/// (docs/DESIGN.md §6.4); and beyond them, where a dump holds the scale's nearer
+/// end. A value is never NaN and never infinite, nor ever −0.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct KeyPitch(f64);
 
@@ -885,13 +889,11 @@ impl KeyPitch {
     /// The largest step: 10794, 84 · 128 + 42.
     pub const LARGEST: u16 = 10794;
 
-    /// The value, if it is a number from 0 to 10794.
+    /// The value, if it is a finite number.
     #[must_use]
     pub fn new(value: f64) -> Option<Self> {
         // Adding +0 takes −0 to +0 and leaves every other number as it is.
-        (0.0..=f64::from(Self::LARGEST))
-            .contains(&value)
-            .then_some(Self(value + 0.0))
+        value.is_finite().then_some(Self(value + 0.0))
     }
 
     /// The value of a step, if the step is no more than 10794.
@@ -911,10 +913,18 @@ impl KeyPitch {
         self.0
     }
 
-    /// The step the value rounds to by `rounding`, from 0 to 10794.
+    /// The step the value rounds to by `rounding`, from 0 to 10794: a value
+    /// beyond the scale as its nearer end.
     #[must_use]
     pub fn step(self, rounding: Rounding) -> u16 {
-        rounding.apply_wide(self.0)
+        rounding.apply_wide(self.0).min(Self::LARGEST)
+    }
+
+    /// Whether the value is a step, an integer on the scale, which a dump holds
+    /// exactly.
+    #[must_use]
+    pub fn is_step(self) -> bool {
+        self.0.fract() == 0.0 && (0.0..=f64::from(Self::LARGEST)).contains(&self.0)
     }
 }
 
@@ -945,37 +955,63 @@ impl MicroTuning {
     }
 }
 
-/// The offset of an operator's fractional scaling: the byte that the dumps and
-/// the parameter change send for it, any of 0 to 255, which holds the offset,
-/// −128 to +127, in two's complement (docs/DESIGN.md §11.2).
+/// The offset of an operator's fractional scaling, on the scale of −128 to +127
+/// that \[DX7II-MANUAL\] and \[DX7S-MANUAL\] give it, or beyond it: any finite
+/// binary64 (docs/MATH.md §0.5), which may lie between the integers, as the
+/// levels beside it may, and beyond the scale's ends (docs/DESIGN.md §11.2). It
+/// is never NaN and never −0, which [`Offset::new`] takes as 0, so that equal
+/// offsets have equal bits.
 ///
-/// \[DX7II-MANUAL\] and \[DX7S-MANUAL\] give the offset as −128 to +127 and do
-/// not say how its byte holds it. Dumps of DX7II banks hold 0x00 in the offset
-/// of every operator in fractional mode \[DX7II-DUMPS\], which two's complement
-/// reads as no offset. The byte is kept as it comes, so that a dump comes back
-/// byte for byte; what the offset does to the sound is for the engine to say
+/// The dumps and the parameter change send it as a byte, any of 0 to 255,
+/// which holds it in two's complement, as the manuals do not say: dumps of
+/// DX7II banks hold 0x00 in the offset of every operator in fractional mode
+/// \[DX7II-DUMPS\], which two's complement reads as no offset. A byte read gives
+/// an integer, which is written back as the same byte, so that a dump comes
+/// back byte for byte; an offset between the integers is written as the one
+/// that `syx.export_rounding` rounds it to, and one beyond the scale as its
+/// nearer end. What the offset does to the sound is for the engine to say
 /// (docs/DESIGN.md §6.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Offset(u8);
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
+pub struct Offset(f64);
 
 impl Offset {
-    /// The offset of a byte.
+    /// No offset.
+    pub const ZERO: Self = Self(0.0);
+
+    /// The offset, if it is a finite number.
     #[must_use]
-    pub const fn new(byte: u8) -> Self {
-        Self(byte)
+    pub fn new(value: f64) -> Option<Self> {
+        // Adding +0 takes −0 to +0 and leaves every other number as it is.
+        value.is_finite().then_some(Self(value + 0.0))
     }
 
-    /// Its byte.
+    /// The offset that a byte holds: the byte in two's complement.
     #[must_use]
-    pub const fn byte(self) -> u8 {
+    pub fn of_byte(byte: u8) -> Self {
+        Self(f64::from(byte.cast_signed()))
+    }
+
+    /// The offset.
+    #[must_use]
+    pub const fn get(self) -> f64 {
         self.0
     }
 
-    /// The offset that its byte holds, −128 to +127: the byte in two's
-    /// complement.
+    /// The byte that holds the offset rounded by `rounding`, in two's
+    /// complement: an offset beyond the scale as its nearer end.
     #[must_use]
-    pub fn value(self) -> f64 {
-        f64::from(self.0.cast_signed())
+    pub fn byte(self, rounding: Rounding) -> u8 {
+        // 128 above the offset, taken into 0 to 255, rounds as the offset
+        // does, 128 being even; the byte is it with its highest bit flipped:
+        // −128 is 0x80, −1 0xFF, 0 0x00 and +127 0x7F.
+        rounding.apply(self.0 + 128.0) ^ 0x80
+    }
+
+    /// Whether the offset is a step, an integer from −128 to +127, which a
+    /// dump holds exactly.
+    #[must_use]
+    pub fn is_step(self) -> bool {
+        self.0.fract() == 0.0 && (-128.0..=127.0).contains(&self.0)
     }
 }
 
@@ -1008,40 +1044,51 @@ impl FractionalScaling {
     pub(crate) fn zero() -> Self {
         Self {
             operators: std::array::from_fn(|_| OperatorScaling {
-                offset: Offset(0),
+                offset: Offset::ZERO,
                 levels: [Value::ZERO; 40],
             }),
         }
     }
 
-    /// A parameter's value: the offset's byte, or a group's level.
+    /// A parameter's value: the offset, on the scale of −128 to +127, or a
+    /// group's level, on the scale of 0 to 255.
     #[must_use]
     pub fn value(&self, parameter: ScalingParameter) -> f64 {
         let scaling = &self.operators[parameter.place()];
         match parameter.group() {
-            0 => f64::from(scaling.offset.0),
+            0 => scaling.offset.get(),
             group => scaling.levels[usize::from(group - 1)].get(),
         }
     }
 
     /// The step of a parameter, as a dump or a parameter change carries it: its
-    /// value rounded by `rounding`.
+    /// value rounded by `rounding`, the offset's in two's complement, and a
+    /// value beyond its scale taken as the scale's nearer end.
     #[must_use]
     pub fn step(&self, parameter: ScalingParameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        let scaling = &self.operators[parameter.place()];
+        match parameter.group() {
+            0 => scaling.offset.byte(rounding),
+            group => rounding.apply(scaling.levels[usize::from(group - 1)].get()),
+        }
     }
 
-    /// Whether a parameter's value is a step, which a dump holds exactly.
+    /// Whether a parameter's value is a step, an integer on its scale, which a
+    /// dump holds exactly.
     #[must_use]
     pub fn is_step(&self, parameter: ScalingParameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        let scaling = &self.operators[parameter.place()];
+        match parameter.group() {
+            0 => scaling.offset.is_step(),
+            group => voice::is_step_of(scaling.levels[usize::from(group - 1)].get(), u8::MAX),
+        }
     }
 
     /// Sets a parameter to a step, which every byte is.
     pub fn set_step(&mut self, parameter: ScalingParameter, step: u8) {
         let scaling = &mut self.operators[parameter.place()];
         match parameter.group() {
-            0 => scaling.offset = Offset(step),
+            0 => scaling.offset = Offset::of_byte(step),
             group => scaling.levels[usize::from(group - 1)] = Value::saturating(step),
         }
     }

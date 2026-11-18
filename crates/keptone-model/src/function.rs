@@ -6,7 +6,7 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! The DX7's function data, every parameter of which is a range type.
+//! The DX7's function data, every parameter of which is typed.
 //!
 //! [`Function`] is what the DX7 keeps beside its voices and sends and receives
 //! as the parameter changes of the function group, 64 to 77 \[DX7-MANUAL\]
@@ -20,7 +20,7 @@
 
 use std::fmt;
 
-use crate::voice::{Rounding, Value};
+use crate::voice::{self, Rounding, Value};
 
 /// Whether keys play one voice at a time or several: function parameter 64,
 /// by its step.
@@ -230,14 +230,14 @@ impl Function {
     /// rounded by `rounding`.
     #[must_use]
     pub fn step(&self, parameter: FunctionParameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        rounding.apply(self.value(parameter)).min(parameter.largest())
     }
 
     /// Whether a parameter's value is a step, which a parameter change carries
     /// exactly.
     #[must_use]
     pub fn is_step(&self, parameter: FunctionParameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        voice::is_step_of(self.value(parameter), parameter.largest())
     }
 
     /// Sets a parameter to a step. If the step is no more than the parameter's

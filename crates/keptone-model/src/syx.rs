@@ -3070,7 +3070,7 @@ fn data_of_micro_tuning(tuning: &MicroTuning, rounding: Rounding) -> (Vec<u8>, V
     let mut rounded = Vec::new();
     for (key, pitch) in Index::all().zip(&tuning.keys) {
         data.extend_from_slice(&seven_bits(pitch.step(rounding)));
-        if pitch.get().fract() != 0.0 {
+        if !pitch.is_step() {
             rounded.push(key);
         }
     }

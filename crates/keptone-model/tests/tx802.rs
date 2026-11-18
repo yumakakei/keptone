@@ -526,3 +526,58 @@ fn names_and_values_between_steps() {
     assert_eq!(rounded, [SystemParameter::new(11).expect("a parameter")]);
     assert_eq!(written[16 + 11], 64);
 }
+
+/// Whether a message is a system-exclusive one: F0, data bytes below 0x80 and
+/// F7.
+fn is_sysex(message: &[u8]) -> bool {
+    matches!(message, [0xf0, data @ .., 0xf7] if data.iter().all(|&byte| byte < 0x80))
+}
+
+/// A number far beyond a scale: above it or below it.
+fn far<const MAX: u8>(above: bool) -> Value<MAX> {
+    Value::new(if above { 1e300 } else { -f64::MAX }).expect("a finite number")
+}
+
+/// The end of a scale that a number beyond it is written as.
+fn end<const MAX: u8>(above: bool) -> Value<MAX> {
+    Value::from_step(if above { MAX } else { 0 }).expect("a step")
+}
+
+#[test]
+fn values_beyond_their_scales_are_written_as_their_ends() {
+    // Every number of a performance's tone generators and of the system set-up
+    // far beyond its scale, above it or below it (docs/MATH.md §0.5).
+    let mut random = SplitMix64(84);
+    let (mut performance, _) = edit_of(&edit_message(0, &random_tx802_performance(&mut random)), STRICT);
+    let mut expected = performance.clone();
+    for (place, (generator, wanted)) in performance
+        .tone_generators
+        .iter_mut()
+        .zip(&mut expected.tone_generators)
+        .enumerate()
+    {
+        let above = place.is_multiple_of(2);
+        generator.detune = far(above);
+        generator.volume = far(!above);
+        generator.note_shift = far(above);
+        wanted.detune = end(above);
+        wanted.volume = end(!above);
+        wanted.note_shift = end(above);
+    }
+    let (mut setup, _) = setup_of(&universal(0, SYSTEM, &random_tx802_system(&mut random)), STRICT);
+    for rounding in [Rounding::Nearest, Rounding::Floor] {
+        let (message, rounded) = syx::write_tx802_performance(&performance, channel(0), rounding);
+        assert!(is_sysex(&message));
+        assert_eq!(rounded.len(), 8 * 3);
+        let (back, findings) = edit_of(&message, STRICT);
+        assert_eq!((back, findings), (expected.clone(), Vec::new()));
+        for above in [true, false] {
+            setup.master_tune = far(above);
+            let (message, rounded) = syx::write_tx802_system_setup(&setup, channel(0), rounding);
+            assert!(is_sysex(&message));
+            assert_eq!(rounded, [SystemParameter::new(11).expect("the master tune")]);
+            let (back, findings) = setup_of(&message, STRICT);
+            assert_eq!((back.master_tune, findings), (end(above), Vec::new()));
+        }
+    }
+}

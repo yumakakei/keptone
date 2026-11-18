@@ -12,13 +12,16 @@
 //! 32, the AMEM format, packed into 35 bytes each, under 6. Each byte lands in
 //! its field, random valid dumps come back byte for byte, a supplement is the
 //! same in both dumps, what is out of range or unused is reported and taken as
-//! `syx.out_of_range` says, and values between steps are rounded as
-//! `syx.export_rounding` says.
+//! `syx.out_of_range` says, and values between steps and beyond their scales
+//! are rounded as `syx.export_rounding` says, the pitch envelope's range among
+//! them, held in octaves.
 
 mod common;
 
 use common::{SplitMix64, dump, random_supplement_steps, random_supplements};
 use keptone_model::function::{Polyphony, PortamentoMode};
+use keptone_model::id::{Area, Kind, PartParameter};
+use keptone_model::part::Part;
 use keptone_model::supplement::{
     BendMode, LfoTrigger, Modulation, OperatorSupplement, PitchEgRange, ScalingMode, Supplement, SupplementParameter,
 };
@@ -139,7 +142,7 @@ fn each_step_lands_in_its_field() {
             operator(false, 6),
             operator(true, 7),
         ],
-        pitch_eg_range: PitchEgRange::OneOctave,
+        pitch_eg_range: PitchEgRange::new(1.0).expect("one octave"),
         lfo_trigger: LfoTrigger::Multi,
         pitch_eg_velocity: true,
         polyphony: Polyphony::Poly,
@@ -312,5 +315,119 @@ fn byte_counts_of_no_dump() {
         let mut message = dump(0, format, &vec![0; count]);
         message.remove(6);
         assert_eq!(syx::decode(&message, Options::default()), Err(Error::Length));
+    }
+}
+
+/// Whether a message is a system-exclusive one: F0, data bytes below 0x80 and
+/// F7.
+fn is_sysex(message: &[u8]) -> bool {
+    matches!(message, [0xf0, data @ .., 0xf7] if data.iter().all(|&byte| byte < 0x80))
+}
+
+#[test]
+fn the_pitch_eg_range_in_octaves() {
+    // The steps 0 to 3 are ranges of eight, four, one and half an octave
+    // (docs/DESIGN.md §11.2), and the part's parameter is on the scale of 0
+    // to 8.
+    let steps: Vec<u64> = (0..4)
+        .map(|step| PitchEgRange::from_step(step).expect("a step").get().to_bits())
+        .collect();
+    assert_eq!(steps, [8.0, 4.0, 1.0, 0.5].map(f64::to_bits));
+    assert!(PitchEgRange::from_step(4).is_none());
+    let kind = PartParameter::of_name("supplement.pitch_eg_range").map(PartParameter::kind);
+    assert_eq!(kind, Some(Kind::Number(8.0)));
+    // Any finite binary64: 0, which holds the pitch still, the numbers below
+    // it, which turn the envelope upside down, and those beyond 8; −0 taken
+    // as 0 (docs/MATH.md §0.5).
+    for octaves in [8.0, 0.5, 2.0, 0.0, -1.0, 16.0, 1e300, -f64::MAX] {
+        let bits = PitchEgRange::new(octaves).map(|range| range.get().to_bits());
+        assert_eq!(bits, Some(octaves.to_bits()), "{octaves}");
+    }
+    assert!(PitchEgRange::new(f64::NAN).is_none() && PitchEgRange::new(f64::INFINITY).is_none());
+    assert_eq!(PitchEgRange::new(-0.0).map(|range| range.get().to_bits()), Some(0));
+    // The nearest step, of two as near the even one; or the widest at or
+    // below, and half an octave for a range below it.
+    for (octaves, nearest, floor) in [
+        (8.0, 0, 0),
+        (1e300, 0, 0),
+        (6.5, 0, 1),
+        (6.0, 0, 1),
+        (5.0, 1, 1),
+        (4.0, 1, 1),
+        (3.0, 1, 2),
+        (2.5, 2, 2),
+        (2.0, 2, 2),
+        (1.0, 2, 2),
+        (0.75, 2, 3),
+        (0.6, 3, 3),
+        (0.5, 3, 3),
+        (0.0, 3, 3),
+        (-5.0, 3, 3),
+        (-f64::MAX, 3, 3),
+    ] {
+        let range = PitchEgRange::new(octaves).expect("a range");
+        assert_eq!(
+            (range.step(Rounding::Nearest), range.step(Rounding::Floor)),
+            (nearest, floor),
+            "{octaves}"
+        );
+        let is_step = [8.0, 4.0, 1.0, 0.5]
+            .iter()
+            .any(|step: &f64| step.to_bits() == octaves.to_bits());
+        assert_eq!(range.is_step(), is_step, "{octaves}");
+    }
+    // A step beyond 3 is taken as the narrowest, half an octave.
+    let mut random = SplitMix64(47);
+    let (mut supplement, _) = supplement_of(&dump(0, 5, &random_supplement_steps(&mut random)), STRICT);
+    assert!(!supplement.set_step(parameter(12), 4));
+    assert_eq!(supplement.pitch_eg_range.get().to_bits(), 0.5_f64.to_bits());
+}
+
+#[test]
+fn values_beyond_their_scales_are_written_as_their_ends() {
+    // Every number of a supplement far beyond its scale, above it for a
+    // parameter of an even number and below it for one of an odd
+    // (docs/MATH.md §0.5); the pitch envelope's range below its scale is
+    // written as its narrowest step, half an octave.
+    let mut random = SplitMix64(46);
+    let (supplement, _) = supplement_of(&dump(0, 5, &random_supplement_steps(&mut random)), STRICT);
+    let mut part = Part::initial(true);
+    part.patch.supplement = Some(supplement);
+    let mut beyond = Vec::new();
+    for parameter in PartParameter::all().filter(|parameter| parameter.area() == Area::Supplement) {
+        let above = parameter.number().is_multiple_of(2);
+        if let Kind::Number(most) = parameter.kind() {
+            assert!(part.set_value(parameter, if above { 1e300 } else { -f64::MAX }));
+            let end = match (above, parameter.name().as_str()) {
+                (true, _) => most,
+                (false, "supplement.pitch_eg_range") => 0.5,
+                (false, _) => 0.0,
+            };
+            beyond.push((parameter, end));
+        }
+    }
+    let supplement = part.patch.supplement.clone().expect("a supplement");
+    for rounding in [Rounding::Nearest, Rounding::Floor] {
+        let (message, rounded) = syx::write_supplement(&supplement, channel(0), rounding);
+        assert!(is_sysex(&message));
+        assert_eq!(rounded.len(), beyond.len());
+        let (back, findings) = supplement_of(&message, STRICT);
+        assert_eq!(findings, []);
+        let mut read = Part::initial(true);
+        read.patch.supplement = Some(back.clone());
+        for &(parameter, end) in &beyond {
+            assert_eq!(
+                read.value(parameter).map(f64::to_bits),
+                Some(end.to_bits()),
+                "{parameter}"
+            );
+        }
+        let supplements: [Supplement; 32] = std::array::from_fn(|_| supplement.clone());
+        let (message, rounded) = syx::write_supplements(&supplements, channel(0), rounding);
+        assert!(is_sysex(&message));
+        assert_eq!(rounded.len(), 32 * beyond.len());
+        let (backs, findings) = supplements_of(&message, STRICT);
+        assert_eq!(findings, []);
+        assert!(backs.iter().all(|each| *each == back));
     }
 }

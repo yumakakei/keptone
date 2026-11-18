@@ -6,7 +6,7 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! The DX7II's supplement of a voice, every parameter of which is a range type.
+//! The DX7II's supplement of a voice, every parameter of which is typed.
 //!
 //! A DX7II voice is a DX7 voice ([`crate::voice`]) and its supplement, the
 //! additional parameters of the ACED and AMEM formats of \[DX7II-MANUAL\],
@@ -30,7 +30,7 @@
 use std::fmt;
 
 use crate::function::{Polyphony, PortamentoMode};
-use crate::voice::{Rounding, Value};
+use crate::voice::{self, Rounding, Value};
 
 /// How an operator's output level follows the keys: the DX7's keyboard level
 /// scaling, or the DX7II's fractional scaling, by its step.
@@ -72,41 +72,79 @@ pub struct OperatorSupplement {
     pub amplitude_sensitivity: Value<7>,
 }
 
-/// The range of the pitch envelope, by its step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PitchEgRange {
-    /// 0: eight octaves.
-    EightOctaves,
-    /// 1: four octaves.
-    FourOctaves,
-    /// 2: one octave.
-    OneOctave,
-    /// 3: half an octave.
-    HalfOctave,
-}
+/// The range of the pitch envelope, the DX7II's PITCH EG RANGE
+/// \[DX7II-MANUAL\]: how many octaves apart the envelope's lowest level and its
+/// highest set the pitch, 8 for the DX7's four octaves either way
+/// (docs/MATH.md §5).
+///
+/// The range is any finite binary64 (docs/MATH.md §0.5): the DX7II's four,
+/// eight, four, one and half an octave, which are its steps 0 to 3; any number
+/// between them, as a level may lie between its steps; and any beyond, 0 among
+/// them, which holds the pitch still, and the numbers below 0, which turn the
+/// envelope upside down (docs/DESIGN.md §11.2). It is never NaN and never −0,
+/// which [`PitchEgRange::new`] takes as 0, so that equal ranges have equal
+/// bits. What it does to the sound is for the engine to say (docs/DESIGN.md
+/// §6.4).
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct PitchEgRange(f64);
 
 impl PitchEgRange {
+    /// The DX7's range, eight octaves: step 0.
+    pub const EIGHT_OCTAVES: Self = Self(8.0);
+
+    /// The ranges of the steps 0 to 3, in octaves.
+    const STEPS: [f64; 4] = [8.0, 4.0, 1.0, 0.5];
+
+    /// The range, if it is a finite number of octaves.
+    #[must_use]
+    pub fn new(octaves: f64) -> Option<Self> {
+        // Adding +0 takes −0 to +0 and leaves every other number as it is.
+        octaves.is_finite().then_some(Self(octaves + 0.0))
+    }
+
     /// The range of a step, if the step is 0 to 3.
     #[must_use]
-    pub const fn from_step(step: u8) -> Option<Self> {
-        match step {
-            0 => Some(Self::EightOctaves),
-            1 => Some(Self::FourOctaves),
-            2 => Some(Self::OneOctave),
-            3 => Some(Self::HalfOctave),
-            _ => None,
+    pub fn from_step(step: u8) -> Option<Self> {
+        Self::STEPS.get(usize::from(step)).map(|&octaves| Self(octaves))
+    }
+
+    /// The range, in octaves.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+
+    /// The step that a dump holds the range as, one of the four as `rounding`
+    /// says: the nearest, and of two as near the even step; or the widest at
+    /// or below the range, and half an octave for a range below it.
+    #[must_use]
+    pub fn step(self, rounding: Rounding) -> u8 {
+        // A range beyond the steps' has the nearer end's step whichever the
+        // rounding, and taken to that end it has its distances to the steps
+        // exactly, however far beyond it was.
+        let octaves = self.0.clamp(0.5, 8.0);
+        let mut steps = (0_u8..).zip(Self::STEPS);
+        match rounding {
+            // The steps go down from 8: the first at or below is the widest.
+            Rounding::Floor => steps.find(|&(_, step)| step <= octaves).map_or(3, |(step, _)| step),
+            Rounding::Nearest => steps
+                .min_by(|&(one, first), &(other, second)| {
+                    let (near, far) = ((octaves - first).abs(), (octaves - second).abs());
+                    near.total_cmp(&far).then((one % 2).cmp(&(other % 2)))
+                })
+                .map_or(0, |(step, _)| step),
         }
     }
 
-    /// Its step.
+    /// Whether the range is one of the four that a dump holds exactly.
     #[must_use]
-    pub const fn step(self) -> u8 {
-        match self {
-            Self::EightOctaves => 0,
-            Self::FourOctaves => 1,
-            Self::OneOctave => 2,
-            Self::HalfOctave => 3,
-        }
+    pub fn is_step(self) -> bool {
+        Self::STEPS.iter().any(|octaves| octaves.to_bits() == self.0.to_bits())
+    }
+
+    /// The range of a step, the narrowest for a step beyond 3.
+    fn saturating(step: u8) -> Self {
+        Self(Self::STEPS[usize::from(step.min(3))])
     }
 }
 
@@ -273,7 +311,7 @@ impl Supplement {
                 scaling_mode: ScalingMode::Normal,
                 amplitude_sensitivity: Value::ZERO,
             }; 6],
-            pitch_eg_range: PitchEgRange::EightOctaves,
+            pitch_eg_range: PitchEgRange::EIGHT_OCTAVES,
             lfo_trigger: LfoTrigger::Single,
             pitch_eg_velocity: false,
             polyphony: Polyphony::Poly,
@@ -302,20 +340,15 @@ impl Supplement {
         }
     }
 
-    /// A parameter's value: its [`Value`], or the step of an enumeration or a
-    /// switch; mono/poly and unison as the two bits that parameter 15 carries,
-    /// unison's the higher.
+    /// A parameter's value: its [`Value`], the pitch envelope's range in
+    /// octaves, or the step of an enumeration or a switch; mono/poly and unison
+    /// as the two bits that parameter 15 carries, unison's the higher.
     #[must_use]
     pub fn value(&self, parameter: SupplementParameter) -> f64 {
         match parameter.field() {
             Field::ScalingMode(k) => f64::from(self.operators[k].scaling_mode == ScalingMode::Fractional),
             Field::AmplitudeSensitivity(k) => self.operators[k].amplitude_sensitivity.get(),
-            Field::PitchEgRange => f64::from(match self.pitch_eg_range {
-                PitchEgRange::EightOctaves => 0_u8,
-                PitchEgRange::FourOctaves => 1,
-                PitchEgRange::OneOctave => 2,
-                PitchEgRange::HalfOctave => 3,
-            }),
+            Field::PitchEgRange => self.pitch_eg_range.get(),
             Field::LfoTrigger => f64::from(self.lfo_trigger == LfoTrigger::Multi),
             Field::PitchEgVelocity => f64::from(self.pitch_eg_velocity),
             Field::PolyphonyAndUnison => f64::from(self.polyphony.step() | u8::from(self.unison) << 1),
@@ -341,16 +374,24 @@ impl Supplement {
     }
 
     /// The step of a parameter, as a dump or a parameter change carries it: its
-    /// value rounded by `rounding`.
+    /// value rounded by `rounding`, a value beyond the parameter's scale taken
+    /// as its nearer end.
     #[must_use]
     pub fn step(&self, parameter: SupplementParameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        match parameter.field() {
+            Field::PitchEgRange => self.pitch_eg_range.step(rounding),
+            _ => rounding.apply(self.value(parameter)).min(parameter.largest()),
+        }
     }
 
-    /// Whether a parameter's value is a step, which a dump holds exactly.
+    /// Whether a parameter's value is a step, an integer on its scale, which a
+    /// dump holds exactly.
     #[must_use]
     pub fn is_step(&self, parameter: SupplementParameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        match parameter.field() {
+            Field::PitchEgRange => self.pitch_eg_range.is_step(),
+            _ => voice::is_step_of(self.value(parameter), parameter.largest()),
+        }
     }
 
     /// Sets a parameter to a step. If the step is no more than the parameter's
@@ -367,14 +408,7 @@ impl Supplement {
                 };
             }
             Field::AmplitudeSensitivity(k) => self.operators[k].amplitude_sensitivity = Value::saturating(step),
-            Field::PitchEgRange => {
-                self.pitch_eg_range = match step {
-                    0 => PitchEgRange::EightOctaves,
-                    1 => PitchEgRange::FourOctaves,
-                    2 => PitchEgRange::OneOctave,
-                    _ => PitchEgRange::HalfOctave,
-                };
-            }
+            Field::PitchEgRange => self.pitch_eg_range = PitchEgRange::saturating(step),
             Field::LfoTrigger => {
                 self.lfo_trigger = if step == 0 {
                     LfoTrigger::Single

@@ -156,9 +156,12 @@ impl fmt::Display for ParameterId {
 /// What values a parameter takes, each a binary64.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
-    /// A number from 0 to this, which may lie between the integers.
+    /// A number on the scale from 0 to this, its instrument's, which may lie
+    /// between the integers and beyond the scale's ends: any finite binary64
+    /// (docs/MATH.md §0.5).
     Number(f64),
-    /// A number from minus this to this, which may lie between the integers.
+    /// A number on the scale from minus this to this, which may lie between
+    /// the integers and beyond the scale's ends: any finite binary64.
     Signed(f64),
     /// An integer from the first to the second.
     Integer(u32, u32),
@@ -558,9 +561,6 @@ fn set_supplement_value(supplement: &mut Supplement, n: usize, value: f64) -> bo
     }
 }
 
-/// The names of the pitch envelope's ranges.
-const PITCH_EG_RANGES: &[&str] = &["eight-octaves", "four-octaves", "one-octave", "half-octave"];
-
 /// The names of the LFO's triggers.
 const LFO_TRIGGERS: &[&str] = &["single", "multi"];
 
@@ -569,7 +569,16 @@ const BEND_MODES: &[&str] = &["normal", "lowest", "highest", "key-on"];
 
 /// The supplement's parameters after its operators', after `supplement.`.
 const SUPPLEMENT: [Accessor<Supplement>; 38] = [
-    choice!("pitch_eg_range", PITCH_EG_RANGES, PitchEgRange, pitch_eg_range),
+    Accessor {
+        name: "pitch_eg_range",
+        kind: Kind::Number(8.0),
+        get: |supplement| supplement.pitch_eg_range.get(),
+        set: |supplement, value| {
+            PitchEgRange::new(value)
+                .map(|range| supplement.pitch_eg_range = range)
+                .is_some()
+        },
+    },
     choice!("lfo_trigger", LFO_TRIGGERS, LfoTrigger, lfo_trigger),
     switch!("pitch_eg_velocity", pitch_eg_velocity),
     choice!("polyphony", POLYPHONY, Polyphony, polyphony),

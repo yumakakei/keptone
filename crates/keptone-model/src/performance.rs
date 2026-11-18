@@ -6,8 +6,8 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! The performances of the DX1 and the TX7, every parameter of which is a
-//! range type.
+//! The performances of the DX1 and the TX7, every parameter of which is
+//! typed.
 //!
 //! A performance holds, for each of its two sides, A and B, what the DX7 keeps
 //! as its function data ([`crate::function`]): mono or poly, the pitch bend's
@@ -32,7 +32,7 @@
 use std::fmt;
 
 use crate::function::{Assign, Controller, Function, Polyphony, PortamentoMode};
-use crate::voice::{Rounding, Value};
+use crate::voice::{self, Rounding, Value};
 
 /// A controller of a side: its sensitivity and what it is assigned to.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -130,7 +130,7 @@ impl Side {
     #[must_use]
     pub fn of_function(function: &Function, attenuation: Value<7>) -> Self {
         let effect = |controller: Controller| Effect {
-            sensitivity: Value::clamped(15.0 * controller.range.get() / 99.0),
+            sensitivity: Value::finite(15.0 * controller.range.get() / 99.0),
             assign: controller.assign,
         };
         Self {
@@ -226,7 +226,7 @@ impl SensitivityScale {
             Self::Linear => 99.0 * s / 15.0,
             Self::Firmware => (53.0 * s / 8.0).floor(),
         };
-        Value::clamped(range)
+        Value::finite(range)
     }
 }
 
@@ -399,16 +399,17 @@ impl Performance {
     }
 
     /// The step of a parameter, as a dump carries it: its value rounded by
-    /// `rounding`.
+    /// `rounding`, a value beyond the parameter's scale taken as its nearer end.
     #[must_use]
     pub fn step(&self, parameter: PerformanceParameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        rounding.apply(self.value(parameter)).min(parameter.largest())
     }
 
-    /// Whether a parameter's value is a step, which a dump holds exactly.
+    /// Whether a parameter's value is a step, an integer on its scale, which a
+    /// dump holds exactly.
     #[must_use]
     pub fn is_step(&self, parameter: PerformanceParameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        voice::is_step_of(self.value(parameter), parameter.largest())
     }
 
     /// Sets a parameter to a step. If the step is no more than the parameter's

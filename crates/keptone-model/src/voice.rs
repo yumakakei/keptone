@@ -6,19 +6,21 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! A DX7 voice, every parameter of which is a range type.
+//! A DX7 voice, every parameter of which is typed.
 //!
 //! A [`Voice`] is what a single-voice dump of the DX7 holds, and each of the 32
 //! places of a bank \[DEXED-SYSEX\]: six operators, each with its envelope, its
 //! keyboard scaling, its sensitivities, its level and its frequency, and the
 //! voice's pitch envelope, algorithm, feedback, LFO, transposition and name.
 //! Each parameter that is a number on the DX7's scale, 0 to 99 for most, is a
-//! [`Value`]: a binary64 that may lie between the scale's steps, where a host's
-//! automation leaves it (docs/DESIGN.md §7.4). Each that picks one of a few
+//! [`Value`]: any finite binary64, which may lie between the scale's steps,
+//! where a host's automation leaves it, or beyond its ends, where a user takes
+//! it (docs/MATH.md §0.5, docs/DESIGN.md §7.4). Each that picks one of a few
 //! things is an enumeration, and each that is on or off a `bool`. So no voice
-//! can hold a value out of its range, and every voice is one the engine can
-//! play: the codecs that make voices of bytes check each byte once, and nothing
-//! after them has anything to check (docs/DESIGN.md §2).
+//! can hold a number that is not finite or an enumeration's step that names
+//! nothing, and every voice is one the engine can play: the codecs that make
+//! voices of bytes check each byte once, and nothing after them has anything to
+//! check (docs/DESIGN.md §2).
 //!
 //! [`Parameter`] numbers the parameters as the DX7's single-voice dump and its
 //! parameter changes do, 0 to 155, and [`Voice::value`] and [`Voice::set_step`]
@@ -26,13 +28,17 @@
 
 use std::fmt;
 
-/// A number from 0 to `MAX` on the scale of a DX7 parameter.
+/// A number on the scale of a DX7 parameter, 0 to `MAX`, or beyond it: any
+/// finite binary64 (docs/MATH.md §0.5).
 ///
 /// The DX7 and its dumps know only the scale's steps, the integers 0 to `MAX`.
 /// A value may lie between them, and docs/MATH.md says what such a value means
-/// for each parameter, as for a level of an envelope (§3.1) or a rate (§4.1). A
-/// value is never NaN, never below 0 and never above `MAX`. Nor is it ever −0,
-/// which [`Value::new`] takes as 0, so that equal values have equal bits.
+/// for each parameter, as for a level of an envelope (§3.1) or a rate (§4.1).
+/// It may lie beyond the scale's ends as well, below 0 or above `MAX`, where
+/// the user takes it, whatever it means there; a dump holds it as the step
+/// that [`Value::step`] gives. A value is never NaN and never infinite. Nor is
+/// it ever −0, which [`Value::new`] takes as 0, so that equal values have
+/// equal bits.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Value<const MAX: u8>(f64);
 
@@ -40,11 +46,11 @@ impl<const MAX: u8> Value<MAX> {
     /// 0, the start of every scale.
     pub(crate) const ZERO: Self = Self(0.0);
 
-    /// The value, if it is a number from 0 to `MAX`.
+    /// The value, if it is a finite number.
     #[must_use]
     pub fn new(value: f64) -> Option<Self> {
         // Adding +0 takes −0 to +0 and leaves every other number as it is.
-        (0.0..=f64::from(MAX)).contains(&value).then_some(Self(value + 0.0))
+        value.is_finite().then_some(Self(value + 0.0))
     }
 
     /// The value of a step, if the step is no more than `MAX`.
@@ -58,14 +64,14 @@ impl<const MAX: u8> Value<MAX> {
         Self(f64::from(step.min(MAX)))
     }
 
-    /// A number taken into the scale: below 0, NaN and −0 as 0, above `MAX`
-    /// as `MAX`. The conversions between scales give numbers already in it,
-    /// and take it as a guard.
-    pub(crate) fn clamped(value: f64) -> Self {
-        if value > 0.0 {
-            Self(value.min(f64::from(MAX)))
-        } else {
+    /// A number taken as a value: NaN as 0, an infinity as the largest finite
+    /// binary64 of its sign, and −0 as 0. The conversions between scales give
+    /// finite numbers but where they overflow binary64, and take it as a guard.
+    pub(crate) fn finite(value: f64) -> Self {
+        if value.is_nan() {
             Self::ZERO
+        } else {
+            Self(value.clamp(-f64::MAX, f64::MAX) + 0.0)
         }
     }
 
@@ -75,15 +81,17 @@ impl<const MAX: u8> Value<MAX> {
         self.0
     }
 
-    /// The step the value rounds to by `rounding`, from 0 to `MAX`.
+    /// The step the value rounds to by `rounding`, from 0 to `MAX`: a value
+    /// beyond the scale as its nearer end.
     #[must_use]
     pub fn step(self, rounding: Rounding) -> u8 {
-        rounding.apply(self.0)
+        rounding.apply(self.0).min(MAX)
     }
 }
 
 /// How a value between steps becomes a step where only steps can be written,
-/// as in a dump: the setting `syx.export_rounding` (docs/MATH.md §17).
+/// as in a dump: the setting `syx.export_rounding` (docs/MATH.md §17). A value
+/// beyond the scale becomes its nearer end, whichever the rounding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Rounding {
     /// To the nearest step, and a value halfway between two steps to the even
@@ -96,14 +104,16 @@ pub enum Rounding {
 }
 
 impl Rounding {
-    /// The step that a value of [0, 255] rounds to.
+    /// The step from 0 to 255 that a value rounds to, a value below 0 taken
+    /// as 0 and one above 255 as 255.
     pub(crate) fn apply(self, value: f64) -> u8 {
-        small_integer(self.integer(value))
+        small_integer(self.integer(value.clamp(0.0, 255.0)))
     }
 
-    /// The step that a value of [0, 65535] rounds to.
+    /// The step from 0 to 65535 that a value rounds to, a value below 0 taken
+    /// as 0 and one above 65535 as 65535.
     pub(crate) fn apply_wide(self, value: f64) -> u16 {
-        wide_integer(self.integer(value))
+        wide_integer(self.integer(value.clamp(0.0, 65535.0)))
     }
 
     /// The integer that a value rounds to.
@@ -611,16 +621,18 @@ impl Voice {
     }
 
     /// The step of a parameter, as a dump or a parameter change carries it: its
-    /// value rounded by `rounding`.
+    /// value rounded by `rounding`, a value beyond the parameter's scale taken
+    /// as its nearer end.
     #[must_use]
     pub fn step(&self, parameter: Parameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        rounding.apply(self.value(parameter)).min(parameter.largest())
     }
 
-    /// Whether a parameter's value is a step, which a dump holds exactly.
+    /// Whether a parameter's value is a step, an integer on its scale, which a
+    /// dump holds exactly.
     #[must_use]
     pub fn is_step(&self, parameter: Parameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        is_step_of(self.value(parameter), parameter.largest())
     }
 
     /// Sets a parameter to a step. If the step is no more than the parameter's
@@ -654,8 +666,9 @@ impl Voice {
         step <= parameter.largest()
     }
 
-    /// Sets a parameter to a value, if it is one the parameter takes: a number
-    /// of its scale, which may lie between the steps, for a [`Value`]; the step
+    /// Sets a parameter to a value, if it is one the parameter takes: any finite
+    /// number for a [`Value`], on its scale, between its steps or beyond its
+    /// ends; the step
     /// of an enumeration, the algorithm's among them; and 0 or 1 for a switch.
     /// The result says whether it did. A value it does not take, and every
     /// value of a byte of the name and of the switches, which are set by other
@@ -687,10 +700,16 @@ impl Voice {
     }
 }
 
-/// Sets a value of a scale to a number, if the number is on the scale, and
-/// says whether it did.
+/// Sets a value of a scale to a number, if the number is finite, and says
+/// whether it did.
 fn set<const MAX: u8>(place: &mut Value<MAX>, value: f64) -> bool {
     Value::new(value).map(|value| *place = value).is_some()
+}
+
+/// Whether a number is a step of a scale from 0 to `largest`: an integer on
+/// the scale.
+pub(crate) fn is_step_of(value: f64, largest: u8) -> bool {
+    value.fract() == 0.0 && (0.0..=f64::from(largest)).contains(&value)
 }
 
 /// The step a number is, if it is an integer below `count`, −0 being 0.

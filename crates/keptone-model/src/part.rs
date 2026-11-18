@@ -11,8 +11,8 @@
 //!
 //! A [`Part`] holds what a part has of its own: whether it is on, the channels
 //! and the keys it takes, its note shift, its note limit and whether it
-//! alternates, its function data and its patch. Every value is a range type,
-//! as a voice's are ([`crate::voice`]), and [`crate::id`] numbers and names
+//! alternates, its function data and its patch. Every value is typed, as a
+//! voice's are ([`crate::voice`]), and [`crate::id`] numbers and names
 //! the parameters. What else a part is to have, its detune, volume and pan
 //! among it, comes with the milestones that write its laws (docs/DESIGN.md
 //! §16).
@@ -59,12 +59,13 @@ impl KeyFilter {
     }
 }
 
-/// A part's note shift, in semitones from −24 to +24, which adds to its
-/// patch's transpose (MATH §13.5) \[TX802-MANUAL\].
+/// A part's note shift, in semitones, which adds to its patch's transpose (MATH
+/// §13.5) \[TX802-MANUAL\]: on the TX802's scale of −24 to +24, or beyond it,
+/// any finite binary64 (docs/MATH.md §0.5).
 ///
-/// A shift may lie between the semitones, as a host's automation leaves it. It
-/// is never NaN, never beyond 24 either way, and never −0, which
-/// [`NoteShift::new`] takes as 0, so that equal shifts have equal bits.
+/// A shift may lie between the semitones, as a host's automation leaves it,
+/// and beyond the scale's ends. It is never NaN, never infinite and never −0,
+/// which [`NoteShift::new`] takes as 0, so that equal shifts have equal bits.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct NoteShift(f64);
 
@@ -72,11 +73,11 @@ impl NoteShift {
     /// No shift.
     pub const NONE: Self = Self(0.0);
 
-    /// The shift, if it is a number from −24 to +24.
+    /// The shift, if it is a finite number.
     #[must_use]
     pub fn new(semitones: f64) -> Option<Self> {
         // Adding +0 takes −0 to +0 and leaves every other number as it is.
-        (-24.0..=24.0).contains(&semitones).then_some(Self(semitones + 0.0))
+        semitones.is_finite().then_some(Self(semitones + 0.0))
     }
 
     /// The shift, in semitones.

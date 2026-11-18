@@ -122,10 +122,12 @@ fn a_part_as_it_starts() {
 
 #[test]
 fn note_shifts() {
-    for semitones in [-24.0, -0.5, 0.0, 12.25, 24.0] {
+    // On the TX802's scale of −24 to +24, between its steps and beyond its
+    // ends (docs/MATH.md §0.5).
+    for semitones in [-24.0, -0.5, 0.0, 12.25, 24.0, -24.5, 24.5, 1e300, -f64::MAX] {
         assert_eq!(NoteShift::new(semitones).map(NoteShift::get), Some(semitones));
     }
-    for semitones in [-24.5, 24.5, f64::NAN, f64::INFINITY] {
+    for semitones in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         assert_eq!(NoteShift::new(semitones), None);
     }
     let zero = NoteShift::new(-0.0).expect("a shift");

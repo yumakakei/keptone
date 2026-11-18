@@ -206,3 +206,27 @@ fn the_steps_a_parameter_change_carries() {
         assert!(FunctionStep::new(parameter, parameter.largest() + 1).is_none());
     }
 }
+
+#[test]
+fn values_beyond_their_scales() {
+    // A number beyond its scale is no step, and its step is the scale's
+    // nearer end (docs/MATH.md §0.5): the pitch bend's range, parameter 65,
+    // far above, and the portamento's time, 69, far below.
+    let mut function = Function::initial();
+    function.pitch_bend_range = Value::new(1e300).expect("a range");
+    function.portamento_time = Value::new(-f64::MAX).expect("a time");
+    for rounding in [Rounding::Nearest, Rounding::Floor] {
+        assert_eq!(
+            (
+                function.step(parameter(65), rounding),
+                function.step(parameter(69), rounding)
+            ),
+            (12, 0)
+        );
+    }
+    assert!(!function.is_step(parameter(65)) && !function.is_step(parameter(69)));
+    // An integer beyond the scale is no step either.
+    function.pitch_bend_range = Value::new(13.0).expect("a range");
+    assert!(!function.is_step(parameter(65)));
+    assert_eq!(function.step(parameter(65), Rounding::Floor), 12);
+}

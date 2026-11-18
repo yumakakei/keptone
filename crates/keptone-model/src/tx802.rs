@@ -8,7 +8,7 @@
 
 //! The TX802's own data: its performances, of eight tone generators each
 //! playing a voice of its own, and its system set-up, every parameter of which
-//! is a range type \[TX802-SYSEX\].
+//! is typed \[TX802-SYSEX\].
 //!
 //! The TX802 is the DX7II's tone generator in a rack, and its voices, their
 //! supplements, its micro tunings and its fractional scalings are the DX7II's
@@ -31,7 +31,7 @@
 use std::fmt;
 
 use crate::dx7ii::Index;
-use crate::voice::{Rounding, Value};
+use crate::voice::{self, Rounding, Value};
 
 /// Where a tone generator's sound goes, by its step: the TX802's two outputs,
 /// I and II.
@@ -168,16 +168,18 @@ impl Performance {
     }
 
     /// The step of a parameter, as a dump or a parameter change carries it: its
-    /// value rounded by `rounding`.
+    /// value rounded by `rounding`, a value beyond the parameter's scale taken
+    /// as its nearer end.
     #[must_use]
     pub fn step(&self, parameter: PerformanceParameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        rounding.apply(self.value(parameter)).min(parameter.largest())
     }
 
-    /// Whether a parameter's value is a step, which a dump holds exactly.
+    /// Whether a parameter's value is a step, an integer on its scale, which a
+    /// dump holds exactly.
     #[must_use]
     pub fn is_step(&self, parameter: PerformanceParameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        voice::is_step_of(self.value(parameter), parameter.largest())
     }
 
     /// Sets a parameter to a step. If the step is no more than the parameter's
@@ -444,16 +446,17 @@ impl SystemSetup {
     }
 
     /// The step of a parameter, as a dump carries it: its value rounded by
-    /// `rounding`.
+    /// `rounding`, a value beyond the parameter's scale taken as its nearer end.
     #[must_use]
     pub fn step(&self, parameter: SystemParameter, rounding: Rounding) -> u8 {
-        rounding.apply(self.value(parameter))
+        rounding.apply(self.value(parameter)).min(parameter.largest())
     }
 
-    /// Whether a parameter's value is a step, which a dump holds exactly.
+    /// Whether a parameter's value is a step, an integer on its scale, which a
+    /// dump holds exactly.
     #[must_use]
     pub fn is_step(&self, parameter: SystemParameter) -> bool {
-        self.value(parameter).fract() == 0.0
+        voice::is_step_of(self.value(parameter), parameter.largest())
     }
 
     /// Sets a parameter to a step. If the step is one the parameter takes, it
