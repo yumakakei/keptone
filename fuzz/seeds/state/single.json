@@ -38,7 +38,7 @@
     "resample.stopband_db": 150,
     "voice.count": 16,
     "voice.steal": "dx7",
-    "voice.retrigger": "same-voice",
+    "voice.retrigger": "new-voice",
     "engine.idle_s": 0.5,
     "part.count": 1,
     "part.function_source": "patch",

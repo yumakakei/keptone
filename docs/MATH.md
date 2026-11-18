@@ -160,7 +160,7 @@ computed for $`p_{\text{mod}}`$ as the functions of continuous time that §2.4 s
 
 The drift over a note is bounded by the rounding of the additions: under $`\sqrt{N}\cdot 2^{-53}`$ turns after $`N`$ samples, about $`10^{-11}`$ turns after an hour at 192 kHz. A compensated (two-sum) accumulator is a setting `osc.phase_accumulator = plain | compensated`, default `plain`.
 
-**Initial phase** (OSC KEY SYNC, parameter 136). On: $`\theta_k = 0`$ at key-on. Off: the phase continues from the voice slot's previous note (DX7). `osc.free_phase_start = continue | zero | random`; `random` draws from §6.3's generator.
+**Initial phase** (OSC KEY SYNC, parameter 136). On: $`\theta_k = 0`$ at key-on. Off: each operator's phase continues from the last note of the part's slot that the note takes (§13.2), run on since that note ended at the operator's last frequency, as the DX7's operators run theirs on, the key sync being the OPS's [AJXS-ROM `PATCH_ACTIVATE_ALG_MODE`]; a slot that has played no note starts at 0. `osc.free_phase_start = continue | zero | random`; `random` takes each operator's phase from the part's stream of phases (§6.3).
 
 ### 2.6 Key of the keyboard scalings
 
@@ -322,7 +322,7 @@ Waveform edges are not band-limited: the LFO is a control signal, a function of 
 
 ### 6.3 Random source
 
-SplitMix64, the generator KIRAL's tests use, seeded by `lfo.seed`. S&H values are uniform in [−1, 1].
+SplitMix64, the generator KIRAL's tests use, read at counters, so that a value needs no history: a stream seeded with $`x`$ gives as its value of index $`i \ge 1`$ SplitMix64's $`i`$-th output from the state $`x`$, its finaliser applied to $`x + i\gamma`$ modulo $`2^{64}`$, $`\gamma`$ = 0x9E3779B97F4A7C15. A part $`j`$, 0 for the first, has three streams, seeded with the outputs $`3j + 1`$, $`3j + 2`$ and $`3j + 3`$ of SplitMix64 from `lfo.seed`: the S&H values of the part's LFO, its $`c`$-th value since the engine's first sample, from 0, taking index $`c + 1`$; those of its voices' LFOs under `lfo.scope = voice`, the $`c`$-th value of the LFO of the part's $`m`$-th note, both from 0, taking index $`2^{32}m + c + 1`$; and the random phases of §2.5, operator $`k`$ of the part's $`m`$-th note taking index $`8m + k`$. A part's values thus depend on its own input alone, and the notes of a chord draw values of their own. Of an output $`x`$, an S&H value is $`2\lfloor x/2^{11}\rfloor \cdot 2^{-53} - 1`$, in $`[-1, 1)`$, and a phase $`\lfloor x/2^{11}\rfloor \cdot 2^{-53}`$, in $`[0, 1)`$.
 
 ### 6.4 Delay fade $`w(t)`$
 
@@ -636,14 +636,20 @@ $`\exp_2(z)`$: split $`z = k + r`$ with $`r \in [-1/2, 1/2]`$, evaluate a minima
 
 ### 13.1 Polyphony
 
-`voice.count`, default 16, from 1 up to what memory allows. Voices are allocated at activation and never on the audio thread. Every part takes its voices from this one pool (§13.5).
+`voice.count`, default 16, from 1 up to what memory allows. Voices are allocated at activation and never on the audio thread. Every part takes its voices from this one pool, into slots of its own (§13.2, §13.5).
 
 ### 13.2 Allocation and stealing
 
-`voice.steal = dx7 | oldest | quietest | released-first`.
+A part keeps `voice.count` slots of its own, in an order, and a note it takes goes into one of them; the pool of §13.1 only counts the voices that sound. A slot keeps what its last note leaves, its phases (§2.5), and a part's voices are summed in the order of its slots (§14). So, while the pool has a voice to spare, what a part plays depends on its own input alone.
 
-- Default `dx7`: [AJXS-ROM]'s algorithm, documented in `docs/VERIFICATION.md` before it is implemented.
-- Re-pressing a sounding key retriggers that voice: `voice.retrigger = same-voice | new-voice`.
+A note goes to the part's first slot, after the one it gave last, whose voice has ended (§13.3), while the pool has a voice to spare. Otherwise it takes a voice as `voice.steal = dx7 | oldest | quietest | released-first` says, of the part's own first and of every part's after:
+
+- `dx7`, the default: the first voice whose key is up, sounding or not, after the one last given, as the DX7 takes its voices; a voice held by the sustain pedal alone counts as one whose key is up, and where every key is held the note takes none [AJXS-ROM `VOICE_ADD_POLY`].
+- `oldest`: the voice whose note started first, the input's order breaking a tie.
+- `quietest`: the voice whose loudest carrier has the lowest level $`T`$ at the note's instant, with $`O`$ and without amplitude modulation (§4, §7.2), the oldest breaking a tie.
+- `released-first`: of the voices whose key is up, the one released first; where every key is held, the oldest.
+
+The parts that take a note (§13.5) are served in the order of their indices. A note is known by its part, its channel and its key before the note shift, or by its identifier where the host gives one, and its note-off goes to the voices that its note-on started. A voice taken while it sounds starts its envelopes from where they are (§4.5). A key pressed again while its voice sounds is as `voice.retrigger = same-voice | new-voice` says: with `new-voice`, the default, the note takes a voice as above, and the voice already there, released if its key was still held, goes on to its end, as on the DX7 [AJXS-ROM `VOICE_ADD_POLY`]; with `same-voice`, the note restarts that voice.
 
 ### 13.3 End of a voice
 
@@ -663,12 +669,12 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 
 - **The notes a part takes.** A note event goes to every part that takes it: the part receives the event's channel, or every channel; the key lies between the part's lowest key and its highest, both included; and the part's key filter, every key, the odd ones or the even ones [DX7II-MANUAL], lets it through. The part plays the key shifted by its note shift, −24 to +24, which adds to the patch's transpose (§2.1) [TX802-MANUAL]. A part that is off takes no note, as a tone generator of the TX802 switched off takes none [TX802-MANUAL]; the first part is on by default, and every other off. The DX7II's split is two parts on one channel whose ranges meet at the split point, and its dual two parts on every key.
 - **Alternate groups.** The parts of an alternate group, adjacent and on one channel, take its notes in turn, each new note the next part's, within the range of the group's first part [TX802-MANUAL].
-- **Voices.** Every part takes its voices from the one pool of §13.1. A part's note limit, where it has one (by default it has none), caps how many of them it holds; a note beyond it takes the voice of the part's own that §13.2 picks. A note that several parts take starts a voice in each.
+- **Voices.** Every part takes its voices from the one pool of §13.1, into slots of its own (§13.2). A part's note limit, where it has one (by default it has none), caps how many of them it holds; a note beyond it takes the voice of the part's own that §13.2 picks. A note that several parts take starts a voice in each.
 - **What a part's voices share**: the LFO (§6.5), the portamento and the mono or poly state (§7.3), and the controllers (§7.1). Parts on one channel hear the same controller messages.
-- **The function data and the supplement.** A supplement holds for its voice what the function data holds for the instrument: the poly or mono, the pitch bend, the portamento and the controllers [DX7II-MANUAL]. Where a part's patch has one, the part plays the supplement's, as the DX7II does; with `part.function_source = part`, it plays its own function data. `part.function_source = patch | part`, default `patch`.
+- **The function data and the supplement.** A supplement holds for its voice what the function data holds for the instrument: the poly or mono, the pitch bend, the portamento and the controllers [DX7II-MANUAL]. Where a part's patch has one, the part plays the supplement's, as the DX7II does; with `part.function_source = part`, it plays its own function data. `part.function_source = patch | part`, default `patch`. Until the supplement's laws are written (M9a, DESIGN §16), a part plays its own function data, whatever `part.function_source` says.
 - **Output.** A part sums its voices as §14 sums them, scales the sum by its volume, 1 by default, and its pan, the centre by default, places it in the output (§14).
 - **What a part starts with.** Its patch is the DX7's VOICE INIT, the voice its firmware 1.8 sets up for one to be made [AJXS-ROM]: every operator's envelope at rates 99, 99, 99, 99 and levels 99, 99, 99, 0, its break point, depths, curves, rate scaling, sensitivities and fine frequency 0, its detune 7, which is none, its coarse frequency 1 in the ratio mode, and its output level 0 but OP1's, 99; the pitch envelope at rates 99 and levels 50; algorithm 1, no feedback, and the oscillators' key sync on; the LFO at speed 35, with no delay and no depths, a triangle, its key sync on; a pitch sensitivity of 3, and the transpose at 24, which is none; the name INIT VOICE; and no supplement and no fractional scaling. Its function data is Keptone's own, the DX7 having none but what its battery keeps, which its firmware checks at power-up and does not set [AJXS-ROM]: poly, a pitch bend of 2 semitones without steps, the portamento retaining with no time and no glissando, and the modulation wheel at its range of 99 to the pitch, no other controller assigned. It receives every channel, takes every key without a filter, a note shift or a note limit, and alternates with none.
-- The rest of a part's laws, its detune and pan, EG forced damp, and what a supplement, unison and micro tunings do, are written here as Keptone's own, with the milestones that give them sound (DESIGN §16). Until then a part plays its patch as a DX7 voice, at the centre.
+- The rest of a part's laws, its detune, volume and pan, its alternate group, EG forced damp, and what a supplement, unison and micro tunings do, are written here as Keptone's own, with the milestones that give them sound (DESIGN §16). Until then a part plays its patch as a DX7 voice, at a volume of 1 and at the centre, and alternates with none.
 
 ## 14. Output (`keptone-engine::mix`)
 
@@ -678,7 +684,7 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 
 - `output.gain` defaults to 0.5, which puts one full-scale carrier at 0 dBFS.
 - `output.carrier_normalization = none | count | sqrt-count`, default `none` (DX7).
-- The sum above is one part's, and mono (§13.5). The output is one port. With `output.channels = stereo`, the default, it has two channels, and each part's sum, scaled by its volume, goes to both, placed by the part's pan: at the centre, its default, the same on both. With `mono` it has one channel, which takes every part's sum, scaled by its volume, without its pan. The port adds the parts in the order of their indices. The pan's law and per-operator pan are later settings; outputs beyond these are the host's, another instance on another track (DESIGN §1).
+- The sum above is one part's, and mono (§13.5), its voices taken in the order of the part's slots (§13.2). The output is one port. With `output.channels = stereo`, the default, it has two channels, and each part's sum, scaled by its volume, goes to both, placed by the part's pan: at the centre, its default, the same on both. With `mono` it has one channel, which takes every part's sum, scaled by its volume, without its pan. The port adds the parts in the order of their indices. The pan's law and per-operator pan are later settings; outputs beyond these are the host's, another instance on another track (DESIGN §1).
 - When the host offers 64-bit ports, the output stays binary64. Otherwise it is rounded to nearest binary32 with no dither: the signal's own floor is far below binary32's resolution.
 - There is no limiter or soft clip; that is the host's business.
 
@@ -768,7 +774,7 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `resample.stopband_db` | 150 | > 0 | 11.2 |
 | `voice.count` | 16 | ≥ 1 | 13.1 |
 | `voice.steal` | dx7 | dx7 / oldest / quietest / released-first | 13.2 |
-| `voice.retrigger` | same-voice | same-voice / new-voice | 13.2 |
+| `voice.retrigger` | new-voice | same-voice / new-voice | 13.2 |
 | `engine.idle_s` | 0.5 | ≥ 0 | 13.4 |
 | `part.count` | 2 | ≥ 1 | 13.5 |
 | `part.function_source` | patch | patch / part | 13.5 |

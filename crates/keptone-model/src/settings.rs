@@ -205,7 +205,13 @@ pub const SPECS: [Spec; COUNT] = [
     number("resample.stopband_db", Bounds::Positive, 150.0),
     count("voice.count", 1, 16),
     choice("voice.steal", &["dx7", "oldest", "quietest", "released-first"]),
-    choice("voice.retrigger", &["same-voice", "new-voice"]),
+    // new-voice: a key pressed again takes a new voice, as the DX7's firmware
+    // gives it one (MATH §13.2).
+    Spec {
+        name: "voice.retrigger",
+        kind: Kind::Choice(&["same-voice", "new-voice"]),
+        default: Value::Choice(1),
+    },
     number("engine.idle_s", Bounds::NonNegative, 0.5),
     count("part.count", 1, 2),
     choice("part.function_source", &["patch", "part"]),
