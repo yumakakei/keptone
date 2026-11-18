@@ -108,7 +108,7 @@ By default `tuning` is 12-TET with A4 = `tuning.a4_hz` = 440 Hz: $`p = \log_2\,4
 
 with $`P_j`$ the scale's $`j`$-th pitch in octaves, $`P_0 = 0`$ and $`P_N`$ its last, its period, $`N`$ its count; $`m`$ the mapping's size, $`c`$ its middle key, $`e_j`$ its entries and $`d`$ its formal octave, a degree, $`N`$ where the mapping gives 0; and $`g(k) = k - c`$ for a linear mapping, of size 0. A key whose entry is unmapped takes no note. A key outside the first and the last takes 12-TET's pitch, and a scale given without a mapping is mapped linearly on every key, degree 0 at key 60 and key 69 at `tuning.a4_hz`. Under MTS-ESP a key takes the pitch that the master gives it, and beyond keys 0 and 127 the pitch goes on from theirs in 12-TET's semitones. Between two keys, as a bend or a glide under `tuning.modulation = keys` makes a note value, the pitch is interpolated linearly between those of the nearest keys on either side that have one.
 
-A tuning is a function from real note values to pitch. `tuning.modulation` says where the bend, the portamento and the per-note pitch (DESIGN §7.3) move a note, each a number $`k_{\text{bend}}`$, $`k_{\text{porta}}`$ and $`k_{\text{note}}`$ of semitones or keys. With `pitch`, the default, they are intervals added to its pitch, $`p_{\text{bend}}`$, $`p_{\text{porta}}`$ and $`p_{\text{note}}`$ of §2.4, each its number over 12 in octaves, so that a bend's range is in semitones under any tuning and a glide is linear in pitch between two notes' pitches, as the DX7 adds its bend apart from the key's pitch [AJXS-ROM]. With `keys` they are keys added to the note before the tuning, $`p_{\text{key}} = \text{tuning}(k' + k_{\text{bend}} + k_{\text{porta}} + k_{\text{note}})`$, and their intervals in §2.4 are 0, so that a bend's range is in the tuning's keys and a glide moves through the note values between two keys. Under 12-TET the two are the same.
+A tuning is a function from real note values to pitch. `tuning.modulation` says where the bend, the portamento and the per-note pitch (DESIGN §7.3) move a note, each a number $`k_{\text{bend}}`$, $`k_{\text{porta}}`$ and $`k_{\text{note}}`$ of semitones or keys. With `pitch`, the default, they are intervals added to its pitch, $`p_{\text{bend}}`$, $`p_{\text{porta}}`$ and $`p_{\text{note}}`$ of §2.4, each its number over 12 in octaves, so that a bend's range is in semitones under any tuning and a glide runs in pitch between two notes' pitches (§7.3), as the DX7 adds its bend apart from the key's pitch [AJXS-ROM]. With `keys` they are keys added to the note before the tuning, $`p_{\text{key}} = \text{tuning}(k' + k_{\text{bend}} + k_{\text{porta}} + k_{\text{note}})`$, and their intervals in §2.4 are 0, so that a bend's range is in the tuning's keys and a glide moves through the note values between two keys. Under 12-TET the two are the same.
 
 A shift is in keys. With `tuning.transpose_octave = keys`, the default, $`\tau(\sigma) = \sigma`$, as on the DX7. With `period`, each whole octave of a shift, twelve keys, moves by the tuning's period instead, so that an octave of transposition spans the tuning's period, as it does under 12-TET:
 
@@ -320,7 +320,7 @@ P_{\text{EG}} \in [-4, +4]\ \text{octaves},\qquad \text{level}(L) = \text{pt}[L]
 - Linear in pitch, in both directions.
 - Starts at L4 at every key-on of a voice, but for a mono part's legato key-on, which another held key precedes; moves to L1, L2 and L3, holds at L3 while the key or the sustain pedal holds the note, and goes to L4 at key-off [AJXS-ROM `VOICE_ADD_POLY`, `VOICE_ADD_MONO`, `PITCH_EG_PROCESS`]. A segment whose target is the level it starts at ends at once: the pitch envelope has no waits (§4.4 is the operators').
 - Closed form per segment, like §4.
-- Fractional L and R interpolate the tables.
+- Fractional L and R interpolate the tables. Beyond their scales pt goes on along its end steps, and pr along its last step above 99 and, below 0, halving at each step, as the LFO's speed does (§6.1), so that no speed falls to 0 or below (§0.5).
 
 ## 6. LFO (`keptone-engine::lfo`)
 
@@ -396,9 +396,31 @@ so that, with $`A_{\mathrm{max}}`$ at its default and $`\alpha_{\text{AMS}}`$ at
 
 ### 7.3 Portamento and voice modes
 
-- Function parameters: mono/poly (64), portamento mode (67: retain/follow; fingered in mono), glissando (68), time (69) [DEXED-SYSEX].
-- Glide speed is $`v(\text{TIME})`$ semitones per second, linear in pitch, or keys per second, linear in the note value, under `tuning.modulation = keys` (§2.1). MSFA fits $`2100\cdot 2^{-0.062c}`$ over a 0–127 control $`c`$ (glissando $`1300\cdot2^{-0.062c}`$). Map TIME 0–99 onto it with $`c = 127\,\text{TIME}/99`$ [MSFA `porta.cpp`; verify against AJXS-ROM].
-- Glissando quantises the glide to the tuning's notes.
+The function parameters are mono or poly (64), the portamento mode (67), 0 for retain, which a mono part takes as fingered, and 1 for follow, full time in mono, the glissando (68) and the time (69) [DEXED-SYSEX]. The portamento's foot switch, MIDI's controller 65, is off until it is pressed, as on the DX7 with its pedal up [AJXS-ROM `MAIN_PORTA_SUS_PDL_STATE_UPDATE`].
+
+**The glide.** At every second interrupt of its timer, as it moves the pitch envelope (§5), the DX7's firmware moves each voice's pitch toward its target by $`\text{pr}[99 - \text{TIME}]/4096`$ octave times $`1 + \lfloor 4d\rfloor`$, $`d`$ the distance left in octaves, and with glissando by three times that step without the factor [AJXS-ROM `PORTA_COMPUTE_RATE_VALUE`, `PORTA_PROCESS`]. Keptone moves it continuously, by the law that the bands of that factor step (§15):
+
+```math
+\frac{\mathrm{d}d}{\mathrm{d}t} = -\kappa\,(1 + 4d),\qquad \kappa = \text{pr}[99 - \text{TIME}]/22.0\ \text{octaves per second}
+```
+
+so that $`d(t) = ((1 + 4d_0)\,\mathrm{e}^{-4\kappa t} - 1)/4`$: the glide slows toward its target and reaches it at $`t^{\ast} = \ln(1 + 4d_0)/(4\kappa)`$, computed as $`(\ln\,2/(4\kappa))\,\mathrm{log2p1}(4d_0)`$ (§12.4). Under `tuning.modulation = keys` it moves the note value by the same law, 12 keys to an octave (§2.1).
+
+- With glissando, the glide runs in keys at the constant speed $`36\,\text{pr}[99 - \text{TIME}]/22.0`$ keys per second, and the voice sounds the key that it has reached, its start moved by every whole key that the glide has passed, at that key's pitch in the tuning (§2.1), as the firmware steps its pitch a semitone each time the glide is a semitone past it [AJXS-ROM `PORTA_PROCESS`].
+- pr is §5's table [AJXS-ROM `TABLE_PITCH_EG_RATE`], between and beyond its steps as §5 takes it. TIME 0 makes no glide, as the firmware takes its fastest rate [AJXS-ROM `VOICE_ADD_POLY`]; between 0 and 1 the glide's time scale $`1/\kappa`$ falls linearly to 0, and at or below 0 there is no glide.
+- A change of TIME, of the glissando or of a target re-anchors a glide at its instant, from the pitch there (§0.3). The foot switch acts at the key events below alone: a glide that has begun goes on.
+
+**Poly.** A key-on glides where the foot switch is on and TIME is not 0 [AJXS-ROM `VOICE_ADD_POLY`]:
+
+- With retain, the new note glides from the pitch of the part's previous key-on, and the voices that the sustain pedal holds keep their pitches.
+- With follow, every voice of the part whose key is up, whether the pedal holds it, it releases or it is silent, glides to the new note's pitch, and the new note glides from where its voice's glide has left it.
+- Without a glide, the new note starts at its own pitch.
+
+**Mono.** A mono part plays in one voice, its first slot (§13.2), and holds every key it is given, of every channel, where the DX7 holds 16 [AJXS-ROM `VOICE_ADD_MONO`]:
+
+- A key pressed with none held sounds, and starts the voice's envelopes (§4.5, §5, §6.5). A second key sounds and sets the legato's direction, up where it lies above the first, and a further key sounds where it lies beyond the sounding one in that direction. When a key is released and others are held, the highest of them sounds where the direction is up, and the lowest where it is down. The last key's release, or the sustain pedal's after it, releases the voice [AJXS-ROM `VOICE_ADD_MONO`, `VOICE_REMOVE`].
+- A change of the sounding key while keys are held sends no key event: the envelopes go on (§4.5).
+- With fingered, such a change glides, whatever the foot switch, and a key pressed with none held does not; with full time, every change glides, the first key's from the voice's last pitch, while the foot switch is on [AJXS-ROM `VOICE_ADD_MONO`, `VOICE_REMOVE`].
 
 ### 7.4 Performances of the DX1 and the TX7
 
@@ -749,7 +771,8 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The 8 bits in which the firmware combines the amplitude modulation and the EG bias, and the steps of the table of its ROM that takes their logarithm [AJXS-ROM `MOD_AMP_LOAD_TO_EGS`].
 - The 8 bits in which the firmware multiplies the LFO's depth, its wave and its sensitivity, with their floors and a wave from −128 to 127 [AJXS-ROM `MOD_PITCH_LOAD_TO_EGS`].
 - The LFO's steps at the firmware's 372 Hz, its 16-bit phase and 8-bit wave with the 64 steps of its sine's quarter, the 8-bit linear congruential generator of its sample and hold, and the 8-bit fade of its delay, which stops at 255/256 [AJXS-ROM `LFO_GET_AMPLITUDE`].
-- The pitch envelope's steps at the firmware's 188 Hz, and the runs of it and of the portamento that the firmware skips while MIDI data wait to be read [AJXS-ROM `HANDLER_OCF`].
+- The pitch envelope's steps at the firmware's 186 Hz, and the runs of it and of the portamento that the firmware skips while MIDI data wait to be read [AJXS-ROM `HANDLER_OCF`].
+- The portamento's steps at 186 Hz, which take half of the voices at each interrupt, its speed in bands of a quarter octave of its distance, rounded one way for a glide up and another for one down, and the mono part's 16 keys [AJXS-ROM `PORTA_PROCESS`, `VOICE_ADD_MONO`].
 - The DX7's 32 levels of velocity [VDX7 FAQ].
 - The attack's integer multiplier, which changes its speed in bands of 256 steps [LEVIEN-EG].
 - The floor at which the DX7 holds an operator's level, 90 dB below full scale, until its voice is stolen: the level falls on below it, and the envelope keeps the floor's timing (§4.6).
