@@ -114,7 +114,7 @@ assets/themes/      the built-in themes (*.keptone-theme), embedded in keptone-u
 | keptone-sys | OS calls the others need, declared by hand (no `libc`, `windows-sys` or `objc2` crates), as in kiral-sys. | yes | std |
 | keptone-tools | Offline renderer (WAV/f64), reference renderer, alias metric, `.syx` tools, benchmarks, regression replay. | forbid | engine, model |
 
-The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbid`, `missing_docs`, `missing_debug_implementations` and `unused_qualifications` denied, clippy `pedantic` denied, and `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`, `cast_lossless` and `as_conversions` denied. A crate that needs no `unsafe` forbids it in its root.
+The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbid`, `missing_docs`, `missing_debug_implementations` and `unused_qualifications` denied, clippy `pedantic` denied, and `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`, `cast_lossless` and `as_conversions` denied. A crate that needs no `unsafe` forbids it in its root. In keptone-engine and keptone-tools, clippy's `disallowed-methods` refuses f64's elementary functions (`ln`, `log2`, `exp`, `exp2`, `powf`, `powi`, `sin`, `cos` and the rest), which call the system's libm: they take keptone-math's (MATH §12).
 
 ## 5. Threads and data flow
 

@@ -38,7 +38,7 @@ Keptone computes an **ideal DX7**: the continuous-time signal that the DX7's par
 - Every signal and control value is binary64. No binary32 anywhere in the audio path. Integers are used only for counts, indices, sample positions and identifiers. The one conversion out of binary64 is to the host's buffer type when the host asks for 32-bit audio (§14).
 - Results are guaranteed at two levels:
   - **Accuracy contracts (kernels).** Every kernel (a function of §9, §10 or §12; an operator update; a filter) has a stated error bound against a high-precision reference: so many ulp, or an absolute bound derived from rounding analysis. The portable form and every vector form must each meet that bound. They are **not** required to agree with one another bit for bit. A vector form may reassociate sums, use Estrin's scheme instead of Horner's, fuse or split multiply–adds, or use another polynomial, as long as it meets the contract. This keeps optimisation free.
-  - **Reproducibility (the engine).** With the same build, the same kernel selection (§17 `engine.kernels`, and the processor level in effect), the same settings and the same input, the output is bit-identical. That holds whatever the block splits (§0.3) and the thread timing. Across processors or builds the output may differ in its last bits. `engine.kernels = portable` gives the same output on every processor with FMA, because the portable form is plain Rust and Rust never contracts or reassociates floating-point operations on its own.
+  - **Reproducibility (the engine).** With the same build, the same kernel selection (§17 `engine.kernels`, and the processor level in effect), the same settings and the same input, the output is bit-identical. That holds whatever the block splits (§0.3) and the thread timing. Across processors or builds the output may differ in its last bits. `engine.kernels = portable` gives the same output on every processor with FMA, because the portable form is plain Rust, which never contracts or reassociates floating-point operations on its own, and computes every elementary function with keptone-math's, never with the system's libm (§12).
 - Bit identity across forms would require the *same sequence of rounded operations*: the same association, the same fusion decisions (`a*b + c` rounds twice, `fma(a,b,c)` once), the same polynomials, and the same reduction order across SIMD lanes. Moving one operation breaks it. FMA in hardware is necessary for that, not sufficient. That is why it is not required.
 - Where the feedback operator is chaotic (β > 1, §9.3), any difference in the last bit grows exponentially. Two correct forms then produce different waveforms with the same statistics. The tests compare spectra and statistics there, not samples (§16).
 - The portable form uses `f64::mul_add` where an FMA improves accuracy. The supported x86-64 baseline (v3) and every AArch64 have FMA in hardware (DESIGN §10.1), so this is fast everywhere.
@@ -156,7 +156,7 @@ Each operator keeps $`\theta_k \in [0, 1)`$ in binary64. Per engine sample: $`\t
 \Delta = \int_{t_{n-1}}^{t_n} f_k\,\mathrm{d}\tau
 ```
 
-computed for $`p_{\text{mod}}`$ as the functions of continuous time that §2.4 sums, between the samples too. The integral is split at every instant inside the sample where one of them has a corner or a jump: a corner of the pitch envelope, a corner or an edge of the LFO's wave (§6.2), the end of a stage of the LFO's delay (§6.4) and the end of a glide. On a piece where the pitch is linear in time, as the pitch envelope makes it (§5), the integral of $`2^{p}`$ is in closed form; on any other piece a 3-point Gauss–Legendre rule is used, whose error is far below binary64's resolution for audio-rate pitch changes (§16). A signal that jumps takes its new value from the jump's instant on. The phase is also evaluated at **fractional** times $`t_n - s`$ for delay alignment (§10.5), from the same closed forms.
+computed for $`p_{\text{mod}}`$ as the functions of continuous time that §2.4 sums, between the samples too. The integral is split at every instant inside the sample where one of them has a corner or a jump: a corner of the pitch envelope, a corner or an edge of the LFO's wave (§6.2), the end of a stage of the LFO's delay (§6.4) and the end of a glide. On a piece where the pitch is linear in time, as the pitch envelope makes it (§5), the integral of $`2^{p}`$ is in closed form, $`\int_0^{h} 2^{a + b\tau}\,\mathrm{d}\tau = 2^{a}h\cdot E(bh)`$ for a piece of length $`h`$ that starts at the pitch $`a`$ with the slope $`b`$, where $`E(z) = \mathrm{exp2m1}(z)/(z\ln\,2)`$ and $`E(0) = 1`$ (§12.5), which keeps its accuracy however slowly the pitch moves; on any other piece a 3-point Gauss–Legendre rule is used, whose error is far below binary64's resolution for audio-rate pitch changes (§16). A signal that jumps takes its new value from the jump's instant on. The phase is also evaluated at **fractional** times $`t_n - s`$ for delay alignment (§10.5), from the same closed forms.
 
 The drift over a note is bounded by the rounding of the additions: under $`\sqrt{N}\cdot 2^{-53}`$ turns after $`N`$ samples, about $`10^{-11}`$ turns after an hour at 192 kHz. A compensated (two-sum) accumulator is a setting `osc.phase_accumulator = plain | compensated`, default `plain`.
 
@@ -266,6 +266,8 @@ The segment reaches its target at
 ```math
 t^{\ast} = \frac{256}{\rho}\,\ln\,\frac{T^{\ast} - T_0}{T^{\ast} - T_{\text{target}}}
 ```
+
+It is computed as $`(256\ln\,2/\rho)\,\mathrm{log2p1}((T_{\text{target}} - T_0)/(T^{\ast} - T_{\text{target}}))`$ (§12.4), which keeps its accuracy where the start is near the target.
 
 - The hardware uses the integer multiplier $`2 + \lfloor (T_{\text{full}} - T)/256\rfloor`$ [LEVIEN-EG], which changes the attack's speed in bands of 256 steps; the law above is the continuous one that the bands step (§15).
 - Targets stay below $`T^{\ast}`$, because the largest reachable $`T`$ is $`4032 + 32\cdot127 + 224 - 4256 = 4064 \lt 4352`$.
@@ -486,19 +488,21 @@ This is the operator's exact Fourier series. Truncating it at the Nyquist freque
     The cost grows without bound as β → 1. Above `feedback.series_beta_max` (default **0.8**, revised from 0.98 by this table), use the point solution and leave the remaining alias to the oversampling of §11. Measure the choice in M4.
 - β changes with $`g(t)`$, so coefficients are evaluated per sample from the table. The pitch can change too. The series is exact for uniform Φ and quasi-static otherwise; its error under modulation is measured against the reference renderer (§16).
 
-### 9.6 β ≥ 1: `feedback.model`
+### 9.6 `feedback.model`
+
+Where β ≥ 1 no delay-free ideal exists (§9.3), and `feedback.model` says what the operator does. `dx7-discrete` and `clamp` act at every β, and `relaxation` lets its lag grow from below β = 1, so that nothing switches where β crosses 1.
 
 | Model | Definition | Rate-independent |
 | --- | --- | --- |
-| `relaxation` (default) | First-order lag in continuous time: $`\tau\dot Y = -Y + g\,\sin(2\pi(\theta + \kappa Y))`$, $`y = Y`$. `feedback.tau_s` defaults to 1.5/49096 s, the hardware loop's effective delay (the mean of samples n−1 and n−2). Integrate per engine sample with the trapezoidal rule, solving its implicit equation by safeguarded Newton. For β < 1 and τ → 0 it tends to §9.2. | in the limit $`f_{\mathrm{e}} \gg 1/\tau`$; the tests measure convergence |
-| `dx7-discrete` | §9.1 at the engine rate | **no**: the timbre changes with $`f_{\mathrm{e}}`$ (documented) |
-| `clamp` | §9.4 with β replaced by min(β, `feedback.beta_clamp`), default 0.999 | yes |
+| `relaxation` (default) | A first-order lag in continuous time of the fed-back signal alone: $`\tau\dot Y = -Y + y`$, the operator's output $`y = g\,\sin(2\pi(\theta + \kappa Y))`$ taking the lagged $`Y`$ in place of itself. `feedback.tau_s` defaults to 1.5/49096 s, the hardware loop's effective delay (the mean of samples n−1 and n−2). The lag grows with β: τ is 0 up to β = `feedback.relaxation_onset`, default 0.9, where the operator is §9.4's solution, and rises linearly to `feedback.tau_s` at β = 1 and on, so that the output moves into the lag and out of it continuously. Each engine sample is integrated by the trapezoidal rule in equal substeps, the fewest for which a substep is shorter than $`2\tau/(\beta - 1)`$ at the sample's largest β, so that each substep's implicit equation has one root, and at most `feedback.max_substeps`, default 64, beyond which Newton from the previous value picks the root. θ and g are taken at the substeps' instants from their closed forms, and each equation is solved by safeguarded Newton, stopped as §9.4 stops. A new voice starts with Y = 0. | to within the integration's error, which §16 measures |
+| `dx7-discrete` | §9.1 at the engine rate, at every β | **no**: the timbre changes with $`f_{\mathrm{e}}`$ (documented) |
+| `clamp` | §9.4 with β replaced by min(β, `feedback.beta_clamp`), default 0.999, at every β | yes |
 
 The default is provisional. Decide it by listening tests with patches that use FB 6–7 (DESIGN §15).
 
 ### 9.7 Multi-operator loops (algorithms 4 and 6)
 
-The loop's ideal is the delay-free system $`y = G(y)`$, with $`G`$ the composed operators. Solve it by vector Newton (2–3 unknowns, analytic Jacobian), safeguarded by damping. It is well posed when the loop gain $`\prod_j 2\pi\kappa_j g_j \left|\cos(\cdot)\right| \lt 1`$. Otherwise apply `feedback.model` to the loop as a whole. The series form is not used for loops.
+The loop's ideal is the delay-free system $`y = G(y)`$, with $`G`$ the composed operators. Its gain is bounded by $`B = \prod_j 2\pi\kappa_j g_j`$ over the loop's operators, $`\kappa_j`$ the feedback edge's κ for the operator it enters and 1 for the others. While $`B \lt 1`$ the system is well posed: it contracts in the output $`y_{\mathrm{b}}`$ that the feedback edge takes, on $`[-g_{\mathrm{b}}, g_{\mathrm{b}}]`$, and is solved as one equation in $`y_{\mathrm{b}}`$ by Newton inside that bracket, bisecting where a step leaves it, from the previous sample's value, stopped as §9.4 stops and after `feedback.max_iterations`. Otherwise `feedback.model` acts on the feedback edge alone, B in place of β: `relaxation` lags the fed-back $`y_{\mathrm{b}}`$ as §9.6 lags y, `dx7-discrete` feeds back §9.1's mean of $`y_{\mathrm{b}}`$'s two previous samples, the loop's operators evaluated from the one the feedback enters to the one it leaves, and `clamp` scales κ so that B is at most `feedback.beta_clamp`. The series form is not used for loops.
 
 ## 10. Antialiasing of phase modulation (`keptone-math::adaa`, `keptone-engine::graph`)
 
@@ -608,7 +612,7 @@ Estimate each carrier's bandwidth $`B = 2(\Delta f + f_{\text{mod}})`$ [CARSON],
 
 ## 12. Elementary functions (`keptone-math`)
 
-All are portable Rust (the reference) with optional vector forms (DESIGN §10). Their tests compare against [CORE-MATH]'s correctly rounded functions, and sinc and sinc′, which CORE-MATH does not have, against references computed with mpmath (§16).
+All are portable Rust (the reference) with optional vector forms (DESIGN §10). The engine and the tools compute every elementary function with these, never with the system's libm, whose results differ between systems and versions (§0.2). Their tests compare against [CORE-MATH]'s correctly rounded functions, and sinc and sinc′, which CORE-MATH does not have, against references computed with mpmath (§16).
 
 ### 12.1 sin and cos of turns
 
@@ -631,6 +635,14 @@ Targets: sinc ≤ 2 ulp; sinc′ ≤ 2 ulp for $`\left|u\right| \lt 1/2`$, and w
 ### 12.3 Exponentials
 
 $`\exp_2(z)`$: split $`z = k + r`$ with $`r \in [-1/2, 1/2]`$, evaluate a minimax polynomial for $`2^r`$, and scale exactly by building $`2^k`$ from exponent bits. Gains are bounded away from subnormals (§13.4). $`\mathrm{e}^{-x} = \exp_2(-x\,\log_2\,\mathrm{e})`$. Target ≤ 1 ulp against `cr_exp2`.
+
+### 12.4 Logarithms
+
+$`\log_2\,x`$: split $`x = 2^{k} m`$ from the exponent bits, exactly, with $`m \in [1/\sqrt{2}, \sqrt{2})`$, and evaluate $`\log_2\,m`$ from $`t = m - 1`$, which Sterbenz's lemma makes exact, by a minimax approximation of $`\log_2(1 + t)/t`$ designed with [SOLLYA], with certified bounds in the comments, so that the result keeps its relative accuracy where x is near 1. $`\mathrm{log2p1}(x) = \log_2(1 + x)`$ takes x itself where it is small, so that a ratio near 1, as §4.3's, written as 1 plus its small part, loses nothing to its rounding. $`\ln\,x = \log_2\,x\cdot\ln\,2`$. Targets: ≤ 1 ulp against `cr_log2` and `cr_log2p1`.
+
+### 12.5 exp2m1
+
+$`\mathrm{exp2m1}(z) = 2^{z} - 1`$, computed without the cancellation of $`\exp_2(z) - 1`$ near 0, from a minimax approximation of $`(2^{z} - 1)/z`$ there, designed with [SOLLYA], and with extra precision where the subtraction would round the result more than once. It gives §2.5's closed form. Target ≤ 1 ulp against `cr_exp2m1`.
 
 ## 13. Voices (`keptone-engine::voice`)
 
@@ -714,12 +726,15 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 
 | What | Check | Tolerance |
 | --- | --- | --- |
-| sin2pi, cos2pi, exp2 | against CORE-MATH, ≥ 10⁸ random inputs and special points | ≤ 1 ulp |
+| sin2pi, cos2pi, exp2, log2, log2p1, exp2m1 | against CORE-MATH, ≥ 10⁸ random inputs and special points | ≤ 1 ulp |
 | sinc, sinc' | against MPFR-precision references (`scripts/` with mpmath) | ≤ 2 ulp; sinc' for $`\left\|u\right\| \ge 1/2`$: ≤ $`9 \cdot 2^{-53}`$ absolute |
 | ADAA-1, ADAA-2 | against mpmath references of the closed forms and of the divided difference, the inputs exact (`scripts/adaa_references.py`): special points (still, steady and reversing phases, $`h`$ on either side of $`\tau_2`$) and random inputs; ADAA-2 at $`\tau_2 = 2^{-12}, 2^{-10}, 2^{-8}`$; three equal points give $`\sin\,2\pi x`$ | ≤ $`9 \cdot 2^{-53}`$ absolute; ≤ $`\mathrm{max}(4.81u/\tau_2 + 4.35u,\ 0.271\tau_2^4 + 14u)`$ absolute |
 | Kepler solver | residual over a β × Φ grid (β ∈ [0, 0.999], 10⁶ points), and iteration counts; the same nearer the cusp, β up to 1 − 2⁻⁵² and Φ down to 10⁻³⁰⁰, the residual in double-double | $`\left\| h(\Theta) - \Phi\right\| \le 4u\,\mathrm{max}(1,\left\|\Phi\right\|)`$; ≤ 8 iterations |
 | Kapteyn coefficients | against mpmath for n ≤ 2000, β on a grid (`scripts/kapteyn_references.py`): the DFT up to β = 0.95, the table of the defaults inside its domain; Kapteyn's inequality and the tail bound on the same references | ≤ 1e-15 absolute |
 | Series vs point solution | where both apply and the tail is negligible | ≤ 1e-14 |
+| Phase increment | §2.5's closed form and its Gauss–Legendre rule against mpmath quadrature, over pitches that move linearly, as a sine and in steps within a sample, and pitches that barely move | within a bound from rounding analysis, beside the test |
+| Relaxation | renders with each sample's substeps doubled, twice, on patches with β from below `feedback.relaxation_onset` to beyond `feedback.max_substeps`'s reach | observed order 2; the error within a bound beside the test |
+| Feedback loops | §9.7's equation's residual over a grid of gains and phases, and iteration counts | as the Kepler solver's |
 | EG | closed form vs high-precision integration of the ODE; segment times vs §4.3's $`t^{\ast}`$ | ≤ 1e-12 relative |
 | Sample-rate independence | the same input at 44.1, 48, 96 and 192 kHz, its events on the grid of 1/300 s that the four rates share; each voice's control values ($`T_k`$, $`p_k`$, $`P_{\text{EG}}`$, $`\ell`$, $`w`$ and its segments' instants), read through a probe of the tests, against mpmath references at each rate's own samples, and the rates against one another at the instants they share; the audio at those instants where every law is in closed form, and its spectrum below 20 kHz where one is integrated step by step (§9.6) | each control value within a bound from rounding analysis, absolute in its unit, its derivation beside the test; the audio within the bound of its phases' rounding; the spectrum: see the alias metric |
 | Block independence | random block splits, with events and new compiled patches at random samples, vs one block | **bit-identical** |
@@ -789,3 +804,5 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `tuning.transpose_octave` | keys | keys / period | 2.1 |
 | `scaling.key` | key | key / onset-pitch / pitch | 2.6 |
 | `tuning.modulation` | pitch | pitch / keys | 2.1 |
+| `feedback.max_substeps` | 64 | ≥ 1 | 9.6 |
+| `feedback.relaxation_onset` | 0.9 | [0, 1) | 9.6 |

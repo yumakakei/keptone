@@ -52,7 +52,9 @@
     "json.max_depth": 64,
     "tuning.transpose_octave": "keys",
     "scaling.key": "key",
-    "tuning.modulation": "pitch"
+    "tuning.modulation": "pitch",
+    "feedback.max_substeps": 64,
+    "feedback.relaxation_onset": 0.9
   },
   "tuning": {
     "scale": null,

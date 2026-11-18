@@ -33,12 +33,13 @@ fn table() -> Vec<(String, String, String)> {
 
 /// The settings that are counts, which the table writes as "≥ 1" or "≥ 0"
 /// as it writes a number.
-const COUNTS: [&str; 5] = [
+const COUNTS: [&str; 6] = [
     "graph.operators",
     "feedback.max_iterations",
     "voice.count",
     "part.count",
     "json.max_depth",
+    "feedback.max_substeps",
 ];
 
 /// A number as the table writes a default: with a minus sign, a power of two,
@@ -134,6 +135,8 @@ fn numbers_names_and_ids() {
     assert_eq!(settings::number_of("tuning.transpose_octave"), Some(48));
     assert_eq!(settings::number_of("scaling.key"), Some(49));
     assert_eq!(settings::number_of("tuning.modulation"), Some(50));
+    assert_eq!(settings::number_of("feedback.max_substeps"), Some(51));
+    assert_eq!(settings::number_of("feedback.relaxation_onset"), Some(52));
 }
 
 /// The number after the last setting's.
@@ -183,6 +186,10 @@ fn each_setting_takes_its_values() {
         ("tuning.transpose_octave", Value::Choice(2), false),
         ("tuning.modulation", Value::Choice(1), true),
         ("tuning.modulation", Value::Choice(2), false),
+        ("feedback.max_substeps", Value::Integer(0), false),
+        ("feedback.max_substeps", Value::Integer(1), true),
+        ("feedback.relaxation_onset", Value::Number(0.0), true),
+        ("feedback.relaxation_onset", Value::Number(1.0), false),
     ];
     for (name, value, takes) in cases {
         let before = settings.clone();
