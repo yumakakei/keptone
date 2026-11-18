@@ -130,9 +130,9 @@ fn numbers_names_and_ids() {
     }
     assert_eq!(settings.get(beyond()), None);
     // A setting added later takes the next number, whatever its section.
-    assert_eq!(settings::number_of("json.max_depth"), Some(54));
-    assert_eq!(settings::number_of("tuning.transpose_octave"), Some(55));
-    assert_eq!(settings::number_of("scaling.key"), Some(56));
+    assert_eq!(settings::number_of("json.max_depth"), Some(47));
+    assert_eq!(settings::number_of("tuning.transpose_octave"), Some(48));
+    assert_eq!(settings::number_of("scaling.key"), Some(49));
 }
 
 /// The number after the last setting's.
@@ -173,8 +173,8 @@ fn each_setting_takes_its_values() {
         ("lfo.seed", Value::Integer(u64::MAX), true),
         ("voice.steal", Value::Choice(3), true),
         ("voice.steal", Value::Choice(4), false),
-        ("scaling.exact", Value::Switch(true), true),
-        ("scaling.exact", Value::Choice(1), false),
+        ("eg.attack_jump", Value::Switch(false), true),
+        ("eg.attack_jump", Value::Choice(1), false),
         ("scaling.key", Value::Choice(2), true),
         ("scaling.key", Value::Choice(3), false),
         ("scaling.key", Value::Switch(true), false),

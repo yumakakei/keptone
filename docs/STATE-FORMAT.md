@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # The native state
 
-This document specifies the native state: what Keptone saves of itself, in a host's project or in a file, and reads back (DESIGN §11.1). `keptone_model::state` reads and writes it. It is Keptone's own format, binary64 throughout; the data of the DX7's family are formats of compatibility (DESIGN §11.2). The names of its members and the numbers of its parameters, which their IDs hold (§6), are fixed forever: none is given to another parameter or taken back, and what comes later takes names and numbers not yet given.
+This document specifies the native state: what Keptone saves of itself, in a host's project or in a file, and reads back (DESIGN §11.1). `keptone_model::state` reads and writes it. It is Keptone's own format, binary64 throughout; the data of the DX7's family are formats of compatibility (DESIGN §11.2). The names of its members and the numbers of its parameters, which their IDs hold (§6), are fixed from Keptone's first release on: from then, none is given to another parameter or taken back, and what comes later takes names and numbers not yet given.
 
 ## 1. The text
 
@@ -40,58 +40,51 @@ Keptone writes the members of each object in the order this document gives them,
 | 2 | `osc.fixed_detune` | `"msfa"`, `"symmetric"`, `"none"` |
 | 3 | `osc.phase_accumulator` | `"plain"`, `"compensated"` |
 | 4 | `osc.free_phase_start` | `"continue"`, `"zero"`, `"random"` |
-| 5 | `level.curve_interpolation` | `"linear"`, `"step"` |
-| 6 | `scaling.exact` | `true`, `false` |
-| 7 | `velocity.quantize_32` | `true`, `false` |
-| 8 | `eg.clock_hz` | a number above 0 |
-| 9 | `eg.rate_law` | `"dx7"`, `"exponential"` |
-| 10 | `eg.rate_quantize` | `true`, `false` |
-| 11 | `eg.attack_jump` | `true`, `false` |
-| 12 | `eg.attack_law` | `"continuous"`, `"stepped"` |
-| 13 | `eg.static_segments` | `"dx7"`, `"none"` |
-| 14 | `eg.zero_level` | `"silence"`, `"dx7"` |
-| 15 | `eg.end_db` | a number below 0 |
-| 16 | `param.level_glide_s` | a number of at least 0 |
-| 17 | `lfo.scope` | `"part"`, `"voice"` |
-| 18 | `lfo.seed` | an integer from 0 to 18446744073709551615 |
-| 19 | `lfo.sh_source` | `"splitmix"`, `"dx7-lcg"` |
-| 20 | `am.max_steps` | a number of at least 0 |
-| 21 | `graph.algorithm_scope` | `"patch"`, `"voice"` |
-| 22 | `graph.operators` | an integer of at least 1 |
-| 23 | `feedback.model` | `"relaxation"`, `"dx7-discrete"`, `"clamp"` |
-| 24 | `feedback.tau_s` | a number above 0 |
-| 25 | `feedback.beta_clamp` | a number above 0 and below 1 |
-| 26 | `feedback.max_iterations` | an integer of at least 1 |
-| 27 | `feedback.series_beta_max` | a number of at least 0 and below 1 |
-| 28 | `feedback.series_epsilon` | a number above 0 |
-| 29 | `alias.epsilon` | a number below 0 |
-| 30 | `adaa.order` | `"0"`, `"1"`, `"2"` |
-| 31 | `adaa.tau2` | a number above 0 |
-| 32 | `adaa.order2_kernel` | `"bilbao"`, `"triangular"` |
-| 33 | `adaa.modulators` | `true`, `false` |
-| 34 | `adaa.interp` | `"linear"`, `"cubic"` |
-| 35 | `adaa.droop_eq` | `"auto"`, `"on"`, `"off"` |
-| 36 | `adaa.droop_eq_hz` | a number above 0, or `"auto"` |
-| 37 | `engine.oversampling` | a power of two: 1, 2, 4 and on |
-| 38 | `engine.kernels` | `"auto"`, `"portable"` |
-| 39 | `resample.filter` | `"iir"`, `"fir"` |
-| 40 | `resample.stopband_db` | a number above 0 |
-| 41 | `voice.count` | an integer of at least 1 |
-| 42 | `voice.steal` | `"dx7"`, `"oldest"`, `"quietest"`, `"released-first"` |
-| 43 | `voice.retrigger` | `"same-voice"`, `"new-voice"` |
-| 44 | `engine.idle_s` | a number of at least 0 |
-| 45 | `part.count` | an integer of at least 1 |
-| 46 | `part.function_source` | `"patch"`, `"part"` |
-| 47 | `output.gain` | a number of at least 0 |
-| 48 | `output.carrier_normalization` | `"none"`, `"count"`, `"sqrt-count"` |
-| 49 | `output.channels` | `"stereo"`, `"mono"` |
-| 50 | `syx.accept_bad_checksum` | `true`, `false` |
-| 51 | `syx.out_of_range` | `"clamp"`, `"reject"` |
-| 52 | `syx.export_rounding` | `"nearest"`, `"floor"` |
-| 53 | `syx.performance_sensitivity` | `"linear"`, `"firmware"` |
-| 54 | `json.max_depth` | an integer of at least 0 |
-| 55 | `tuning.transpose_octave` | `"keys"`, `"period"` |
-| 56 | `scaling.key` | `"key"`, `"onset-pitch"`, `"pitch"` |
+| 5 | `eg.clock_hz` | a number above 0 |
+| 6 | `eg.rate_law` | `"dx7"`, `"exponential"` |
+| 7 | `eg.attack_jump` | `true`, `false` |
+| 8 | `eg.static_segments` | `"dx7"`, `"none"` |
+| 9 | `eg.end_db` | a number below 0 |
+| 10 | `param.level_glide_s` | a number of at least 0 |
+| 11 | `lfo.scope` | `"part"`, `"voice"` |
+| 12 | `lfo.seed` | an integer from 0 to 18446744073709551615 |
+| 13 | `am.max_steps` | a number of at least 0 |
+| 14 | `graph.algorithm_scope` | `"patch"`, `"voice"` |
+| 15 | `graph.operators` | an integer of at least 1 |
+| 16 | `feedback.model` | `"relaxation"`, `"dx7-discrete"`, `"clamp"` |
+| 17 | `feedback.tau_s` | a number above 0 |
+| 18 | `feedback.beta_clamp` | a number above 0 and below 1 |
+| 19 | `feedback.max_iterations` | an integer of at least 1 |
+| 20 | `feedback.series_beta_max` | a number of at least 0 and below 1 |
+| 21 | `feedback.series_epsilon` | a number above 0 |
+| 22 | `alias.epsilon` | a number below 0 |
+| 23 | `adaa.order` | `"0"`, `"1"`, `"2"` |
+| 24 | `adaa.tau2` | a number above 0 |
+| 25 | `adaa.order2_kernel` | `"bilbao"`, `"triangular"` |
+| 26 | `adaa.modulators` | `true`, `false` |
+| 27 | `adaa.interp` | `"linear"`, `"cubic"` |
+| 28 | `adaa.droop_eq` | `"auto"`, `"on"`, `"off"` |
+| 29 | `adaa.droop_eq_hz` | a number above 0, or `"auto"` |
+| 30 | `engine.oversampling` | a power of two: 1, 2, 4 and on |
+| 31 | `engine.kernels` | `"auto"`, `"portable"` |
+| 32 | `resample.filter` | `"iir"`, `"fir"` |
+| 33 | `resample.stopband_db` | a number above 0 |
+| 34 | `voice.count` | an integer of at least 1 |
+| 35 | `voice.steal` | `"dx7"`, `"oldest"`, `"quietest"`, `"released-first"` |
+| 36 | `voice.retrigger` | `"same-voice"`, `"new-voice"` |
+| 37 | `engine.idle_s` | a number of at least 0 |
+| 38 | `part.count` | an integer of at least 1 |
+| 39 | `part.function_source` | `"patch"`, `"part"` |
+| 40 | `output.gain` | a number of at least 0 |
+| 41 | `output.carrier_normalization` | `"none"`, `"count"`, `"sqrt-count"` |
+| 42 | `output.channels` | `"stereo"`, `"mono"` |
+| 43 | `syx.accept_bad_checksum` | `true`, `false` |
+| 44 | `syx.out_of_range` | `"clamp"`, `"reject"` |
+| 45 | `syx.export_rounding` | `"nearest"`, `"floor"` |
+| 46 | `syx.performance_sensitivity` | `"linear"`, `"firmware"` |
+| 47 | `json.max_depth` | an integer of at least 0 |
+| 48 | `tuning.transpose_octave` | `"keys"`, `"period"` |
+| 49 | `scaling.key` | `"key"`, `"onset-pitch"`, `"pitch"` |
 
 ## 4. Tuning
 

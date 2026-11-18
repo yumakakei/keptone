@@ -11,7 +11,8 @@
 //!
 //! [`SPECS`] lists them in the order of MATH's table, and a setting's place
 //! there is its number, which its ID holds (docs/DESIGN.md §7.4, [`crate::id`]):
-//! a setting to come takes the next place, and none is ever taken away.
+//! from Keptone's first release on, a setting to come takes the next place,
+//! and none is taken away.
 //! [`Settings`] holds a value of each, each one its [`Spec`] takes, so that no
 //! settings out of range can be made.
 
@@ -145,7 +146,7 @@ const fn count(name: &'static str, least: u64, default: u64) -> Spec {
 }
 
 /// How many settings there are.
-pub const COUNT: usize = 57;
+pub const COUNT: usize = 50;
 
 /// Every setting, in the order of MATH §17's table; a setting's place is its
 /// number.
@@ -155,16 +156,10 @@ pub const SPECS: [Spec; COUNT] = [
     choice("osc.fixed_detune", &["msfa", "symmetric", "none"]),
     choice("osc.phase_accumulator", &["plain", "compensated"]),
     choice("osc.free_phase_start", &["continue", "zero", "random"]),
-    choice("level.curve_interpolation", &["linear", "step"]),
-    switch("scaling.exact", false),
-    switch("velocity.quantize_32", false),
     number("eg.clock_hz", Bounds::Positive, 49096.0),
     choice("eg.rate_law", &["dx7", "exponential"]),
-    switch("eg.rate_quantize", true),
     switch("eg.attack_jump", true),
-    choice("eg.attack_law", &["continuous", "stepped"]),
     choice("eg.static_segments", &["dx7", "none"]),
-    choice("eg.zero_level", &["silence", "dx7"]),
     number("eg.end_db", Bounds::Negative, -200.0),
     number("param.level_glide_s", Bounds::NonNegative, 0.002),
     choice("lfo.scope", &["part", "voice"]),
@@ -173,7 +168,6 @@ pub const SPECS: [Spec; COUNT] = [
         kind: Kind::Seed,
         default: Value::Integer(0),
     },
-    choice("lfo.sh_source", &["splitmix", "dx7-lcg"]),
     number("am.max_steps", Bounds::NonNegative, 2048.0),
     choice("graph.algorithm_scope", &["patch", "voice"]),
     count("graph.operators", 1, 6),

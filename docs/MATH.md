@@ -65,6 +65,10 @@ Read [AJXS-ROM] as documentation and write independent code. Never transcribe it
 
 A parameter that is a number takes any finite binary64 (DESIGN §7.4): a value on its instrument's scale, such as 0–99, between the scale's steps, or beyond its ends, so that the user is free to take it where the instruments could not, whatever it means there. The scale is the range of the instrument's data, the steps its dumps hold, and the range that the editor and a host show; it is not a limit. A value is held as itself, in the unit of its scale: binary64 holds 53 significant bits at every magnitude, so that a value held scaled, larger or smaller, would be no finer. The laws of §2–§14 are written for the scales. How each continues beyond its scale, its formula extended, its table continued or a limit of the instrument kept, is written with the engine (M3, and M9a for the family's data, DESIGN §15); and where a result would leave binary64, as a frequency beyond its largest number, the engine's law says what it is instead, so that every output stays finite. Enumerations, switches, counts and indices keep their ranges: they name things, and outside their ranges they name nothing. The settings of §17 keep their bounds, which the methods ask for.
 
+### 0.6 Between the steps
+
+The DX7 computes many of its laws from its parameters' steps alone, by tables and by integer arithmetic with floors. Keptone takes each such law at the steps as the DX7 computes it, its floors included, and between steps interpolates it linearly from its values at the steps around it: in each input that lies between integers, and multilinearly where several do. Where a law first computes one integer from several inputs, as the keyboard level scaling computes a key's offset from the break point (§3.2), it interpolates in that integer. So a patch of steps plays as the DX7's laws say, and a value between steps, of a parameter, a key or a velocity, moves each law continuously. Where a section interpolates otherwise, as the LFO's speed in $`\log\,f`$ (§6.1), it says so; a law that a section writes for real values, as $`\rho`$ (§4.1), takes its formula.
+
 ## 1. Overview of a voice
 
 A voice holds six operators $`k = 1 \dots 6`$, the DX7's OP1…OP6 (the number of operators is a setting for user graphs, §8.4). Operator $`k`$ outputs
@@ -173,7 +177,7 @@ $`k_{\mathrm{s}}`$ is the voice's, the same for each of its operators, those in 
 s(L) = \begin{cases} [0, 5, 9, 13, 17, 20, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 42, 43, 45, 46]_L & L \lt 20 \\ 28 + L & L \ge 20 \end{cases}
 ```
 
-[MSFA `scaleoutlevel`, LEVIEN-EG]. For fractional $`L`$ (allowed, §17) $`s`$ is interpolated linearly between integers. `level.curve_interpolation = linear | step`.
+[MSFA `scaleoutlevel`, LEVIEN-EG]. Between integers, $`s`$ is interpolated linearly (§0.6).
 
 ### 3.2 Operator offset from output level, key scaling and velocity
 
@@ -190,11 +194,10 @@ $`O`$ is clamped at 0 [MSFA `Dx7Note::init`]. Then:
     - linear: $`\lfloor 329uD / 2^{12}\rfloor`$
     - exponential: $`\lfloor 329\,e_uD / 2^{15}\rfloor`$ with $`e = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 16, 19, 23, 27, 33, 39, 47, 56, 66, 80, 94, 110, 126, 142, 158, 174, 190, 206, 222, 238, 250)`$, $`u`$ clamped to the table.
     - The sign is negative for −LIN and −EXP.
-  - Setting `scaling.exact = false` keeps the floors. `true` drops them and interpolates $`e`$ for fractional groups. Notes still map to the same groups, but the result is continuous in BP and depth.
+  - Between integers of the offset $`o`$ and of the depth, KLS is interpolated (§0.6): a whole offset takes the DX7's group, and the scaling is continuous in the key, the break point and the depth.
 - **Velocity** [MSFA `ScaleVelocity`; verify]: $`V(v) = 16\lfloor (\text{KVS}\cdot(\text{vt}[\lfloor v/2\rfloor] - 239) + 7)/8 \rfloor`$, where vt is MSFA's 64-entry `velocity_data`. Sources of $`v`$:
-  - MIDI velocity 0–127. A 7-bit MIDI velocity is the default, not the DX7's 32-level quantisation. `velocity.quantize_32 = false` [VDX7 FAQ].
-  - CLAP's real-valued velocity, interpolated in vt.
-  - MIDI 2.0's 16-bit velocity.
+  - MIDI velocity 0–127, each of its 128 steps, where the DX7 takes 32 of them [VDX7 FAQ] (§15).
+  - CLAP's real-valued velocity and MIDI 2.0's 16-bit velocity, values of $`v`$ between its steps (§0.6).
 
 ### 3.3 Total level of an EG level
 
@@ -222,7 +225,7 @@ State: the segment index $`i \in \{0, 1, 2, 3\}`$ (targets L1…L4), the start s
 q_i = \mathrm{min}(63, \lfloor 41 R_i / 64\rfloor + \text{RS}(k_{\mathrm{s}})),\qquad \text{RS}(k_{\mathrm{s}}) = \lfloor \text{KRS} \cdot \mathrm{clamp}(\lfloor k_{\mathrm{s}}/3\rfloor - 7, 0, 31)/8 \rfloor
 ```
 
-[LEVIEN-EG, MSFA `ScaleRate`]. With `eg.rate_quantize = false` the floors are dropped, so a fractional $`R`$ is continuous. $`k_{\mathrm{s}}`$ is the key of the scalings (§2.6).
+[LEVIEN-EG, MSFA `ScaleRate`]. Between integers of $`R_i`$, of the key and of KRS, $`q_i`$ is interpolated (§0.6), so that a rate between steps is continuous. $`k_{\mathrm{s}}`$ is the key of the scalings (§2.6).
 
 **verify.** The DX7's firmware writes only the rate scaling's sensitivity to the EGS, which scales the rates itself [AJXS-ROM `PATCH_ACTIVATE_OPERATOR_KBD_SCALING_RATE`], presumably by the key code of its voice frequency register ("Key Code Log F"). The firmware writes that register with the key's pitch, the portamento, the pitch envelope and the master tune, while the LFO and the bend go to the EGS's pitch modulation registers [AJXS-ROM `VOICE_ADD_LOAD_FREQ_TO_EGS`, `PORTA_PROCESS`]. Whether the EGS takes the key so, and when it reads the register, is to be found. Until then the rates take $`k_{\mathrm{s}}`$, as the level does.
 
@@ -261,7 +264,7 @@ The segment reaches its target at
 t^{\ast} = \frac{256}{\rho}\,\ln\,\frac{T^{\ast} - T_0}{T^{\ast} - T_{\text{target}}}
 ```
 
-- The hardware uses the integer multiplier $`2 + \lfloor (T_{\text{full}} - T)/256\rfloor`$ [LEVIEN-EG]. `eg.attack_law = continuous | stepped`, default `continuous`. `stepped` is piecewise linear in 256-step bands and also has a closed form, band by band.
+- The hardware uses the integer multiplier $`2 + \lfloor (T_{\text{full}} - T)/256\rfloor`$ [LEVIEN-EG], which changes the attack's speed in bands of 256 steps; the law above is the continuous one that the bands step (§15).
 - Targets stay below $`T^{\ast}`$, because the largest reachable $`T`$ is $`4032 + 32\cdot127 + 224 - 4256 = 4064 \lt 4352`$.
 
 ### 4.4 Segments that do not move
@@ -278,9 +281,7 @@ When a segment's target equals the current level, or segment 0 has L1 = 0, the D
 
 The DX7 holds a decayed operator at $`T_{\mathrm{min}}`$, about −84 dB, until the voice is stolen. Cutting a voice from there is a small step.
 
-`eg.zero_level = silence` (default): an EG level of 0 targets $`-\infty`$, so the decay continues past $`T_{\mathrm{min}}`$ at the same speed. The operator is inactive once $`T \lt T_{\text{end}}`$ (`eg.end_db`, default −200 dB relative to $`g = 1`$).
-
-`eg.zero_level = dx7` reproduces the clip at $`T_{\mathrm{min}}`$.
+An EG level of 0 targets $`-\infty`$, so the decay continues past $`T_{\mathrm{min}}`$ at the same speed (§15). A level between 0 and 1 is interpolated in the gain $`g`$ (§3.4), from 0 at level 0 to the gain of level 1, so that its target falls continuously to $`-\infty`$ (§0.6). The operator is inactive once $`T \lt T_{\text{end}}`$ (`eg.end_db`, default −200 dB relative to $`g = 1`$).
 
 ### 4.7 Live parameter changes
 
@@ -318,7 +319,7 @@ Waveform edges are not band-limited: the LFO is a control signal, evaluated per 
 
 ### 6.3 Random source
 
-SplitMix64, the generator KIRAL's tests use, seeded by `lfo.seed`. S&H values are uniform in [−1, 1]. `lfo.sh_source = splitmix | dx7-lcg`. The `dx7-lcg` option reproduces MSFA's `(r·179 + 17) mod 256` sequence [MSFA; verify].
+SplitMix64, the generator KIRAL's tests use, seeded by `lfo.seed`. S&H values are uniform in [−1, 1].
 
 ### 6.4 Delay fade $`w(t)`$
 
@@ -690,9 +691,13 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The residual output that some algorithms (16–18) never let fall to zero [PLOGUE-OPS7 discussion].
 - The 49 096 Hz sampling and its aliasing.
 - The key after transposition held in a byte: the firmware clamps a key above 127 to 127, and a key below 0, which wraps around, to 127 as well [AJXS-ROM `VOICE_ADD`].
+- The steps of the parameters, between which every law moves continuously (§0.6).
+- The DX7's 32 levels of velocity [VDX7 FAQ].
+- The attack's integer multiplier, which changes its speed in bands of 256 steps [LEVIEN-EG].
+- The floor at which the DX7 holds a decayed operator, about 84 dB below full scale, until its voice is stolen (§4.6).
 - The block-rate control and the 1024-point sine table of MSFA-based emulators.
 
-**Kept** (they define patches): every law and table in §2–§9, the attack jump, the static segment delays, sustain after release with L4 > 0, the shared LFO, and the DX7's keyboard scaling, velocity and rate scaling curves. Each has a setting that lets the user step away from it.
+**Kept** (they define patches): every law and table in §2–§9, the attack jump, the static segment delays, sustain after release with L4 > 0, the shared LFO, and the DX7's keyboard scaling, velocity and rate scaling curves. The attack jump, the static segments and the shared LFO each have a setting that lets the user step away from them.
 
 ## 16. Tests and tolerances
 
@@ -720,7 +725,7 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 
 ## 17. Settings index
 
-Every setting is stored in the plugin state and has a host parameter where continuous automation makes sense. Defaults are chosen for the main use (playing DX7 patches cleanly). Anything else is the user's choice. A setting's row is its number, which its ID holds (DESIGN §7.4): a setting added later takes the next row, whatever its section, and none is taken away.
+Every setting is stored in the plugin state and has a host parameter where continuous automation makes sense. Defaults are chosen for the main use (playing DX7 patches cleanly). Anything else is the user's choice. A setting's row is its number, which its ID holds (DESIGN §7.4): from Keptone's first release on, a setting added later takes the next row, whatever its section, and none is taken away.
 
 | Setting | Default | Values | § |
 | --- | --- | --- | --- |
@@ -729,21 +734,14 @@ Every setting is stored in the plugin state and has a host parameter where conti
 | `osc.fixed_detune` | msfa | msfa / symmetric / none | 2.3 |
 | `osc.phase_accumulator` | plain | plain / compensated | 2.5 |
 | `osc.free_phase_start` | continue | continue / zero / random | 2.5 |
-| `level.curve_interpolation` | linear | linear / step | 3.1 |
-| `scaling.exact` | false | bool | 3.2 |
-| `velocity.quantize_32` | false | bool | 3.2 |
 | `eg.clock_hz` | 49096 | > 0 | 4.1 |
 | `eg.rate_law` | dx7 | dx7 / exponential | 4.1 |
-| `eg.rate_quantize` | true | bool | 4.1 |
 | `eg.attack_jump` | true | bool | 4.3 |
-| `eg.attack_law` | continuous | continuous / stepped | 4.3 |
 | `eg.static_segments` | dx7 | dx7 / none | 4.4 |
-| `eg.zero_level` | silence | silence / dx7 | 4.6 |
 | `eg.end_db` | −200 | < 0 | 4.6 |
 | `param.level_glide_s` | 0.002 | ≥ 0 | 4.7 |
 | `lfo.scope` | part | part / voice | 6.5 |
 | `lfo.seed` | 0 | u64 | 6.3 |
-| `lfo.sh_source` | splitmix | splitmix / dx7-lcg | 6.3 |
 | `am.max_steps` | 2048 (provisional) | ≥ 0 | 7.2 |
 | `graph.algorithm_scope` | patch | patch / voice | 8.3 |
 | `graph.operators` | 6 | ≥ 1 | 8.4 |
