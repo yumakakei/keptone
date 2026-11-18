@@ -64,7 +64,7 @@ Read [AJXS-ROM] as documentation and write independent code. Never transcribe it
 
 ### 0.5 The values of parameters
 
-A parameter that is a number takes any finite binary64 (DESIGN §7.4): a value on its instrument's scale, such as 0–99, between the scale's steps, or beyond its ends, so that the user is free to take it where the instruments could not, whatever it means there. The scale is the range of the instrument's data, the steps its dumps hold, and the range that the editor and a host show; it is not a limit. A value is held as itself, in the unit of its scale: binary64 holds 53 significant bits at every magnitude, so that a value held scaled, larger or smaller, would be no finer. The laws of §2–§14 are written for the scales. How each continues beyond its scale, its formula extended, its table continued or a limit of the instrument kept, is written with the engine (M3, and M9a for the family's data, DESIGN §15); and where a result would leave binary64, as a frequency beyond its largest number, the engine's law says what it is instead, so that every output stays finite. Enumerations, switches, counts and indices keep their ranges: they name things, and outside their ranges they name nothing. The settings of §17 keep their bounds, which the methods ask for.
+A parameter that is a number takes any finite binary64 (DESIGN §7.4): a value on its instrument's scale, such as 0–99, between the scale's steps, or beyond its ends, so that the user is free to take it where the instruments could not, whatever it means there. The scale is the range of the instrument's data, the steps its dumps hold, and the range that the editor and a host show; it is not a limit. A value is held as itself, in the unit of its scale: binary64 holds 53 significant bits at every magnitude, so that a value held scaled, larger or smaller, would be no finer. The laws of §2–§14 are written for the scales. How each continues beyond its scale, its formula extended, its table continued or a limit of the instrument kept, is written with the engine (M3, and M9a for the family's data, DESIGN §15); and where a result would leave binary64, as a frequency beyond its largest number, the engine's law says what it is instead, so that every output stays finite. By default a law written as a formula continues as written, and a table continues linearly along its first and its last steps; a section that keeps a limit of the instrument instead, or continues otherwise, says so. Enumerations, switches, counts and indices keep their ranges: they name things, and outside their ranges they name nothing. The settings of §17 keep their bounds, which the methods ask for.
 
 ### 0.6 Between the steps
 
@@ -100,7 +100,15 @@ where TRANSPOSE (0–48 on its scale; 24 means none) is the voice's, which the D
 p_{\text{key}}(k') = \text{tuning}(k')
 ```
 
-By default `tuning` is 12-TET with A4 = `tuning.a4_hz` = 440 Hz: $`p = \log_2\,440 + (k' - 69)/12`$. Alternatives: a Scala `.scl` + `.kbm` pair [SCALA-SCL, SCALA-KBM], or MTS-ESP [MTS-ESP] (optional, off by default). A tuning is a function from real note values to pitch. `tuning.modulation` says where the bend, the portamento and the per-note pitch (DESIGN §7.3) move a note, each a number $`k_{\text{bend}}`$, $`k_{\text{porta}}`$ and $`k_{\text{note}}`$ of semitones or keys. With `pitch`, the default, they are intervals added to its pitch, $`p_{\text{bend}}`$, $`p_{\text{porta}}`$ and $`p_{\text{note}}`$ of §2.4, each its number over 12 in octaves, so that a bend's range is in semitones under any tuning and a glide is linear in pitch between two notes' pitches, as the DX7 adds its bend apart from the key's pitch [AJXS-ROM]. With `keys` they are keys added to the note before the tuning, $`p_{\text{key}} = \text{tuning}(k' + k_{\text{bend}} + k_{\text{porta}} + k_{\text{note}})`$, and their intervals in §2.4 are 0, so that a bend's range is in the tuning's keys and a glide moves through the note values between two keys. Under 12-TET the two are the same.
+By default `tuning` is 12-TET with A4 = `tuning.a4_hz` = 440 Hz: $`p = \log_2\,440 + (k' - 69)/12`$. Alternatives: a Scala `.scl` + `.kbm` pair [SCALA-SCL, SCALA-KBM], or MTS-ESP [MTS-ESP] (optional, off by default). Under Scala, a key from the keyboard mapping's first key to its last takes the pitch of the scale's degree $`g(k)`$ that the mapping gives it, measured from the reference key $`k_{\mathrm{r}}`$, which sounds at the mapping's frequency $`f_{\mathrm{r}}`$ [SCALA-SCL, SCALA-KBM]:
+
+```math
+\text{tuning}(k) = \log_2\,f_{\mathrm{r}} + P(g(k)) - P(g(k_{\mathrm{r}})),\qquad P(g) = \lfloor g/N\rfloor P_N + P_{g \bmod N},\qquad g(k) = e_{(k - c) \bmod m} + d\lfloor (k - c)/m\rfloor
+```
+
+with $`P_j`$ the scale's $`j`$-th pitch in octaves, $`P_0 = 0`$ and $`P_N`$ its last, its period, $`N`$ its count; $`m`$ the mapping's size, $`c`$ its middle key, $`e_j`$ its entries and $`d`$ its formal octave, a degree, $`N`$ where the mapping gives 0; and $`g(k) = k - c`$ for a linear mapping, of size 0. A key whose entry is unmapped takes no note. A key outside the first and the last takes 12-TET's pitch, and a scale given without a mapping is mapped linearly on every key, degree 0 at key 60 and key 69 at `tuning.a4_hz`. Under MTS-ESP a key takes the pitch that the master gives it, and beyond keys 0 and 127 the pitch goes on from theirs in 12-TET's semitones. Between two keys, as a bend or a glide under `tuning.modulation = keys` makes a note value, the pitch is interpolated linearly between those of the nearest keys on either side that have one.
+
+A tuning is a function from real note values to pitch. `tuning.modulation` says where the bend, the portamento and the per-note pitch (DESIGN §7.3) move a note, each a number $`k_{\text{bend}}`$, $`k_{\text{porta}}`$ and $`k_{\text{note}}`$ of semitones or keys. With `pitch`, the default, they are intervals added to its pitch, $`p_{\text{bend}}`$, $`p_{\text{porta}}`$ and $`p_{\text{note}}`$ of §2.4, each its number over 12 in octaves, so that a bend's range is in semitones under any tuning and a glide is linear in pitch between two notes' pitches, as the DX7 adds its bend apart from the key's pitch [AJXS-ROM]. With `keys` they are keys added to the note before the tuning, $`p_{\text{key}} = \text{tuning}(k' + k_{\text{bend}} + k_{\text{porta}} + k_{\text{note}})`$, and their intervals in §2.4 are 0, so that a bend's range is in the tuning's keys and a glide moves through the note values between two keys. Under 12-TET the two are the same.
 
 A shift is in keys. With `tuning.transpose_octave = keys`, the default, $`\tau(\sigma) = \sigma`$, as on the DX7. With `period`, each whole octave of a shift, twelve keys, moves by the tuning's period instead, so that an octave of transposition spans the tuning's period, as it does under 12-TET:
 
@@ -113,23 +121,23 @@ where trunc takes the integer part, toward 0, and $`P`$ is the period in keys: 1
 ### 2.2 Operator frequency, ratio mode (OSC MODE = 0)
 
 ```math
-p_k = p_{\text{key}} + c(\text{COARSE}) + \log_2(1 + \text{FINE}/100) + \delta(\text{DETUNE}, p_{\text{key}}) + p_{\text{mod}}(t)
+f_k = r\cdot 2^{p_{\text{key}} + \delta + p_{\text{mod}}(t)},\qquad r = \rho(\text{COARSE})\cdot(1 + \text{FINE}/100)
 ```
 
-- $`c(0) = -1`$ (ratio 0.5). $`c(n) = \log_2\,n`$ for $`n = 1 \dots 31`$ [MSFA `coarsemul`, DX7-MANUAL].
-- The detune law [MSFA `osc_freq`; verify]: $`\delta = 0.0209\,\mathrm{e}^{-0.396p_{\text{key}}}p_{\text{key}}\cdot(\text{DETUNE} - 7)/7`$ octaves, with DETUNE 0–14 and 7 the centre. The DX7's detune is a nearly constant offset in Hz at low pitches, not a constant number of cents; the law models that.
+- $`\rho(n) = n`$ for $`n \ge 1`$ and $`(1 + n)/2`$ below, so that $`\rho(0) = 1/2`$: the DX7's ratios at its steps, 0.5 and 1 to 31 [MSFA `coarsemul`, DX7-MANUAL], linear in the ratio between them, the ratio being what a coarse frequency means, and beyond them on either side; FINE scales the ratio linearly, as $`1 + \text{FINE}/100`$ does at its steps. A ratio at or below 0 makes the frequency 0 or negative, the operator's phase standing still or running backwards (§0.5). Where the pitch $`p_{\text{key}} + \delta + p_{\text{mod}}`$ exceeds 1023 octaves it is taken at 1023, where a sample's increment is a whole number of turns and the phase stands still, and a frequency below binary64's least is 0.
+- The detune law [MSFA `osc_freq`; verify]: $`\delta = 0.0209\,\mathrm{e}^{-0.396p}p\cdot(\text{DETUNE} - 7)/7`$ octaves at the key's pitch without its modulation, $`p = \text{tuning}(k')`$, which MSFA takes once a note and which keeps §2.1's two modes alike under 12-TET, and which is taken within the pitches of 12-TET's keys 0 to 127, where the law was measured, so that it stays finite beyond them; DETUNE 0–14, 7 the centre. The DX7's detune is a nearly constant offset in Hz at low pitches, not a constant number of cents; the law models that.
 - $`p_{\text{mod}}(t)`$ is §2.4.
 
 ### 2.3 Operator frequency, fixed mode (OSC MODE = 1)
 
 ```math
-p_k = \log_2\,10\cdot((\text{COARSE} \bmod 4) + \text{FINE}/100) + \delta_{\text{fixed}} + p_{\text{bend}}(t) + p_{\text{note}}(t) + p_{\text{tune}}
+p_k = \log_2\,10\cdot(\varphi(\text{COARSE}) + \text{FINE}/100) + \delta_{\text{fixed}} + p_{\text{bend}}(t) + p_{\text{LFO}}(t) + p_{\text{note}}(t)
 ```
 
-So 1, 10, 100 and 1000 Hz, each times $`10^{\text{FINE}/100}`$ [MSFA, DX7-MANUAL].
+So 1, 10, 100 and 1000 Hz, each times $`10^{\text{FINE}/100}`$ [MSFA, DX7-MANUAL]. $`\varphi(C)`$ is $`C \bmod 4`$ at an integer C, the remainder of Euclid's division, and between two integers it is interpolated between their values (§0.6), so that from 3 to 4 it falls from 3 to 0.
 
-- $`\delta_{\text{fixed}}`$ [MSFA; verify]: $`13457 \cdot 2^{-24}(\text{DETUNE} - 7)`$ octaves for DETUNE > 7, else 0. The asymmetry is suspect. Setting `osc.fixed_detune = msfa | symmetric | none`.
-- Fixed operators follow the pitch bend and the master tune, but not the pitch EG, the LFO or the portamento [MSFA; verify against AJXS-ROM], and they follow the per-note pitch as they follow the bend [DEXED]. Under `tuning.modulation = keys`, $`p_{\text{bend}} + p_{\text{note}}`$ there is the interval that the bend and the per-note pitch give the voice's key, $`\text{tuning}(k' + k_{\text{bend}} + k_{\text{note}}) - \text{tuning}(k')`$ (§2.1).
+- $`\delta_{\text{fixed}}`$ [MSFA; verify]: under `osc.fixed_detune = msfa` $`13457 \cdot 2^{-24}(\text{DETUNE} - 7)`$ octaves for DETUNE > 7 and 0 below, under `symmetric` the same on both sides, and under `none` 0. The DX7 writes the detune as a sign and a magnitude [AJXS-ROM `PATCH_ACTIVATE_OPERATOR_DETUNE`], so the asymmetry is the EGS's if it is anyone's (VERIFICATION V3).
+- A fixed operator follows the bend, the LFO and the per-note pitch, and neither the key, the portamento, the pitch envelope nor the master tune. The firmware gives the EGS the bend and the LFO in one register and the key, the portamento, the pitch envelope and the master tune in another [AJXS-ROM `MOD_PITCH_LOAD_TO_EGS`, `VOICE_ADD_LOAD_FREQ_TO_EGS`], so a fixed operator of the DX7 follows all of a register or none of it; which the EGS gives it is yet to be measured, and this rule is provisional (VERIFICATION V3), where MSFA has a fixed operator follow the bend and the master tune. Under `tuning.modulation = keys`, $`p_{\text{bend}} + p_{\text{note}}`$ there is the interval that the bend and the per-note pitch give the voice's key, $`\text{tuning}(k' + k_{\text{bend}} + k_{\text{note}}) - \text{tuning}(k')`$ (§2.1).
 
 ### 2.4 Pitch modulation (ratio-mode operators)
 
@@ -143,10 +151,10 @@ p_{\text{mod}}(t) = P_{\text{EG}}(t) + p_{\text{LFO}}(t) + p_{\text{bend}}(t) + 
   - $`d_{\text{PMD}} = \lfloor 165\,\text{PMD}/64\rfloor/256`$ [AJXS-ROM `PATCH_ACTIVATE_SCALE_VALUE`].
   - $`\sigma_{\text{PMS}} = \text{pmstab}[\text{PMS}]/256`$ octaves with pmstab = (0, 10, 20, 33, 55, 92, 153, 255) [MSFA `pitchmodsenstab`, `Dx7Note::compute`], the firmware's values as well [AJXS-ROM].
   - $`d_{\text{ctrl}}`$ is the depth of the controllers assigned to the pitch (§7.1).
-- $`p_{\text{bend}}`$: the bend, as a fraction of the range (function parameter 65, 0–12 semitones; per-direction ranges are settings). STEP (66) quantises it when non-zero. A continuous bend is the default. It is $`k_{\text{bend}}/12`$, and 0 under `tuning.modulation = keys` (§2.1).
+- $`p_{\text{bend}}`$: the bend, $`k_{\text{bend}}/12`$ octaves, and 0 under `tuning.modulation = keys` (§2.1). With STEP (66) at 0, the default, $`k_{\text{bend}} = x\cdot\text{RANGE}`$ semitones (function parameter 65, 0–12), $`x`$ the bend's position from −1 to 1: a value $`v`$ of $`m`$ bits gives $`(v - 2^{m-1})/2^{m-1}`$ below its centre and $`(v - 2^{m-1})/(2^{m-1} - 1)`$ above, so that both ends reach the range, where the DX7 reads 7 bits with a dead zone at the centre [AJXS-ROM `PITCH_BEND_PARSE`] (§15). With STEP $`s \gt 0`$, whatever RANGE says, the bend takes $`n = \mathrm{min}(N, \lfloor\left|x\right|\cdot(N + 1/2)\rfloor)`$ whole steps of $`s`$ semitones, $`N = \lfloor 12/s\rfloor`$, toward the side x is on, as the DX7's does, whose steps begin within 1.5 % of the bend's travel from these [AJXS-ROM `PITCH_BEND_PARSE`]: a staircase by design, which §0.6 does not smooth. A STEP above 12 bends by nothing.
 - $`p_{\text{note}}`$: the per-note pitch, $`k_{\text{note}}/12`$ (DESIGN §7.3), and 0 under `keys` (§2.1).
 - $`p_{\text{porta}}`$: portamento (§7.3), and 0 under `keys` (§2.1).
-- $`p_{\text{tune}}`$: the master tune, $`c/1200`$ octaves for $`c`$ cents, 0 by default: a value of Keptone's system set-up, the same for every part and every tuning. The DX7's master tune of ±75 cents [DX7-MANUAL], the master tune that the data of the DX7II, the TX7 and the TX802 carry, 0 to 127 [DX7II-MANUAL, TX7-MANUAL, TX802-SYSEX], and MIDI's tuning messages set it, as the system set-up writes with M5. It moves every operator, those in the fixed mode too (§2.3), and neither scaling (§2.6).
+- $`p_{\text{tune}}`$: the master tune, $`c/1200`$ octaves for $`c`$ cents, 0 by default: a value of Keptone's system set-up, the same for every part and every tuning. The DX7's master tune of ±75 cents [DX7-MANUAL], the master tune that the data of the DX7II, the TX7 and the TX802 carry, 0 to 127 [DX7II-MANUAL, TX7-MANUAL, TX802-SYSEX], and MIDI's tuning messages set it, as the system set-up writes with M5. It moves every operator in the ratio mode, and neither one in the fixed mode (§2.3) nor a scaling (§2.6).
 
 ### 2.5 Phase
 
@@ -719,6 +727,7 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 - The DX7's 32 levels of velocity [VDX7 FAQ].
 - The attack's integer multiplier, which changes its speed in bands of 256 steps [LEVIEN-EG].
 - The floor at which the DX7 holds a decayed operator, about 84 dB below full scale, until its voice is stolen (§4.6).
+- The bend's 7 bits and the dead zone at its centre [AJXS-ROM `PITCH_BEND_PARSE`].
 - The block-rate control and the 1024-point sine table of MSFA-based emulators.
 
 **Kept** (they define patches): every law and table in §2–§9, the attack jump, the static segment delays, sustain after release with L4 > 0, the shared LFO, and the DX7's keyboard scaling, velocity and rate scaling curves. The attack jump, the static segments and the shared LFO each have a setting that lets the user step away from them.
