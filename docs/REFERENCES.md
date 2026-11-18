@@ -146,6 +146,16 @@ Status tags:
 | SCALA-KBM | Huygens-Fokker Foundation, *Keyboard mappings*. https://www.huygens-fokker.org/scala/help.htm#mappings | spec | The `.kbm` parser. |
 | MTS-ESP | ODDSound, *MTS-ESP* (client: 0BSD; loads the closed `libMTS` at run time). https://github.com/ODDSound/MTS-ESP | method (optional) | Dynamic microtuning. Off by default. |
 
+## 7a. The native state's text (DESIGN §11.1, STATE-FORMAT.md)
+
+| Key | Source | Status | What is taken |
+| --- | --- | --- | --- |
+| RFC8259 | T. Bray, ed., *The JavaScript Object Notation (JSON) Data Interchange Format*, RFC 8259, December 2017. https://www.rfc-editor.org/rfc/rfc8259 | spec | The grammar of JSON, which `keptone_model::json` reads and writes: the text of the native state and of the themes. |
+| RFC8785 | A. Rundgren, B. Jordan and S. Erdtman, *JSON Canonicalization Scheme (JCS)*, RFC 8785, June 2020. https://www.rfc-editor.org/rfc/rfc8785 | spec | The canonical form whose SHA-256 a patch carries (`keptone_model::json::write_canonical`): no white space, the members in the order of their names' UTF-16 code units, numbers as ECMAScript writes them, strings with the fewest escapes. The binary64s of its Appendix B, which the tests hold the writer to, as V8's `JSON.stringify` writes them as well. |
+| RFC6901 | P. Bryan, K. Zyp and M. Nottingham, eds., *JavaScript Object Notation (JSON) Pointer*, RFC 6901, April 2013. https://www.rfc-editor.org/rfc/rfc6901 | spec | How a refusal of the native state names the place of what it refuses. |
+| ECMA-262 | Ecma International, *ECMAScript 2024 Language Specification*, ECMA-262, 15th edition, June 2024. https://262.ecma-international.org/15.0/ | spec | §6.1.6.1.20, Number::toString: how the native state writes a number, the fewest significant digits that read back as the binary64, of two as near the even, in fixed notation from 10⁻⁶ to below 10²¹ and with an exponent beyond. Rust writes the upper of two as near; `keptone_model::json` takes the even, which it finds by factoring both into powers of 2 and 5. |
+| FIPS-180-4 | National Institute of Standards and Technology, *Secure Hash Standard (SHS)*, FIPS PUB 180-4, August 2015. https://doi.org/10.6028/NIST.FIPS.180-4 | spec | SHA-256 (`keptone_model::sha256`), the digest of a patch. |
+
 ## 8. Prior art compared (DESIGN §2)
 
 | Key | Source | Status |

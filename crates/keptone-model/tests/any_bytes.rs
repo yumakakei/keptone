@@ -28,8 +28,9 @@ use common::{
 };
 use keptone_model::json;
 use keptone_model::scala;
+use keptone_model::state;
 use keptone_model::syx::{self, Options};
-use properties::{read_json, read_kbm, read_scl, read_syx};
+use properties::{read_json, read_kbm, read_scl, read_state, read_syx};
 
 /// How many inputs are made of each seed: fewer in the dev profile, whose
 /// code is some ten times slower.
@@ -338,5 +339,57 @@ fn kbm_takes_any_bytes() {
     }
     for input in regressions("kbm") {
         read_kbm(&input);
+    }
+}
+
+#[test]
+fn state_takes_any_bytes() {
+    // The seeds of the state target: the state Keptone starts in, one of
+    // random values in three parts and members of a later version, and one of
+    // a single part, which scripts/native_state.py writes.
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/seeds/state");
+    let mut seeds: Vec<(String, Vec<u8>)> = std::fs::read_dir(&directory)
+        .expect("fuzz/seeds/state/")
+        .map(|entry| {
+            let path = entry.expect("a directory entry").path();
+            let name = path.file_name().expect("a name").to_string_lossy().into_owned();
+            (name, std::fs::read(&path).expect("a seed"))
+        })
+        .collect();
+    seeds.sort();
+    assert_eq!(seeds.len(), 3);
+    let tokens: [&[u8]; 20] = [
+        b"\"format\"",
+        b"\"keptone-state\"",
+        b"\"version\": 2",
+        b"\"settings\"",
+        b"\"parts\": []",
+        b"\"part.count\": 1",
+        b"\"auto\"",
+        b"\"voice.name\": \"",
+        b"\"patch.sha256\": \"",
+        b"\"supplement.unison\": true,",
+        b"\"fractional_scaling.op1.levels\": [",
+        b"\"later\": {},",
+        b"{",
+        b"}",
+        b"[",
+        b"]",
+        b",",
+        b"null",
+        b"-0",
+        b"1e400",
+    ];
+    let mut random = SplitMix64(15);
+    for (name, seed) in &seeds {
+        let read = state::read(seed, json::DEFAULT_MAX_DEPTH);
+        assert!(read.is_ok_and(|(_, findings)| findings.is_empty()), "{name}");
+        read_state(seed);
+        for _ in 0..MUTATIONS / 5 {
+            read_state(&mutate(&mut random, seed, &tokens));
+        }
+    }
+    for input in regressions("state") {
+        read_state(&input);
     }
 }

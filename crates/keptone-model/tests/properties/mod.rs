@@ -19,6 +19,7 @@ use std::fmt::Write as _;
 
 use keptone_model::json::{self, DEFAULT_MAX_DEPTH, Value};
 use keptone_model::scala::{self, Mapping, Pitch, Scale};
+use keptone_model::state;
 use keptone_model::syx::{self, Content, Dump, Loss, Options, OutOfRange, ParameterChange, PerformanceLoss, Sysex};
 use keptone_model::voice::Rounding;
 
@@ -186,8 +187,9 @@ fn written_again(dump: &Dump) -> Vec<u8> {
 /// A text read with no limit to its nesting, with the default limit and with
 /// a limit of one level. Whatever reads within a limit reads the same with no
 /// limit, and what does not read with no limit reads with none; a value
-/// nests no deeper than its limit and gives no name twice in an object; and
-/// an error lies within the text.
+/// nests no deeper than its limit and gives no name twice in an object, and
+/// is written in either form as a text that reads back as it; and an error
+/// lies within the text.
 pub fn read_json(input: &[u8]) {
     let unlimited = json::parse(input, usize::MAX);
     let limited = json::parse(input, DEFAULT_MAX_DEPTH);
@@ -196,6 +198,15 @@ pub fn read_json(input: &[u8]) {
         assert!(depth(value) <= DEFAULT_MAX_DEPTH);
         assert!(names_once(value));
         assert_eq!(unlimited.as_ref().ok(), Some(value));
+        // Written in lines, it reads back as itself; written canonically, as
+        // a value whose canonical form is the same text. Only what nests no
+        // deeper than the default is written in lines, whose text grows as the
+        // square of the depth.
+        let lines = json::write(value);
+        assert_eq!(json::parse(lines.as_bytes(), DEFAULT_MAX_DEPTH).as_ref(), Ok(value));
+        let canonical = json::write_canonical(value);
+        let again = json::parse(canonical.as_bytes(), DEFAULT_MAX_DEPTH).expect("the canonical form, read");
+        assert_eq!(json::write_canonical(&again), canonical);
     }
     if let Ok(value) = &flat {
         assert!(depth(value) <= 1);
@@ -249,6 +260,29 @@ fn names_once(value: &Value) -> bool {
         }
     }
     true
+}
+
+/// A native state read, and, where it reads, written back and read again: the
+/// same state, with nothing found, and then the same text written again
+/// (docs/STATE-FORMAT.md). An error lies within the text, and names a place in
+/// the state, as a JSON Pointer, unless the text is not JSON or not an object.
+pub fn read_state(input: &[u8]) {
+    match state::read(input, DEFAULT_MAX_DEPTH) {
+        Ok((read, _)) => {
+            let written = state::write(&read);
+            let (again, findings) =
+                state::read(written.as_bytes(), DEFAULT_MAX_DEPTH).expect("a state written reads back");
+            assert_eq!(findings, []);
+            assert_eq!(again, read);
+            assert_eq!(state::write(&again), written);
+        }
+        Err(error) => {
+            assert!(error.offset <= input.len() && error.line >= 1 && error.column >= 1);
+            let object = json::parse(input, DEFAULT_MAX_DEPTH).is_ok_and(|value| value.as_object().is_some());
+            assert_eq!(error.pointer.is_empty(), !object);
+            assert!(error.pointer.is_empty() || error.pointer.starts_with('/'));
+        }
+    }
 }
 
 /// A scale file read, and, where it reads, the scale written again in the

@@ -24,7 +24,18 @@
 //! What the parser allocates is in proportion to the bytes it is given, and the
 //! time it takes no more than in proportion to them times the logarithm of an
 //! object's size: names are checked against each other once an object is read
-//! whole, by sorting, not each against every earlier one.
+//! whole, by sorting, not each against every earlier one. An object read keeps
+//! the offsets of its opening brace and of each member's name as well, so that
+//! what reads a value can say where in the text a member it refuses is, or
+//! where the object that lacks one begins ([`line_and_column`]).
+//!
+//! [`write`](fn@write) writes a value as JSON text, a member of an object to a line, each
+//! number as its text; [`write_canonical`] writes it in the canonical form of
+//! RFC 8785 \[RFC8785\], with no white space, the members of each object in the
+//! order of their names' UTF-16 code units and each number as ECMAScript
+//! writes its binary64, which [`Number::from_f64`] gives as well. Neither takes
+//! more of the thread's stack for a deep value than for a shallow one, and
+//! what either writes, [`parse`] reads back as the value written.
 
 use std::fmt;
 use std::mem;
@@ -100,34 +111,237 @@ impl Number {
     pub const fn as_f64(&self) -> f64 {
         self.value
     }
+
+    /// The number of a binary64, if it is finite, written as ECMAScript's
+    /// `Number::toString` writes it \[ECMA-262\] §6.1.6.1.20, which RFC 8785 takes
+    /// for its canonical form \[RFC8785\] §3.2.2.3: the fewest significant
+    /// digits that read back as the binary64, the nearest to it where several
+    /// do; in fixed notation from 10⁻⁶ to below 10²¹, as 0.000001 and
+    /// 100000000000000000000, and beyond with an exponent and its sign, as
+    /// 1e-7 and 1e+21; and −0 as 0, which reads back as +0, the number's value.
+    #[must_use]
+    pub fn from_f64(value: f64) -> Option<Self> {
+        value.is_finite().then(|| Self {
+            text: ecmascript(value),
+            // Adding +0 takes −0 to +0 and leaves every other number as it is.
+            value: value + 0.0,
+        })
+    }
+
+    /// The number of an unsigned integer, written whole.
+    #[must_use]
+    pub fn from_u64(integer: u64) -> Self {
+        let text = integer.to_string();
+        // Rust reads the digits as the binary64 nearest to them.
+        let value = text.parse().unwrap_or(f64::INFINITY);
+        Self { text, value }
+    }
 }
 
-/// An object: its members in their order, each name once.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Object(Vec<(String, Value)>);
+/// The text of a finite binary64 as ECMAScript writes it ([`Number::from_f64`]).
+fn ecmascript(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_owned();
+    }
+    let (digits, n) = shortest(value.abs());
+    let k = i32::try_from(digits.len()).unwrap_or(i32::MAX);
+    let zeros = |count: i32| std::iter::repeat_n('0', usize::try_from(count).unwrap_or(0));
+    let mut text = String::new();
+    if value < 0.0 {
+        text.push('-');
+    }
+    if k <= n && n <= 21 {
+        text.push_str(&digits);
+        text.extend(zeros(n - k));
+    } else if 0 < n && n <= 21 {
+        let (whole, fraction) = digits
+            .split_at_checked(usize::try_from(n).unwrap_or(0))
+            .unwrap_or((&digits, ""));
+        text.push_str(whole);
+        text.push('.');
+        text.push_str(fraction);
+    } else if -6 < n && n <= 0 {
+        text.push_str("0.");
+        text.extend(zeros(-n));
+        text.push_str(&digits);
+    } else {
+        let (first, rest) = digits.split_at_checked(1).unwrap_or((&digits, ""));
+        text.push_str(first);
+        if !rest.is_empty() {
+            text.push('.');
+            text.push_str(rest);
+        }
+        let exponent = n - 1;
+        text.push_str(if exponent < 0 { "e-" } else { "e+" });
+        text.push_str(&exponent.unsigned_abs().to_string());
+    }
+    text
+}
+
+/// ECMA-262's digits of a binary64 above 0, s of k digits, and its n, the
+/// binary64 being nearest to 0.d₁d₂…dₖ × 10ⁿ: the fewest digits that read
+/// back as it and, of those, the nearest to it; of two as near, the even.
+///
+/// Rust gives the fewest and nearest digits, but of two as near the upper,
+/// as for 1424953923781206.25, written …206.2 by ECMAScript and …206.3 by
+/// Rust \[RFC8785\] Appendix B. Two are as near where the binary64 is exactly
+/// halfway between them, which [`is_exactly`] settles without rounding; the
+/// even then takes the odd's place if it reads back as the binary64 too.
+fn shortest(value: f64) -> (String, i32) {
+    // d.ddd and the exponent of the first digit, which is n − 1.
+    let exponential = format!("{value:e}");
+    let (mantissa, exponent) = exponential.split_once('e').unwrap_or((&exponential, "0"));
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let n = exponent.parse::<i32>().unwrap_or(0) + 1;
+    let k = i32::try_from(digits.len()).unwrap_or(i32::MAX);
+    // A binary64 has 17 significant digits at the most, which 64 bits hold
+    // ten times over.
+    let Some(s) = digits.parse::<u64>().ok().filter(|s| !s.is_multiple_of(2)) else {
+        return (digits, n);
+    };
+    for (other, halfway) in [
+        (s - 1, s.checked_mul(10).map(|tens| tens - 5)),
+        (s + 1, s.checked_mul(10).map(|tens| tens + 5)),
+    ] {
+        let other_digits = other.to_string();
+        let reads_back = || {
+            format!("{other_digits}e{}", n - k)
+                .parse::<f64>()
+                .is_ok_and(|other| other.to_bits() == value.to_bits())
+        };
+        if other_digits.len() == digits.len()
+            && halfway.is_some_and(|halfway| is_exactly(value, halfway, n - k - 1))
+            && reads_back()
+        {
+            return (other_digits, n);
+        }
+    }
+    (digits, n)
+}
+
+/// Whether a binary64 above 0 is exactly d × 10ᵖ, for d above 0.
+///
+/// The binary64 is m × 2^q, m and q of its bits. Two products of powers of 2
+/// and 5 and of integers prime to 10 are equal exactly where those integers
+/// are, and the powers of 2 and of 5 on both sides: m = 2ᵃ 5ᵇ r and
+/// d = 2ᶜ 5ᶠ t are equal times 2^q and 10ᵖ where r = t, a + q = c + p and
+/// b = f + p, by the uniqueness of factorization into primes.
+fn is_exactly(value: f64, digits: u64, power: i32) -> bool {
+    let bits = value.to_bits();
+    let field = i32::try_from(bits >> 52 & 0x7ff).unwrap_or(0);
+    let fraction = bits & ((1 << 52) - 1);
+    // A subnormal's m is its fraction alone, and its q that of the smallest
+    // normal binary64's.
+    let (significand, exponent) = if field == 0 {
+        (fraction, -1074)
+    } else {
+        (fraction | 1 << 52, field - 1075)
+    };
+    let (significand_twos, significand_fives, significand_rest) = split_tens(significand);
+    let (digits_twos, digits_fives, digits_rest) = split_tens(digits);
+    significand != 0
+        && digits != 0
+        && significand_rest == digits_rest
+        && significand_twos + exponent == digits_twos + power
+        && significand_fives == digits_fives + power
+}
+
+/// An integer above 0 as 2ᵃ 5ᵇ r, r prime to 10: a, b and r.
+fn split_tens(integer: u64) -> (i32, i32, u64) {
+    if integer == 0 {
+        return (0, 0, 0);
+    }
+    let twos = integer.trailing_zeros();
+    let mut rest = integer >> twos;
+    let mut fives = 0;
+    while rest.is_multiple_of(5) {
+        rest /= 5;
+        fives += 1;
+    }
+    (i32::try_from(twos).unwrap_or(0), fives, rest)
+}
+
+/// An object: its members in their order, each name once, and where it and
+/// each member's name lie in the text it was read from. Two objects are equal
+/// if their members are, wherever they were read from.
+#[derive(Debug, Clone, Default)]
+pub struct Object {
+    /// The members, in their order.
+    members: Vec<(String, Value)>,
+    /// The offset of each member's name in the text, 0 for a member not read
+    /// from one.
+    offsets: Vec<usize>,
+    /// The offset of the object's opening brace in the text, 0 for an object
+    /// not read from one.
+    start: usize,
+}
+
+impl PartialEq for Object {
+    fn eq(&self, other: &Self) -> bool {
+        self.members == other.members
+    }
+}
 
 impl Object {
+    /// An object of no members.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a member after the others. What writes the object writes the
+    /// members as they were added, a name given twice among them.
+    pub fn push(&mut self, name: impl Into<String>, value: Value) {
+        self.members.push((name.into(), value));
+        self.offsets.push(0);
+    }
+
     /// The value of a member.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Value> {
-        self.0.iter().find(|(member, _)| member == name).map(|(_, value)| value)
+        self.members
+            .iter()
+            .find(|(member, _)| member == name)
+            .map(|(_, value)| value)
+    }
+
+    /// The offset of a member's name in the text the object was read from: of
+    /// its opening quote.
+    #[must_use]
+    pub fn offset(&self, name: &str) -> Option<usize> {
+        let place = self.members.iter().position(|(member, _)| member == name)?;
+        self.offsets.get(place).copied()
+    }
+
+    /// The offset of the object's opening brace in the text it was read from,
+    /// 0 for an object made otherwise.
+    #[must_use]
+    pub const fn start(&self) -> usize {
+        self.start
     }
 
     /// The members, in their order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> {
-        self.0.iter().map(|(name, value)| (name.as_str(), value))
+        self.members.iter().map(|(name, value)| (name.as_str(), value))
+    }
+
+    /// The members, in their order, each with the offset of its name.
+    pub fn iter_offsets(&self) -> impl Iterator<Item = (&str, &Value, usize)> {
+        self.iter()
+            .zip(self.offsets.iter().copied())
+            .map(|((name, value), offset)| (name, value, offset))
     }
 
     /// The number of members.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.members.len()
     }
 
     /// Whether the object has no members.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.members.is_empty()
     }
 }
 
@@ -194,7 +408,7 @@ impl Value {
     fn take_within(&mut self, within: &mut Vec<Self>) {
         match self {
             Self::Array(values) => within.append(values),
-            Self::Object(Object(members)) => within.extend(members.drain(..).map(|(_, value)| value)),
+            Self::Object(object) => within.extend(object.members.drain(..).map(|(_, value)| value)),
             _ => {}
         }
     }
@@ -243,6 +457,15 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// The line and the column of an offset in a text, counted from 1 as an
+/// [`Error`] counts them: the line by the line feeds before it, the column in
+/// characters.
+#[must_use]
+pub fn line_and_column(bytes: &[u8], offset: usize) -> (usize, usize) {
+    let place = Error::at(bytes, offset, "");
+    (place.line, place.column)
+}
+
 /// The value of a JSON text: one value, with white space around it and nothing
 /// else, its arrays and objects nested `max_depth` deep at the most.
 ///
@@ -266,6 +489,7 @@ pub fn parse(bytes: &[u8], max_depth: usize) -> Result<Value, Error> {
                 if open.len() >= max_depth {
                     return Err(reader.error("arrays and objects nested deeper than json.max_depth"));
                 }
+                let start = reader.at;
                 reader.at += 1;
                 reader.skip_space();
                 if bracket == b'[' {
@@ -278,7 +502,7 @@ pub fn parse(bytes: &[u8], max_depth: usize) -> Result<Value, Error> {
                     }
                 } else if reader.peek() == Some(b'}') {
                     reader.at += 1;
-                    Value::Object(Object::default())
+                    Value::Object(Object { start, ..Object::new() })
                 } else {
                     let (name, offset) = reader.name()?;
                     open.push(Open::Object(OpenObject {
@@ -286,6 +510,7 @@ pub fn parse(bytes: &[u8], max_depth: usize) -> Result<Value, Error> {
                         offsets: Vec::new(),
                         name,
                         offset,
+                        start,
                     }));
                     continue;
                 }
@@ -337,7 +562,11 @@ pub fn parse(bytes: &[u8], max_depth: usize) -> Result<Value, Error> {
                             if let Some(offset) = object.repeated() {
                                 return Err(Error::at(bytes, offset, "a name given twice in one object"));
                             }
-                            value = Value::Object(Object(object.members));
+                            value = Value::Object(Object {
+                                members: object.members,
+                                offsets: object.offsets,
+                                start: object.start,
+                            });
                         }
                         _ => {
                             return Err(reader.error("an object's member followed by neither a comma nor its end"));
@@ -367,6 +596,8 @@ struct OpenObject {
     name: String,
     /// The offset of that name.
     offset: usize,
+    /// The offset of the object's opening brace.
+    start: usize,
 }
 
 impl OpenObject {
@@ -592,9 +823,194 @@ impl Reader<'_> {
     }
 }
 
+/// A value as JSON text: each member of an object on a line of its own,
+/// indented two spaces a level, an array of nothing but numbers, strings,
+/// words and empty arrays and objects on one line, each number as its text,
+/// and a line feed at the end.
+///
+/// Each line is indented as deep as it lies, so that the text of a value
+/// nested n levels deep is of the order of n² bytes: the form is for what
+/// people read, which nests a few levels, as the native state and the themes
+/// do. [`write_canonical`] writes any value in a text in proportion to it.
+#[must_use]
+pub fn write(value: &Value) -> String {
+    let mut text = String::new();
+    write_into(value, Form::Lines, &mut text);
+    text.push('\n');
+    text
+}
+
+/// A value in the canonical form of RFC 8785, the JSON Canonicalization
+/// Scheme \[RFC8785\] §3.2: no white space; the members of each object in the
+/// order of their names' UTF-16 code units, compared one by one; each number
+/// as ECMAScript writes its binary64 ([`Number::from_f64`]), but one beyond
+/// binary64's range, which the scheme leaves without a form, as its text; and
+/// each string as [`write`](fn@write) writes it, a quote, a backslash and a control
+/// character escaped and nothing else, as the scheme asks. Values that differ
+/// only in the order of their members, in white space or in how a number is
+/// written give the same text, so that a digest of it identifies what they
+/// hold.
+#[must_use]
+pub fn write_canonical(value: &Value) -> String {
+    let mut text = String::new();
+    write_into(value, Form::Canonical, &mut text);
+    text
+}
+
+/// How [`write_into`] writes a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    /// As [`write`](fn@write) does.
+    Lines,
+    /// As [`write_canonical`] does.
+    Canonical,
+}
+
+/// An array or an object that the writer is in.
+enum Within<'a> {
+    /// An array: its values to come, whether one has been written, and
+    /// whether it is written on one line.
+    Array(std::slice::Iter<'a, Value>, bool, bool),
+    /// An object: its members to come, in the order they are written, and
+    /// whether one has been written.
+    Object(std::vec::IntoIter<&'a (String, Value)>, bool),
+}
+
+/// Writes a value, one level at a time from a stack of the heap, so that a
+/// deep value takes no more of the thread's stack than a shallow one.
+fn write_into(value: &Value, form: Form, text: &mut String) {
+    let lines = form == Form::Lines;
+    let mut within: Vec<Within<'_>> = Vec::new();
+    let mut next = Some(value);
+    loop {
+        if let Some(value) = next.take() {
+            match value {
+                Value::Array(values) if !values.is_empty() => {
+                    text.push('[');
+                    let one_line = !lines || values.iter().all(is_flat);
+                    within.push(Within::Array(values.iter(), false, one_line));
+                }
+                Value::Object(object) if !object.is_empty() => {
+                    text.push('{');
+                    let mut members: Vec<&(String, Value)> = object.members.iter().collect();
+                    if form == Form::Canonical {
+                        members.sort_by(|(one, _), (other, _)| one.encode_utf16().cmp(other.encode_utf16()));
+                    }
+                    within.push(Within::Object(members.into_iter(), false));
+                }
+                flat => write_flat(flat, form, text),
+            }
+        }
+        let level = within.len();
+        let Some(innermost) = within.last_mut() else {
+            return;
+        };
+        match innermost {
+            Within::Array(values, written, one_line) => {
+                let one_line = *one_line;
+                if let Some(value) = values.next() {
+                    if *written {
+                        text.push(',');
+                        if lines && one_line {
+                            text.push(' ');
+                        }
+                    }
+                    if !one_line {
+                        new_line(text, level);
+                    }
+                    *written = true;
+                    next = Some(value);
+                } else {
+                    within.pop();
+                    if !one_line {
+                        new_line(text, level - 1);
+                    }
+                    text.push(']');
+                }
+            }
+            Within::Object(members, written) => {
+                if let Some((name, value)) = members.next() {
+                    if *written {
+                        text.push(',');
+                    }
+                    if lines {
+                        new_line(text, level);
+                    }
+                    *written = true;
+                    write_string(name, text);
+                    text.push_str(if lines { ": " } else { ":" });
+                    next = Some(value);
+                } else {
+                    within.pop();
+                    if lines {
+                        new_line(text, level - 1);
+                    }
+                    text.push('}');
+                }
+            }
+        }
+    }
+}
+
+/// Whether a value is written on one line within an array: one that holds no
+/// value within it.
+fn is_flat(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.is_empty(),
+        Value::Object(object) => object.is_empty(),
+        _ => true,
+    }
+}
+
+/// Starts a line indented two spaces a level.
+fn new_line(text: &mut String, level: usize) {
+    text.push('\n');
+    text.extend(std::iter::repeat_n(' ', 2 * level));
+}
+
+/// Writes a value that holds no value within it.
+fn write_flat(value: &Value, form: Form, text: &mut String) {
+    match value {
+        Value::Null => text.push_str("null"),
+        Value::Bool(true) => text.push_str("true"),
+        Value::Bool(false) => text.push_str("false"),
+        Value::Number(number) => match (form, Number::from_f64(number.value)) {
+            (Form::Canonical, Some(canonical)) => text.push_str(&canonical.text),
+            _ => text.push_str(&number.text),
+        },
+        Value::String(string) => write_string(string, text),
+        Value::Array(_) => text.push_str("[]"),
+        Value::Object(_) => text.push_str("{}"),
+    }
+}
+
+/// Writes a string in quotes: a quote, a backslash and a control character
+/// escaped, as RFC 8259 asks, and every other character as it is.
+fn write_string(string: &str, text: &mut String) {
+    text.push('"');
+    for character in string.chars() {
+        match character {
+            '"' => text.push_str("\\\""),
+            '\\' => text.push_str("\\\\"),
+            '\n' => text.push_str("\\n"),
+            '\r' => text.push_str("\\r"),
+            '\t' => text.push_str("\\t"),
+            '\u{8}' => text.push_str("\\b"),
+            '\u{c}' => text.push_str("\\f"),
+            control if control < ' ' => {
+                let code = u32::from(control);
+                text.push_str("\\u00");
+                text.extend([code >> 4, code & 0xf].map(|nibble| char::from_digit(nibble, 16).unwrap_or('0')));
+            }
+            other => text.push(other),
+        }
+    }
+    text.push('"');
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_MAX_DEPTH, Number, Value, parse};
+    use super::{DEFAULT_MAX_DEPTH, Number, Object, Value, line_and_column, parse, write, write_canonical};
 
     fn number(text: &str) -> Value {
         Value::Number(Number {
@@ -715,6 +1131,158 @@ mod tests {
     }
 
     #[test]
+    fn values_are_written_as_they_read() {
+        let text = br#"{"a": [1, -0.5e+3, "x"], "b": {"c": null, "d": [[], {}, [true]]}, "e": {}}"#;
+        let value = read(text);
+        let written = write(&value);
+        assert_eq!(
+            written,
+            "{\n  \"a\": [1, -0.5e+3, \"x\"],\n  \"b\": {\n    \"c\": null,\n    \"d\": [\n      [],\n      {},\n      [true]\n    ]\n  },\n  \"e\": {}\n}\n"
+        );
+        assert_eq!(read(written.as_bytes()), value);
+        let canonical = write_canonical(&value);
+        assert_eq!(
+            canonical,
+            r#"{"a":[1,-500,"x"],"b":{"c":null,"d":[[],{},[true]]},"e":{}}"#
+        );
+        assert_eq!(
+            read(canonical.as_bytes()),
+            read(br#"{"a": [1, -500, "x"], "b": {"c": null, "d": [[], {}, [true]]}, "e": {}}"#)
+        );
+        assert_eq!(write(&Value::Null), "null\n");
+        assert_eq!(write_canonical(&read(b"[]")), "[]");
+    }
+
+    #[test]
+    fn the_canonical_form_orders_members_by_utf16() {
+        // U+1F600 is D83D DE00 in UTF-16, before U+E000, which UTF-8 and
+        // Unicode's order put first (RFC 8785 §3.2.3).
+        let value = read(
+            "{\"b\": 1, \"\u{e000}\": 5, \"a\": {\"z\": 1E2, \"y\": -0}, \"\u{1f600}\": 4, \"é\": 3, \"1e400\": 1e400}"
+                .as_bytes(),
+        );
+        assert_eq!(
+            write_canonical(&value),
+            "{\"1e400\":1e400,\"a\":{\"y\":0,\"z\":100},\"b\":1,\"é\":3,\"\u{1f600}\":4,\"\u{e000}\":5}"
+        );
+        // The pretty form keeps the order and the numbers' texts.
+        assert!(
+            write(&value)
+                .starts_with("{\n  \"b\": 1,\n  \"\u{e000}\": 5,\n  \"a\": {\n    \"z\": 1E2,\n    \"y\": -0\n  },")
+        );
+    }
+
+    #[test]
+    fn numbers_are_written_as_ecmascript_writes_them() {
+        let text = |value: f64| Number::from_f64(value).map(|number| number.as_text().to_owned());
+        // RFC 8785's Appendix B, by the binary64s' bits, which V8's
+        // JSON.stringify writes the same.
+        for (bits, written) in [
+            (0x0000_0000_0000_0000, "0"),
+            (0x8000_0000_0000_0000, "0"),
+            (0x0000_0000_0000_0001, "5e-324"),
+            (0x8000_0000_0000_0001, "-5e-324"),
+            (0x7fef_ffff_ffff_ffff, "1.7976931348623157e+308"),
+            (0xffef_ffff_ffff_ffff, "-1.7976931348623157e+308"),
+            (0x4340_0000_0000_0000, "9007199254740992"),
+            (0xc340_0000_0000_0000, "-9007199254740992"),
+            (0x4430_0000_0000_0000, "295147905179352830000"),
+            (0x44b5_2d02_c7e1_4af5, "9.999999999999997e+22"),
+            (0x44b5_2d02_c7e1_4af6, "1e+23"),
+            (0x44b5_2d02_c7e1_4af7, "1.0000000000000001e+23"),
+            (0x444b_1ae4_d6e2_ef4e, "999999999999999700000"),
+            (0x444b_1ae4_d6e2_ef4f, "999999999999999900000"),
+            (0x444b_1ae4_d6e2_ef50, "1e+21"),
+            (0x3eb0_c6f7_a0b5_ed8c, "9.999999999999997e-7"),
+            (0x3eb0_c6f7_a0b5_ed8d, "0.000001"),
+            (0x41b3_de43_5555_5553, "333333333.3333332"),
+            (0x41b3_de43_5555_5554, "333333333.33333325"),
+            (0x41b3_de43_5555_5555, "333333333.3333333"),
+            (0x41b3_de43_5555_5556, "333333333.3333334"),
+            (0x41b3_de43_5555_5557, "333333333.33333343"),
+            (0xbecb_f647_612f_3696, "-0.0000033333333333333333"),
+            // Halfway between …206.2 and …206.3, which Rust writes …206.3.
+            (0x4314_3ff3_c1cb_0959, "1424953923781206.2"),
+            // Halfway as well, among the 34 889 of 1 199 867 binary64s that
+            // were so, every one written as V8 writes it.
+            (0x4312_9879_088f_f039, "1308548795726862.2"),
+            (0xc316_fed6_ebaf_054d, "-1618162129551699.2"),
+            (0xc316_6196_c414_4b69, "-1574937412571866.2"),
+        ] {
+            assert_eq!(text(f64::from_bits(bits)).as_deref(), Some(written), "{bits:#018x}");
+        }
+        for (value, written) in [
+            (99.0, "99"),
+            (80.5, "80.5"),
+            (0.1, "0.1"),
+            (1e300, "1e+300"),
+            (2.0_f64.powi(-53), "1.1102230246251565e-16"),
+            (1.5 / 49096.0, "0.00003055238715985009"),
+            (0.001, "0.001"),
+            (1e-7, "1e-7"),
+            (1e20, "100000000000000000000"),
+            (1.234_567_890_123_456_8e20, "123456789012345680000"),
+            (-1.23456e-76, "-1.23456e-76"),
+            (123e-20, "1.23e-18"),
+            (1.0 / 1024.0, "0.0009765625"),
+        ] {
+            assert_eq!(text(value).as_deref(), Some(written));
+            assert_eq!(
+                read(written.as_bytes()).as_f64().map(f64::to_bits),
+                Some(value.to_bits())
+            );
+        }
+        assert_eq!(text(f64::NAN), None);
+        assert_eq!(text(f64::INFINITY), None);
+        assert_eq!(text(f64::NEG_INFINITY), None);
+        assert_eq!(Number::from_f64(-0.0).map(|number| number.as_f64().to_bits()), Some(0));
+        let number = Number::from_u64(u64::MAX);
+        assert_eq!(
+            (number.as_text(), number.as_u64()),
+            ("18446744073709551615", Some(u64::MAX))
+        );
+    }
+
+    #[test]
+    fn strings_are_written_with_their_escapes() {
+        let string = "a\"\\/\u{8}\u{c}\n\r\t\u{1}\u{1f}\u{7f}é\u{1f600}";
+        let written = write_canonical(&Value::String(string.to_owned()));
+        assert_eq!(written, "\"a\\\"\\\\/\\b\\f\\n\\r\\t\\u0001\\u001f\u{7f}é\u{1f600}\"");
+        assert_eq!(read(written.as_bytes()).as_str(), Some(string));
+        assert_eq!(write(&Value::String(string.to_owned())), format!("{written}\n"));
+    }
+
+    #[test]
+    fn objects_keep_where_they_and_their_names_are() {
+        let text = b"{\n  \"a\": 1,\n  \"\xe3\x81\x8b\": {\"b\": 2},\n  \"c\": [{}]\n}";
+        let value = read(text);
+        let object = value.as_object().expect("an object");
+        assert_eq!((object.start(), object.offset("a")), (0, Some(4)));
+        let offset = object.offset("\u{304b}").expect("a member");
+        assert_eq!(line_and_column(text, offset), (3, 3));
+        let inner = object.get("\u{304b}").and_then(Value::as_object).expect("an object");
+        assert_eq!(line_and_column(text, inner.start()), (3, 8));
+        assert_eq!(
+            inner.offset("b").map(|offset| line_and_column(text, offset)),
+            Some((3, 9))
+        );
+        let empty = object
+            .get("c")
+            .and_then(Value::as_array)
+            .and_then(|c| c[0].as_object())
+            .expect("an object");
+        assert_eq!(line_and_column(text, empty.start()), (4, 9));
+        assert_eq!(object.offset("d"), None);
+        let offsets: Vec<usize> = object.iter_offsets().map(|(_, _, offset)| offset).collect();
+        assert_eq!(offsets, [4, 14, 33]);
+        // Equal members are equal objects, wherever they were read from.
+        let mut built = Object::new();
+        built.push("b", read(b"2"));
+        assert_eq!(built.start(), 0);
+        assert_eq!(&Value::Object(built), object.get("\u{304b}").expect("a member"));
+    }
+
+    #[test]
     fn nesting_is_limited_and_takes_no_stack() {
         let deep = |depth: usize| [vec![b'['; depth], vec![b']'; depth]].concat();
         assert!(parse(&deep(DEFAULT_MAX_DEPTH), DEFAULT_MAX_DEPTH).is_ok());
@@ -733,7 +1301,16 @@ mod tests {
             levels += 1;
         }
         assert_eq!(levels, depth - 1);
+        // Written canonically, in a text as long as the one read. Written in
+        // lines, each indented as deep as it lies, it would take some 2 n²
+        // bytes, 2 TB here: the lines are tried at a thousand levels, 2 MB.
+        assert_eq!(write_canonical(&value).len(), 2 * depth);
         drop(value);
+        assert_eq!(write(&read(b"[[[]]]")), "[\n  [[]]\n]\n");
+        let thousand = parse(&deep(1000), 1000).expect("deep JSON");
+        let lines = write(&thousand);
+        assert!(lines.len() < 2 * 1000 * 1000 + 4 * 1000);
+        assert_eq!(parse(lines.as_bytes(), 1000).as_ref(), Ok(&thousand));
         let objects = [b"{\"a\":".repeat(depth), b"null".to_vec(), b"}".repeat(depth)].concat();
         drop(parse(&objects, depth).expect("deep JSON"));
     }

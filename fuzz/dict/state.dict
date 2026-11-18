@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# What libFuzzer may put into the inputs of the `state` target (-dict): the
+# members of a state and some of a part's, a choice's name, JSON's
+# punctuation and words, and numbers at the ends of the ranges and beyond.
+
+format="\"format\""
+format_name="\"keptone-state\""
+version="\"version\""
+settings="\"settings\""
+tuning="\"tuning\""
+scale="\"scale\""
+keyboard_mapping="\"keyboard_mapping\""
+parts="\"parts\""
+part_count="\"part.count\""
+automatic="\"auto\""
+voice_name="\"voice.name\""
+digest="\"patch.sha256\""
+rate="\"voice.op6.eg.rate.1\""
+algorithm="\"voice.algorithm\""
+wave="\"voice.lfo.wave\""
+switch="\"voice.op1.on\""
+function="\"function.polyphony\""
+part_on="\"part.on\""
+note_shift="\"part.note_shift\""
+supplement="\"supplement.op1.scaling_mode\""
+supplement_switch="\"supplement.unison\""
+offset="\"fractional_scaling.op1.offset\""
+levels="\"fractional_scaling.op1.levels\""
+later="\"later\""
+open_object="{"
+close_object="}"
+open_array="["
+close_array="]"
+colon=":"
+comma=","
+true="true"
+false="false"
+null="null"
+negative_zero="-0"
+ninety_nine="99"
+beyond="1e400"
+minus="-128"
+largest_u64="18446744073709551615"

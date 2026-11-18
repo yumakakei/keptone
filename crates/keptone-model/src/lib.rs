@@ -50,13 +50,15 @@
 //! - [`json`]: the subset of JSON that the native state and the themes are
 //!   written in, read by hand, nested as deep as `json.max_depth` lets it be
 //!   without taking the thread's stack;
-//! - [`sha256`]: the digest the native state carries of its voice;
+//! - [`sha256`]: the digest the native state carries of each patch;
 //! - [`scala`]: Scala's scales and keyboard mappings, `.scl` and `.kbm`, the
-//!   tuning of docs/MATH.md §2.1.
+//!   tuning of docs/MATH.md §2.1;
+//! - [`state`]: the native state, every setting, the tuning's Scala files and
+//!   every part with its patch, read from its text and written as it, what a
+//!   later version adds kept and written back.
 //!
-//! The native state comes later in the milestone. Every parser is total: any
-//! bytes give a value or an error, never a panic and never an unbounded
-//! allocation.
+//! Every parser is total: any bytes give a value or an error, never a panic
+//! and never an unbounded allocation.
 #![forbid(unsafe_code)]
 
 pub mod dx7ii;
@@ -69,6 +71,7 @@ pub mod performance;
 pub mod scala;
 pub mod settings;
 pub mod sha256;
+pub mod state;
 pub mod supplement;
 pub mod syx;
 pub mod tx802;

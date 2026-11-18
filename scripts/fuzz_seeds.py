@@ -26,11 +26,13 @@ operators' switches and of every function parameter, the presses of the DX7's pa
 [AJXS-ROM], switches of the DX7II's switch remote, the TX7's changes of a performance, of its own settings and of its
 operator select, the DX7II's changes of a supplement, a performance and the system set-up, the DX7s's system reset, dump
 requests [DX7II-MANUAL] [TX7-MANUAL], a performance under format number 2 and a condition acknowledge, with some out of
-range and some of no kind read. fuzz/seeds/json/ holds JSON texts of the subset that the native state is to be written
-in: an object of settings and values nested a few levels, with an integer of 64 bits; strings with every escape, a
+range and some of no kind read. fuzz/seeds/json/ holds JSON texts of the subset that the native state is written in:
+an object of settings and values nested a few levels, with an integer of 64 bits; strings with every escape, a
 surrogate pair and characters of several scripts; arrays and objects nested a few levels; and numbers at the ends of
 binary64's range. fuzz/seeds/scl/ and fuzz/seeds/kbm/ hold scales and keyboard mappings of Scala's: equal steps in
-cents, just intonation in ratios, the three ends of a line, ISO 8859-1, a linear mapping and keys left unmapped. The
+cents, just intonation in ratios, the three ends of a line, ISO 8859-1, a linear mapping and keys left unmapped.
+fuzz/seeds/state/ holds native states, written by native_state.py from docs/STATE-FORMAT.md and docs/MATH.md §17 alone:
+the state that Keptone starts in, a state of random values in three parts, and a state of one part (state_seeds). The
 script writes the same bytes every time.
 """
 
@@ -38,7 +40,9 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
+import native_state
 from binary64 import splitmix64
+from native_state import Raw
 
 ROOT = Path(__file__).resolve().parent.parent
 SEEDS = ROOT / "fuzz" / "seeds"
@@ -204,6 +208,7 @@ def main() -> int:
     write(SEEDS / "json", json_seeds())
     write(SEEDS / "scl", scl_seeds())
     write(SEEDS / "kbm", kbm_seeds())
+    write(SEEDS / "state", state_seeds())
     return 0
 
 
@@ -597,6 +602,59 @@ def json_seeds() -> dict[str, bytes]:
         "escapes.json": escapes.encode(),
         "nesting.json": nesting.encode(),
         "numbers.json": numbers.encode(),
+    }
+
+
+def state_seeds() -> dict[str, bytes]:
+    """The seeds of the state target: the state that Keptone starts in; a state of random values in three parts, the
+    first with a supplement, the second with a fractional scaling and the third with both, with the Scala files of a
+    scale and a keyboard mapping, voices' names of quotation marks, backslashes and control characters, and members of a
+    later version at every level, among them numbers written as no writer of Keptone writes them and members of a patch,
+    which its digest takes in; and a state of one part, on."""
+    initial = native_state.initial_state()
+    single = native_state.initial_state()
+    single["settings"]["part.count"] = 1
+    single["parts"] = single["parts"][:1]
+    return {
+        "initial.json": native_state.write(initial),
+        "random.json": native_state.write(random_state(splitmix64(5))),
+        "single.json": native_state.write(single),
+    }
+
+
+def random_state(numbers: Iterator[int]) -> dict:
+    """A state of random values in three parts, as state_seeds says."""
+    members = native_state.part_members()
+    settings = {name: native_state.random_setting(numbers, written) for name, written, _ in native_state.settings()}
+    settings["part.count"] = 3
+    settings["later.setting"] = Raw("1.50E+1")
+    parts = []
+    for index in range(3):
+        values = {
+            member.name: native_state.random_value(numbers, member.kind)
+            for member in members
+            if index != 1 or not member.name.startswith("supplement.")
+        }
+        values["voice.name"] = "".join(chr(next(numbers) % 128) for _ in range(7)) + '"\\\x7f'
+        if index > 0:
+            for operator in range(1, 7):
+                offset = native_state.random_value(numbers, ("number", 0.0, 255.0)) - 128.0
+                values[f"fractional_scaling.op{operator}.offset"] = offset
+                levels = [native_state.random_value(numbers, ("number", 0.0, 255.0)) for _ in range(40)]
+                values[f"fractional_scaling.op{operator}.levels"] = levels
+        later = {"part.later": [], "voice.later": Raw("-0"), "patch.later": {"b": Raw("1E2"), "a": [True, None]}}
+        parts.append(native_state.part(values, later if index == 2 else {}))
+    return {
+        "format": "keptone-state",
+        "version": 1,
+        "settings": settings,
+        "tuning": {
+            "scale": scl_seeds()["equal.scl"].decode(),
+            "keyboard_mapping": kbm_seeds()["twelve.kbm"].decode(),
+            "later.tuning": "kept",
+        },
+        "parts": parts,
+        "later": {"kept": [Raw("1E2"), True, None, Raw("-0.0")], "nested": {"\u00e9": {}}},
     }
 
 

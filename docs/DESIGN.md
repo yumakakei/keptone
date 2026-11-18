@@ -351,13 +351,13 @@ These are listed in expected order of benefit, and are to be measured first:
 
 ### 11.1 Native state
 
-Specified in `docs/STATE-FORMAT.md`, which is written in milestone M2.
+Specified in `docs/STATE-FORMAT.md`, and read and written by `keptone_model::state`.
 
-- A text document in a **subset of JSON**, as planned for ADLplug-Next's successor: UTF-8, no duplicate keys, numbers as decimal binary64 written shortest-round-trip, no NaN or Inf, a nesting depth limit set by the parser (`json.max_depth`, default 64).
-- A format version; every part, with its patch (a voice with its supplement and fractional scaling) and every parameter by stable ID; the system set-up; every setting; the tunings and micro tunings the parts play in; optional memories, of voices, performances, micro tunings and fractional scalings, from which program changes select; and a SHA-256 of the canonical encoding of each patch.
-- The parser and writer are written by hand, in kiral's practice; there is no serde. The parser, `keptone_model::json`, is kiral's, made to keep the arrays and objects it is in on a stack of its own, so that no depth the limit allows takes the thread's stack, and to give the line and the column of an error; it keeps a number's text beside its binary64, so that a 64-bit integer such as `lfo.seed` reads exactly. `keptone_model::sha256` is kiral's SHA-256.
-- Unknown keys are kept and written back, so newer versions round-trip through older ones.
-- A host state that fails to parse leaves the plugin unchanged and is reported.
+- A text document in a **subset of JSON** [RFC8259], as planned for ADLplug-Next's successor: UTF-8, no duplicate keys, numbers as decimal binary64 written shortest-round-trip, as ECMAScript writes them [ECMA-262], no NaN or Inf, a nesting depth limit set by the parser (`json.max_depth`, default 64).
+- A format name and version; every setting, by its name; the tuning's Scala files, kept as their texts; and every part, with what it has of its own, its function data and its patch (a voice with its supplement and fractional scaling), each parameter by its stable name, beside which `docs/STATE-FORMAT.md` gives its ID (§7.4). Each patch carries the SHA-256 [FIPS-180-4] of its members in the canonical form of RFC 8785 [RFC8785], which identifies it whatever order its members are in and however its numbers are written. The system set-up, the micro tunings that the parts play in, and the optional memories of voices, performances, micro tunings and fractional scalings, from which program changes select, enter the state with the milestones that give them their meaning (M5, M9a).
+- The parser and writer are written by hand, in kiral's practice; there is no serde. The parser, `keptone_model::json`, is kiral's, made to keep the arrays and objects it is in on a stack of its own, so that no depth the limit allows takes the thread's stack, and to give the line and the column of an error; it keeps a number's text beside its binary64, so that a 64-bit integer such as `lfo.seed` reads exactly, and where an object and each of its members' names begin, so that what the state refuses can be placed. `keptone_model::sha256` is kiral's SHA-256.
+- Unknown keys are kept at every level and written back after the known ones, so newer versions round-trip through older ones; a later version adds members and changes none.
+- A state is read whole or refused whole, with the line, the column and the JSON Pointer [RFC6901] of what it refuses: a member that its version has and it lacks, or a value of another kind than its member's or one that its member does not take, as a number that is not finite (a number beyond its scale is taken, MATH §0.5). A host state that is refused leaves the plugin unchanged and is reported. A patch's digest that is not its members' is reported, and the state is written with theirs.
 
 ### 11.2 Voices, banks and other messages
 

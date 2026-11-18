@@ -7,8 +7,9 @@
 // (LICENSES/GPL-3.0-or-later.txt). It follows kiral's sha256.rs, by the same
 // author, under the same license.
 
-//! SHA-256, as FIPS 180-4 gives it: the digest that the native state carries of
-//! the canonical encoding of its voice (docs/DESIGN.md §11.1).
+//! SHA-256, as FIPS 180-4 gives it \[FIPS-180-4\]: the digest that the native
+//! state carries of each patch, of its members in the canonical form of RFC 8785
+//! (docs/STATE-FORMAT.md §7).
 //!
 //! The message is taken a block of 64 bytes at a time, each block's sixteen
 //! words big-endian, expanded to the 64 of its schedule and mixed into the
