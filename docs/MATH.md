@@ -224,7 +224,7 @@ T(L) = E(L) + O - 4256,\qquad E(L) = 64\lfloor s(L)/2\rfloor
 g = 2^{T/256 - 14}
 ```
 
-[MSFA `exp2.cc`: `Exp2::lookup(level − 14·2²⁴)`; LEVIEN-HW: "linear gain is 2^(value/256)"]. At $`T_{\text{full}}`$, $`g = 2`$. Amplitude modulation and the EG bias (§7.2) subtract from $`T`$ before the exponential.
+[MSFA `exp2.cc`: `Exp2::lookup(level − 14·2²⁴)`; LEVIEN-HW: "linear gain is 2^(value/256)"]. At $`T_{\text{full}}`$, $`g = 2`$. Amplitude modulation and the EG bias (§7.2) subtract from $`T`$ before the exponential. A gain is taken at most $`2^{960}`$, where $`T`$ is $`256 \cdot 974`$, so that every sum of the engine, of fewer than $`2^{62}`$ terms, stays within binary64 (§0.5).
 
 ## 4. Operator envelope (`keptone-engine::eg`)
 
@@ -430,7 +430,7 @@ A performance of the DX1 or the TX7 gives each side, A and B, the function data 
 r = \frac{99s}{15}
 ```
 
-so that 15 gives 99 and the steps between give values between the range's steps. With `firmware`, it is $`r = \lfloor 53s/8\rfloor`$, as the DX7's firmware computes it, the high byte of $`212s`$ shifted left by 3: 0, 6, 13, 19, 26, 33, 39, 46, 53, 59, 66, 72, 79, 86, 92, 99 [AJXS-ROM]. A range written as a sensitivity is $`15r/99`$, which a dump rounds to a step as `syx.export_rounding` says; under either scale, a range given by a step comes back to that step when rounded to the nearest.
+so that 15 gives 99 and the steps between give values between the range's steps. With `firmware`, it is $`r = \lfloor 53s/8\rfloor`$, as the DX7's firmware computes it, the high byte of $`8 \cdot 212s`$: 0, 6, 13, 19, 26, 33, 39, 46, 53, 59, 66, 72, 79, 86, 92, 99 [AJXS-ROM]. A range written as a sensitivity is $`15r/99`$, which a dump rounds to a step as `syx.export_rounding` says; under either scale, a range given by a step comes back to that step when rounded to the nearest; rounded down, ten of the firmware's sixteen do not, those of 1, 2, 3, 4, 6, 7, 9, 11, 12 and 14.
 
 ## 8. Operators and algorithms (`keptone-engine::graph`)
 
@@ -647,6 +647,7 @@ The response is $`\mathrm{sinc}^r(f/f_{\mathrm{e}})`$: at 20 kHz, −0.6 dB per 
 
 - `on`: a fixed minimum-phase FIR at $`f_{\mathrm{e}}`$ inverts $`\mathrm{sinc}^r`$ up to `adaa.droop_eq_hz` (default min(20 kHz, 0.45 $`f_{\mathrm{s}}`$)), with gain capped at +6 dB.
 - `auto` (default): `on` when $`M = 1`$, `off` otherwise.
+- With `adaa.order = 0` there is no droop, and no equaliser runs.
 
 The droop depends on the instantaneous frequency, so the equaliser is exact only for steady partials. The tests measure the residual.
 
@@ -726,14 +727,14 @@ The parts that take a note (§13.5) are served in the order of their indices. A 
 
 ### 13.3 End of a voice
 
-A voice ends when every carrier is in segment 3 with $`T \lt T_{\text{end}}`$, or switched off, its factor at 0 (§8.5), and no key or sustain holds it. Its end is reported to the host (CLAP note-end). It is tested at every engine sample, so that a voice ends at the same sample whatever the blocks (§0.3).
+A voice ends when no key or sustain holds it and every carrier of its graph has ended: switched off, its factor at 0 (§8.5), or in segment 3 or the hold after it, with its envelope's level, $`O`$ included and the amplitude modulation not (§4.7, §7.2), below $`T_{\text{end}}`$. Its end is reported to the host (CLAP note-end). It is tested at every engine sample, so that a voice ends at the same sample whatever the blocks (§0.3).
 
 ### 13.4 Subnormals and stopping
 
 No recursive state is allowed to decay into subnormals:
 
 - A gain is 0 where its envelope's level lies below $`T_{\text{end}}`$ (§4.6), and at least $`10^{-10}`$ above it at the default, before amplitude modulation lowers it by a bounded amount (§7.2).
-- The relaxation state of §9.6 and every decimator state are set to exact zero when their voice or the whole engine has been silent for `engine.idle_s` (default 0.5 s), counted in engine samples from the one at which they fell silent.
+- The relaxation state of §9.6 and every decimator state are set to exact zero when their voice, or the whole engine, has been silent for $`\lceil\texttt{engine.idle\_s}\cdot f_{\mathrm{e}}\rceil`$ engine samples, `engine.idle_s` 0.5 s by default, counted from the first at which it is silent: a voice is silent where every operator's gain is 0 (§4.6, §8.5), and the engine where every voice is silent or has ended.
 - In addition, at every engine sample $`n`$ that is a multiple of 64, counted from the engine's first, every IIR state whose magnitude is below $`2^{-500}`$ is set to zero. The rule is a function of the state and of $`n`$ alone, so block independence (§0.3) holds.
 
 ### 13.5 Parts
@@ -756,9 +757,9 @@ A part plays one patch on the notes it takes (DESIGN §6.4). There are `part.cou
 ```
 
 - `output.gain` defaults to 0.5, which puts one full-scale carrier at 0 dBFS.
-- `output.carrier_normalization = none | count | sqrt-count`, default `none` (DX7).
-- The sum above is one part's, and mono (§13.5), its voices taken in the order of the part's slots (§13.2). The output is one port. With `output.channels = stereo`, the default, it has two channels, and each part's sum, scaled by its volume, goes to both, placed by the part's pan: at the centre, its default, the same on both. With `mono` it has one channel, which takes every part's sum, scaled by its volume, without its pan. The port adds the parts in the order of their indices. The pan's law and per-operator pan are later settings; outputs beyond these are the host's, another instance on another track (DESIGN §1).
-- When the host offers 64-bit ports, the output stays binary64. Otherwise it is rounded to nearest binary32 with no dither: the signal's own floor is far below binary32's resolution.
+- `output.carrier_normalization = none | count | sqrt-count`, default `none` (DX7): `count` divides a voice's sum by the number of its graph's carriers, switched off or not, and `sqrt-count` by that number's square root.
+- The sum above is one part's, and mono (§13.5), its voices taken in the order of the part's slots (§13.2). The output is one port. With `output.channels = stereo`, the default, it has two channels, and each part's sum, scaled by its volume, goes to both, placed by the part's pan, as $`((\texttt{output.gain}\cdot S)\cdot v)\cdot q`$ for the part's sum $`S`$, its volume $`v`$ and the pan's gain $`q`$ for the channel: at the centre, the pan's default, $`q = 1`$ on both. With `mono` it has one channel, which takes every part's sum, scaled by its volume, without its pan. The port adds the parts in the order of their indices. The pan's law and per-operator pan are later settings; outputs beyond these are the host's, another instance on another track (DESIGN §1).
+- When the host offers 64-bit ports, the output stays binary64. Otherwise it is rounded to nearest binary32 with no dither: the signal's own floor is far below binary32's resolution. Each product and sum of the output is taken no further than the format's largest finite number, so that a gain, a volume or a pan beyond its scale gives no infinity, and so no NaN.
 - There is no limiter or soft clip; that is the host's business.
 
 ## 15. What is removed, and what is kept
@@ -813,7 +814,8 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 | Alias metric | each patch of `conformance/patches/` rendered at $`f_{\mathrm{s}}`$ and by the reference renderer (`engine.oversampling = 64`, FIR decimation, `adaa.order = 0`); the residual's energy below min(20 kHz, 0.45 $`f_{\mathrm{s}}`$), in dB relative to the signal | regression baselines in `bench/baselines.toml`; may only improve |
 | .syx round trip | every valid dump, parameter change and dump request → model → message; a performance under format 2 is written under 1 | byte-identical |
 | Parsers | random mutations of the seeds (SplitMix64) plus `fuzz/regressions/` on every test run; libFuzzer in CI | never a panic; every input is accepted or rejected |
-| Finiteness | random patches × random event streams × random settings | output always finite; the audio thread never allocates (RTSan) |
+| Finiteness | random patches, their numbers beyond their scales up to ±10³⁰⁰, × random event streams × random settings | output always finite; the audio thread never allocates (RTSan) |
+| Subnormals | inputs that drive the relaxation's lag, dx7-discrete's earlier outputs, the decimators and a decay to level 0 toward the subnormals | no subnormal reached; the states zeroed at the samples §13.4 names |
 
 ## 17. Settings index
 
