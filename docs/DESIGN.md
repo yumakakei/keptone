@@ -128,8 +128,8 @@ The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbi
   main ◄── ring(Retired objects to drop) ◄──────────────────────────────────┘
 ```
 
-- **Ownership only moves; it is never shared.** A `CompiledPatch` is built on the main thread and published through a triple-buffer mailbox (latest wins), one for each part (§6.4). The audio thread takes it at a block boundary or at the event's sample, and returns the previous one through the retire ring. Memory is freed on the main thread.
-- **Commands** (note events from the GUI keyboard, settings that need no reallocation) go through a bounded SPSC ring. A full ring is reported, never waited on.
+- **Ownership only moves; it is never shared.** A `CompiledPatch` is built on the main thread and published through a triple-buffer mailbox (latest wins), one for each part (§6.4). The audio thread takes it as an event (MATH §0.3): a host's change at its own sample, and one published from the main thread at the first sample of the block in which the audio thread finds it, which is the instant it enters the engine's input. It returns the previous one through the retire ring. Memory is freed on the main thread.
+- **Commands** (note events from the GUI keyboard, settings that need no reallocation) go through a bounded SPSC ring, and the audio thread stamps each at the first sample of the block in which it takes it. A full ring is reported, never waited on.
 - **Reallocation** (voice count, part count, the output's channels, oversampling, operator count) needs CLAP's `deactivate`/`activate`. Changing these settings asks the host to restart the plugin (`clap_host.request_restart`).
 - **Host SysEx and MIDI** arrive on the audio thread inside `process`. They are copied raw into a bounded ring (no parsing), decoded on the main thread, and come back as a `CompiledPatch` or `Command`. Real-time notes and controllers are handled on the audio thread from fixed-size events.
 - **ADLplug-Next's rule** carries over: if the audio thread ever has to touch something the main thread may be rebuilding, it *tries* the lock and plays silence for that block if it cannot get it. The design aims to need no lock at all. Any `try_lock` that remains carries a comment giving its reason (cf. ADLplug-Next `sources/utility/realtime.h`).
@@ -142,7 +142,7 @@ The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbi
 
 - Every table lookup of MATH §2–§7 is resolved into binary64 coefficients.
 - The algorithm graph is reduced to SCCs, an evaluation order, ADAA offsets $`s_k`$ (MATH §10.5) and delay-line requirements.
-- The Kapteyn tables are prepared if any operator might need them (MATH §9.5). Large tables are built on the worker thread and swapped in when ready; until then the point solver is used.
+- The Kapteyn tables are prepared if any operator might need them (MATH §9.5). Large tables are built on the worker thread before the patch that needs them is published, so that a patch reaches the audio thread complete and no output depends on when the worker finishes (MATH §0.2).
 
 ### 6.2 Render loop (audio thread)
 
@@ -158,7 +158,7 @@ Each voice holds the compiled patch of its part, so voices of different parts sh
 
 ### 6.3 Determinism
 
-Nothing in the engine reads time, thread identity or the address of an allocation. Random sources are SplitMix64 streams seeded from settings and the voice's start sample.
+Nothing in the engine reads time, thread identity or the address of an allocation, and everything it does happens at an engine sample that its input determines (MATH §0.3). Random sources are SplitMix64 streams seeded from settings and the voice's start sample.
 
 ### 6.4 Parts and the family
 

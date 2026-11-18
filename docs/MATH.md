@@ -22,8 +22,9 @@ Keptone computes an **ideal DX7**: the continuous-time signal that the DX7's par
 | --- | --- | --- |
 | time | seconds | $`t`$ |
 | host sample rate | Hz | $`f_{\mathrm{s}}`$ |
-| engine sample rate | Hz | $`f_{\mathrm{e}} = M f_{\mathrm{s}}`$ (§11; $`M = 1`$ by default) |
+| engine sample rate | Hz | $`f_{\mathrm{e}} = M f_{\mathrm{s}}`$ (§11; $`M`$ is `engine.oversampling`, 2 by default) |
 | sample index at the engine rate | integer, `u64` | $`n`$, $`t_n = n / f_{\mathrm{e}}`$ |
+| instant | an engine sample and a binary64 fraction of one | $`(n, \eta)`$, $`t = (n + \eta)/f_{\mathrm{e}}`$, $`0 \le \eta \lt 1`$ |
 | frequency | Hz | $`f`$ |
 | pitch | octaves (log₂ Hz) | $`p = \log_2\,f`$ |
 | phase | **turns** (1 turn = 2π rad), binary64 | $`\theta`$ |
@@ -47,8 +48,8 @@ Keptone computes an **ideal DX7**: the continuous-time signal that the DX7's par
 
 ### 0.3 Two independences the implementation guarantees
 
-1. **Sample-rate independence.** Every law below is written in seconds and hertz. Rendering one input at 44.1, 48, 96 or 192 kHz gives signals that agree in the audible band to within the tolerances of §16. The only exception is a setting documented as rate-dependent (for example `feedback.model = dx7-discrete`, §9.6).
-2. **Block independence.** The output does not depend on how the host splits time into blocks. Events act at their sample position. No quantity is updated once per block. Every per-segment law (§4–§6) is evaluated in closed form from the segment's start sample, an integer. Rendering one input with random block sizes is bit-identical to rendering it in one block (§16).
+1. **Sample-rate independence.** Every law below is written in seconds and hertz. Rendering one input at 44.1, 48, 96 or 192 kHz gives signals that agree in the audible band to within the tolerances of §16. The control signals are functions of continuous time, between the samples as well (§2.5), and a segment starts where the one before it ends (item 2), so that at the instants two rates share they agree to within the rounding of their evaluation. The only exception is a setting documented as rate-dependent (for example `feedback.model = dx7-discrete`, §9.6).
+2. **Block independence.** The output does not depend on how the host splits time into blocks. The engine's input is a stream of timed events, each at an engine sample and in an order: notes, controllers, the bend, the sustain pedal, per-note pitch, changes of parameters and settings, and a part's new compiled patch (DESIGN §5). The events of a sample act at its instant, in their order, before the sample there is computed: a law they change takes its new form from that instant on. No quantity is updated once per block, and nothing happens at a block's boundary: what the engine tests and resets of its own accord, a voice's end (§13.3), idleness and the flush of tiny states (§13.4), happens at engine samples that the input and the count of samples since the engine's first fix. Every law that runs in segments, the envelopes (§4, §5), the LFO's delay and phase (§6) and the portamento (§7.3), is evaluated in closed form from its segment's start, an instant (§0.1): a segment that ends between two samples starts the next at the instant it ends, and a sample at or after that instant takes the new segment. Rendering one input with random block sizes is bit-identical to rendering it in one block (§16).
 
 ### 0.4 Provenance and the duty to verify
 
@@ -155,7 +156,7 @@ Each operator keeps $`\theta_k \in [0, 1)`$ in binary64. Per engine sample: $`\t
 \Delta = \int_{t_{n-1}}^{t_n} f_k\,\mathrm{d}\tau
 ```
 
-computed exactly for the piecewise-defined $`p_{\text{mod}}`$. When the pitch is linear in time over the sample (the EG laws of §5), the integral of $`2^{p}`$ is closed-form. Otherwise a 3-point Gauss–Legendre rule is used. Its error is far below binary64 resolution for audio-rate pitch changes; this is checked in §16. The phase is also evaluated at **fractional** times $`t_n - s`$ for delay alignment (§10.5), from the same closed forms.
+computed for $`p_{\text{mod}}`$ as the functions of continuous time that §2.4 sums, between the samples too. The integral is split at every instant inside the sample where one of them has a corner or a jump: a corner of the pitch envelope, a corner or an edge of the LFO's wave (§6.2), the end of a stage of the LFO's delay (§6.4) and the end of a glide. On a piece where the pitch is linear in time, as the pitch envelope makes it (§5), the integral of $`2^{p}`$ is in closed form; on any other piece a 3-point Gauss–Legendre rule is used, whose error is far below binary64's resolution for audio-rate pitch changes (§16). A signal that jumps takes its new value from the jump's instant on. The phase is also evaluated at **fractional** times $`t_n - s`$ for delay alignment (§10.5), from the same closed forms.
 
 The drift over a note is bounded by the rounding of the additions: under $`\sqrt{N}\cdot 2^{-53}`$ turns after $`N`$ samples, about $`10^{-11}`$ turns after an hour at 192 kHz. A compensated (two-sum) accumulator is a setting `osc.phase_accumulator = plain | compensated`, default `plain`.
 
@@ -219,7 +220,7 @@ g = 2^{T/256 - 14}
 
 ## 4. Operator envelope (`keptone-engine::eg`)
 
-State: the segment index $`i \in \{0, 1, 2, 3\}`$ (targets L1…L4), the start sample $`n_0`$, and the start level $`T_0`$. During a segment, $`T(t)`$ is the closed form below evaluated at $`t = (n - n_0)/f_{\mathrm{e}}`$. It is never an accumulated sum (§0.3).
+State: the segment index $`i \in \{0, 1, 2, 3\}`$ (targets L1…L4), the segment's start, an instant $`(n_0, \eta_0)`$ (§0.1), and the start level $`T_0`$. During a segment, $`T`$ at the engine sample $`n`$ is the closed form below evaluated at $`t = (n - n_0 - \eta_0)/f_{\mathrm{e}}`$, the time since the start. It is never an accumulated sum (§0.3). A segment that reaches its target, or a wait that ends (§4.4), starts the next at that instant, between two samples where it falls there.
 
 ### 4.1 Rate
 
@@ -271,7 +272,7 @@ t^{\ast} = \frac{256}{\rho}\,\ln\,\frac{T^{\ast} - T_0}{T^{\ast} - T_{\text{targ
 
 ### 4.4 Segments that do not move
 
-When a segment's target equals the current level, or segment 0 has L1 = 0, the DX7 waits a rate-dependent time before advancing. Patches use this as a delay. MSFA has a partial measured table (`statics`, rates < 77, in samples at 44.1 kHz; 20·(99 − R) above that; 1/20 of the time for the first segment) [MSFA `ACCURATE_ENVELOPE`; verify, complete from AJXS-ROM]. `eg.static_segments = dx7 | none`, default `dx7`. Durations are converted to seconds.
+When a segment's target equals the current level, or segment 0 has L1 = 0, the DX7 waits a rate-dependent time before advancing. Patches use this as a delay. MSFA has a partial measured table (`statics`, rates < 77, in samples at 44.1 kHz; 20·(99 − R) above that; 1/20 of the time for the first segment) [MSFA `ACCURATE_ENVELOPE`; verify, complete from AJXS-ROM]. `eg.static_segments = dx7 | none`, default `dx7`. Durations are converted to seconds, and a wait ends at its instant (§0.3).
 
 ### 4.5 Key events
 
@@ -287,7 +288,7 @@ An EG level of 0 targets $`-\infty`$, so the decay continues past $`T_{\mathrm{m
 
 ### 4.7 Live parameter changes
 
-A change to a rate or level during a segment re-anchors the closed form at the current sample, from the current $`T`$, toward the new target at the new speed. A change to output level, scaling or velocity sensitivity moves $`O`$, and so every target. `param.level_glide_s`, default 0.002, ramps $`O`$ linearly in $`T`$ over that time, so host automation does not click. Set it to 0 to switch instantly.
+A change to a rate or level during a segment re-anchors the closed form at the change's instant (§0.3), from the $`T`$ there, toward the new target at the new speed. A change to output level, scaling or velocity sensitivity moves $`O`$, and so every target. `param.level_glide_s`, default 0.002, ramps $`O`$ linearly in $`T`$ over that time, so host automation does not click. Set it to 0 to switch instantly.
 
 ## 5. Pitch envelope (`keptone-engine::peg`)
 
@@ -305,7 +306,7 @@ P_{\text{EG}} \in [-4, +4]\ \text{octaves},\qquad \text{level}(L) = \text{pt}[L]
 
 ### 6.1 Frequency
 
-$`f_{\text{LFO}} = \text{lf}[\text{SPEED}]`$ Hz, with lf MSFA's measured `lfoSource` table (0.0625 Hz … 49.26 Hz) [MSFA `lfo.cc`; verify]. A fractional speed interpolates in $`\log\,f`$. The LFO phase is in turns, like §2.5.
+$`f_{\text{LFO}} = \text{lf}[\text{SPEED}]`$ Hz, with lf MSFA's measured `lfoSource` table (0.0625 Hz … 49.26 Hz) [MSFA `lfo.cc`; verify]. A fractional speed interpolates in $`\log\,f`$. The LFO's phase is in turns, $`\phi = \phi_0 + f_{\text{LFO}}\cdot(t - t_0)`$ in closed form from its last start $`t_0`$, an instant (§0.1): the engine's first sample, where $`\phi = 0`$, a key-on that resets it (§6.5), or a change of speed, which carries the phase over without a jump.
 
 ### 6.2 Waveforms, $`\ell \in [-1, 1]`$
 
@@ -317,7 +318,7 @@ $`f_{\text{LFO}} = \text{lf}[\text{SPEED}]`$ Hz, with lf MSFA's measured `lfoSou
 | sine | $`\sin\,2\pi\phi`$ |
 | sample & hold | a new value at each wrap of the phase, held for one cycle |
 
-Waveform edges are not band-limited: the LFO is a control signal, evaluated per engine sample.
+Waveform edges are not band-limited: the LFO is a control signal, a function of continuous time whose corners and edges split the phase's integral (§2.5); at an edge it takes its new value from the edge's instant on.
 
 ### 6.3 Random source
 
@@ -646,15 +647,15 @@ $`\exp_2(z)`$: split $`z = k + r`$ with $`r \in [-1/2, 1/2]`$, evaluate a minima
 
 ### 13.3 End of a voice
 
-A voice ends when every carrier is in segment 3 with $`T \lt T_{\text{end}}`$ and no key or sustain holds it. Its end is reported to the host (CLAP note-end).
+A voice ends when every carrier is in segment 3 with $`T \lt T_{\text{end}}`$ and no key or sustain holds it. Its end is reported to the host (CLAP note-end). It is tested at every engine sample, so that a voice ends at the same sample whatever the blocks (§0.3).
 
 ### 13.4 Subnormals and stopping
 
 No recursive state is allowed to decay into subnormals:
 
 - Gains are bounded below by $`T_{\text{end}}`$, so $`g \ge 2^{-33}`$ at the default.
-- The relaxation state of §9.6 and every decimator state are set to exact zero when their voice or the whole engine has been silent for `engine.idle_s` (default 0.5 s).
-- In addition, at each block boundary every IIR state whose magnitude is below $`2^{-500}`$ is set to zero. The rule is a deterministic function of the state, so block independence (§0.3) still holds: the check runs at fixed sample multiples of 64 at the engine rate, not at host block boundaries.
+- The relaxation state of §9.6 and every decimator state are set to exact zero when their voice or the whole engine has been silent for `engine.idle_s` (default 0.5 s), counted in engine samples from the one at which they fell silent.
+- In addition, at every engine sample $`n`$ that is a multiple of 64, counted from the engine's first, every IIR state whose magnitude is below $`2^{-500}`$ is set to zero. The rule is a function of the state and of $`n`$ alone, so block independence (§0.3) holds.
 
 ### 13.5 Parts
 
@@ -714,8 +715,8 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 | Kapteyn coefficients | against mpmath for n ≤ 2000, β on a grid (`scripts/kapteyn_references.py`): the DFT up to β = 0.95, the table of the defaults inside its domain; Kapteyn's inequality and the tail bound on the same references | ≤ 1e-15 absolute |
 | Series vs point solution | where both apply and the tail is negligible | ≤ 1e-14 |
 | EG | closed form vs high-precision integration of the ODE; segment times vs §4.3's $`t^{\ast}`$ | ≤ 1e-12 relative |
-| Sample-rate independence | the same input at 44.1, 48, 96 and 192 kHz; envelopes compared at common times; spectra compared below 20 kHz | EG/LFO/pitch ≤ 1e-12; audio band: see the alias metric |
-| Block independence | random block splits vs one block | **bit-identical** |
+| Sample-rate independence | the same input at 44.1, 48, 96 and 192 kHz, its events on the grid of 1/300 s that the four rates share; each voice's control values ($`T_k`$, $`p_k`$, $`P_{\text{EG}}`$, $`\ell`$, $`w`$ and its segments' instants), read through a probe of the tests, against mpmath references at each rate's own samples, and the rates against one another at the instants they share; the audio at those instants where every law is in closed form, and its spectrum below 20 kHz where one is integrated step by step (§9.6) | each control value within a bound from rounding analysis, absolute in its unit, its derivation beside the test; the audio within the bound of its phases' rounding; the spectrum: see the alias metric |
+| Block independence | random block splits, with events and new compiled patches at random samples, vs one block | **bit-identical** |
 | Kernel contracts | every form (portable and vector) at every ISA level (with Intel SDE where the runner lacks it) vs the high-precision reference | each kernel's stated bound (§0.2), e.g. ≤ 1 ulp for sin2pi |
 | Reproducibility | same build, same kernels, same settings and input, rendered twice in different processes with different thread timing | **bit-identical** |
 | Forms agree on the engine | a full render with `engine.kernels = auto` vs `portable`, non-chaotic patches | ≤ the error budget the contracts imply (derived per patch class; start at −200 dBFS) |
