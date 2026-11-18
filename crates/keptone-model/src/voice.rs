@@ -423,6 +423,31 @@ impl Operator {
         }
     }
 
+    /// Sets one of its parameters to a value, as [`Voice::set_value`] does.
+    fn set_value(&mut self, field: OperatorField, value: f64) -> bool {
+        let curve = |value| step_of(value, 4).and_then(Curve::from_step);
+        match field {
+            OperatorField::Rate(i) => set(&mut self.envelope.rates[i], value),
+            OperatorField::Level(i) => set(&mut self.envelope.levels[i], value),
+            OperatorField::BreakPoint => set(&mut self.break_point, value),
+            OperatorField::LeftDepth => set(&mut self.left_depth, value),
+            OperatorField::RightDepth => set(&mut self.right_depth, value),
+            OperatorField::LeftCurve => curve(value).map(|curve| self.left_curve = curve).is_some(),
+            OperatorField::RightCurve => curve(value).map(|curve| self.right_curve = curve).is_some(),
+            OperatorField::RateScaling => set(&mut self.rate_scaling, value),
+            OperatorField::AmplitudeSensitivity => set(&mut self.amplitude_sensitivity, value),
+            OperatorField::VelocitySensitivity => set(&mut self.velocity_sensitivity, value),
+            OperatorField::OutputLevel => set(&mut self.output_level, value),
+            OperatorField::Mode => step_of(value, 2)
+                .and_then(Mode::from_step)
+                .map(|mode| self.mode = mode)
+                .is_some(),
+            OperatorField::Coarse => set(&mut self.coarse, value),
+            OperatorField::Fine => set(&mut self.fine, value),
+            OperatorField::Detune => set(&mut self.detune, value),
+        }
+    }
+
     /// Sets one of its parameters to a step, or to the parameter's largest if
     /// the step is more.
     fn set_step(&mut self, field: OperatorField, step: u8) {
@@ -513,6 +538,49 @@ impl Voice {
         }
     }
 
+    /// The voice a part starts with (MATH §13.5): the DX7's VOICE INIT, the
+    /// voice its firmware 1.8 sets up for one to be made \[AJXS-ROM\]. OP1
+    /// alone is heard, at output level 99, as a sine at the key's pitch: every
+    /// envelope rises at once to 99, holds it while the key is down and falls
+    /// at once to 0 when it is let go, and the LFO, at speed 35, modulates
+    /// nothing until a controller brings it in.
+    #[must_use]
+    pub fn init() -> Self {
+        let full = Value::saturating(99);
+        let operator = Operator {
+            envelope: Envelope {
+                rates: [full; 4],
+                levels: [full, full, full, Value::ZERO],
+            },
+            coarse: Value::saturating(1),
+            detune: Value::saturating(7),
+            ..Operator::ZERO
+        };
+        let mut operators = [operator; 6];
+        operators[0].output_level = full;
+        Self {
+            operators,
+            pitch_envelope: Envelope {
+                rates: [full; 4],
+                levels: [Value::saturating(50); 4],
+            },
+            algorithm: Algorithm(1),
+            feedback: Value::ZERO,
+            oscillator_sync: true,
+            lfo: Lfo {
+                speed: Value::saturating(35),
+                delay: Value::ZERO,
+                pitch_depth: Value::ZERO,
+                amplitude_depth: Value::ZERO,
+                sync: true,
+                wave: Wave::Triangle,
+            },
+            pitch_sensitivity: Value::saturating(3),
+            transpose: Value::saturating(24),
+            name: Name(*b"INIT VOICE"),
+        }
+    }
+
     /// A parameter's value: its [`Value`], or the step of an enumeration, a
     /// switch or a byte of the name; the operators' switches as the six bits
     /// that parameter 155 carries, OP1's the highest.
@@ -585,6 +653,54 @@ impl Voice {
         }
         step <= parameter.largest()
     }
+
+    /// Sets a parameter to a value, if it is one the parameter takes: a number
+    /// of its scale, which may lie between the steps, for a [`Value`]; the step
+    /// of an enumeration, the algorithm's among them; and 0 or 1 for a switch.
+    /// The result says whether it did. A value it does not take, and every
+    /// value of a byte of the name and of the switches, which are set by other
+    /// means, leave the voice as it was.
+    pub fn set_value(&mut self, parameter: Parameter, value: f64) -> bool {
+        match parameter.field() {
+            Field::Operator(k, field) => self.operators[k].set_value(field, value),
+            Field::PitchRate(i) => set(&mut self.pitch_envelope.rates[i], value),
+            Field::PitchLevel(i) => set(&mut self.pitch_envelope.levels[i], value),
+            Field::Algorithm => step_of(value, 32)
+                .and_then(Algorithm::from_step)
+                .map(|algorithm| self.algorithm = algorithm)
+                .is_some(),
+            Field::Feedback => set(&mut self.feedback, value),
+            Field::OscillatorSync => switch_of(value).map(|on| self.oscillator_sync = on).is_some(),
+            Field::LfoSpeed => set(&mut self.lfo.speed, value),
+            Field::LfoDelay => set(&mut self.lfo.delay, value),
+            Field::LfoPitchDepth => set(&mut self.lfo.pitch_depth, value),
+            Field::LfoAmplitudeDepth => set(&mut self.lfo.amplitude_depth, value),
+            Field::LfoSync => switch_of(value).map(|on| self.lfo.sync = on).is_some(),
+            Field::LfoWave => step_of(value, 6)
+                .and_then(Wave::from_step)
+                .map(|wave| self.lfo.wave = wave)
+                .is_some(),
+            Field::PitchSensitivity => set(&mut self.pitch_sensitivity, value),
+            Field::Transpose => set(&mut self.transpose, value),
+            Field::Name(_) | Field::Switches => false,
+        }
+    }
+}
+
+/// Sets a value of a scale to a number, if the number is on the scale, and
+/// says whether it did.
+fn set<const MAX: u8>(place: &mut Value<MAX>, value: f64) -> bool {
+    Value::new(value).map(|value| *place = value).is_some()
+}
+
+/// The step a number is, if it is an integer below `count`, −0 being 0.
+pub(crate) fn step_of(value: f64, count: u8) -> Option<u8> {
+    (value.fract() == 0.0 && (0.0..f64::from(count)).contains(&value)).then(|| small_integer(value))
+}
+
+/// The switch a number is: 0 off and 1 on.
+pub(crate) fn switch_of(value: f64) -> Option<bool> {
+    step_of(value, 2).map(|step| step == 1)
 }
 
 /// A parameter of a voice, by the number that the DX7's single-voice dump and

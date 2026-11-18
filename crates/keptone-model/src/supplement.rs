@@ -42,6 +42,27 @@ pub enum ScalingMode {
     Fractional,
 }
 
+impl ScalingMode {
+    /// The mode of a step, if the step is 0 or 1.
+    #[must_use]
+    pub const fn from_step(step: u8) -> Option<Self> {
+        match step {
+            0 => Some(Self::Normal),
+            1 => Some(Self::Fractional),
+            _ => None,
+        }
+    }
+
+    /// Its step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::Fractional => 1,
+        }
+    }
+}
+
 /// An operator's part of the supplement.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OperatorSupplement {
@@ -64,6 +85,31 @@ pub enum PitchEgRange {
     HalfOctave,
 }
 
+impl PitchEgRange {
+    /// The range of a step, if the step is 0 to 3.
+    #[must_use]
+    pub const fn from_step(step: u8) -> Option<Self> {
+        match step {
+            0 => Some(Self::EightOctaves),
+            1 => Some(Self::FourOctaves),
+            2 => Some(Self::OneOctave),
+            3 => Some(Self::HalfOctave),
+            _ => None,
+        }
+    }
+
+    /// Its step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        match self {
+            Self::EightOctaves => 0,
+            Self::FourOctaves => 1,
+            Self::OneOctave => 2,
+            Self::HalfOctave => 3,
+        }
+    }
+}
+
 /// How a key starts the LFO, by its step: the LFO key trigger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LfoTrigger {
@@ -71,6 +117,27 @@ pub enum LfoTrigger {
     Single,
     /// 1: an LFO for each key.
     Multi,
+}
+
+impl LfoTrigger {
+    /// The trigger of a step, if the step is 0 or 1.
+    #[must_use]
+    pub const fn from_step(step: u8) -> Option<Self> {
+        match step {
+            0 => Some(Self::Single),
+            1 => Some(Self::Multi),
+            _ => None,
+        }
+    }
+
+    /// Its step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        match self {
+            Self::Single => 0,
+            Self::Multi => 1,
+        }
+    }
 }
 
 /// Which notes the pitch bend bends, by its step \[DX7S-MANUAL\] pp. 55,
@@ -89,6 +156,31 @@ pub enum BendMode {
     /// 3: every note whose key is held, and not those the foot switch
     /// sustains.
     KeyOn,
+}
+
+impl BendMode {
+    /// The mode of a step, if the step is 0 to 3.
+    #[must_use]
+    pub const fn from_step(step: u8) -> Option<Self> {
+        match step {
+            0 => Some(Self::Normal),
+            1 => Some(Self::Lowest),
+            2 => Some(Self::Highest),
+            3 => Some(Self::KeyOn),
+            _ => None,
+        }
+    }
+
+    /// Its step.
+    #[must_use]
+    pub const fn step(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::Lowest => 1,
+            Self::Highest => 2,
+            Self::KeyOn => 3,
+        }
+    }
 }
 
 /// How far a controller modulates the pitch and the amplitude and biases the

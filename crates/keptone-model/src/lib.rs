@@ -25,6 +25,14 @@
 //!   tunings and its fractional scalings, and their numbers;
 //! - [`tx802`]: the TX802's performances, of eight tone generators, and its
 //!   system set-up, and their numbers;
+//! - [`patch`]: what a part plays, a voice with the supplement and the
+//!   fractional scaling it has;
+//! - [`part`]: a part, the notes it takes, its function data and its patch,
+//!   and how it starts;
+//! - [`settings`]: the settings of docs/MATH.md §17, each with the values it
+//!   takes and its default;
+//! - [`id`]: the parameters' stable numbers and names, the IDs a host knows
+//!   them by, and a part's parameters read and set by them;
 //! - [`syx`]: the DX7's system-exclusive messages and its family's, read from
 //!   `.syx` files and from hosts, however many a file holds, and written back
 //!   byte for byte: the dumps of voices, of the DX7II's supplements and of
@@ -50,9 +58,13 @@
 
 pub mod dx7ii;
 pub mod function;
+pub mod id;
 pub mod json;
+pub mod part;
+pub mod patch;
 pub mod performance;
 pub mod scala;
+pub mod settings;
 pub mod sha256;
 pub mod supplement;
 pub mod syx;

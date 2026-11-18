@@ -176,6 +176,40 @@ pub struct Function {
 }
 
 impl Function {
+    /// The function data a part starts with (MATH §13.5), the DX7 having none
+    /// of its own: its firmware 1.8 keeps the function data in the memory its
+    /// battery holds, and at power-up only takes a pitch bend's range or step
+    /// above 12 and a portamento time above 99 to 0 \[AJXS-ROM\]. Keys play
+    /// several voices, the pitch bend bends two semitones without steps, the
+    /// portamento retains and takes no time, and the modulation wheel brings
+    /// in the LFO's pitch modulation over its full range; no other controller
+    /// is assigned.
+    #[must_use]
+    pub fn initial() -> Self {
+        let none = Controller {
+            range: Value::ZERO,
+            assign: Assign::default(),
+        };
+        Self {
+            polyphony: Polyphony::Poly,
+            pitch_bend_range: Value::saturating(2),
+            pitch_bend_step: Value::ZERO,
+            portamento_mode: PortamentoMode::Retain,
+            glissando: false,
+            portamento_time: Value::ZERO,
+            modulation_wheel: Controller {
+                range: Value::saturating(99),
+                assign: Assign {
+                    pitch: true,
+                    ..Assign::default()
+                },
+            },
+            foot_controller: none,
+            breath_controller: none,
+            aftertouch: none,
+        }
+    }
+
     /// A parameter's value: its [`Value`], or the step of an enumeration, a
     /// switch or an assignment.
     #[must_use]
