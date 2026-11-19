@@ -18,7 +18,10 @@
 //! It is filled in milestones M3 and M4 (docs/DESIGN.md §16). So far:
 //!
 //! - [`graph`]: the order in which a voice evaluates its operators, a graph's
-//!   strongly connected components, for any graph.
+//!   strongly connected components, for any graph;
+//! - [`pitch`]: the laws of pitch and frequency, from the key after
+//!   transposition and 12-TET to an operator's ratio, detune and fixed pitch.
 #![forbid(unsafe_code)]
 
 pub mod graph;
+pub mod pitch;

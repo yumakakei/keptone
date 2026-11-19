@@ -17,6 +17,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+keptone-math = { path = "../keptone-math" }
 keptone-model = { path = "../keptone-model" }
 
 [lints]
