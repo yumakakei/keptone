@@ -6,12 +6,13 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! sin2pi, cos2pi and exp2 against CORE-MATH's correctly rounded `cr_sinpi`,
-//! `cr_cospi` and `cr_exp2` (docs/MATH.md §16: within 1 ulp, on 10⁸ random
-//! inputs and the special points).
+//! sin2pi, cos2pi, exp2, exp2m1, log2 and log2p1 against CORE-MATH's correctly
+//! rounded `cr_sinpi`, `cr_cospi`, `cr_exp2`, `cr_exp2m1`, `cr_log2` and
+//! `cr_log2p1` (docs/MATH.md §16: within 1 ulp, on 10⁸ random inputs and the
+//! special points).
 //!
 //! The oracle is a C program, `tests/oracle/core_math_oracle.c`, that the test
-//! compiles with Clang (`KEPTONE_CLANG`, else `clang` on PATH) and the three
+//! compiles with Clang (`KEPTONE_CLANG`, else `clang` on PATH) and the six
 //! files of CORE-MATH it calls, from `thirdparty/core-math` (`ci/core-math.sh`
 //! fetches them), and talks to through pipes: inputs on its standard input, the
 //! correctly rounded results on its standard output.
@@ -30,7 +31,9 @@ use std::sync::OnceLock;
 use std::thread;
 
 use common::{SplitMix64, ulp_error};
-use keptone_math::{cos2pi, exp2, sin2pi};
+use core::f64::consts::SQRT_2;
+
+use keptone_math::{cos2pi, exp2, exp2m1, log2, log2p1, sin2pi};
 
 /// What one comparison takes: the oracle's function, ours, the argument the
 /// oracle is given for an input, the random inputs and the special points.
@@ -89,6 +92,45 @@ fn exp2_against_core_math() {
         seed: 0x6578_7032,
     });
     assert!(worst.ulp <= 1.0, "exp2: {worst:?}");
+}
+
+#[test]
+fn exp2m1_against_core_math() {
+    let worst = compare(&Case {
+        oracle: "exp2m1",
+        ours: exp2m1,
+        argument: |z| z,
+        random: exponents_minus_one,
+        specials: exponent_minus_one_specials,
+        seed: 0x6578_7032_6d31,
+    });
+    assert!(worst.ulp <= 1.0, "exp2m1: {worst:?}");
+}
+
+#[test]
+fn log2_against_core_math() {
+    let worst = compare(&Case {
+        oracle: "log2",
+        ours: log2,
+        argument: |x| x,
+        random: positives,
+        specials: logarithm_specials,
+        seed: 0x6c6f_6732,
+    });
+    assert!(worst.ulp <= 1.0, "log2: {worst:?}");
+}
+
+#[test]
+fn log2p1_against_core_math() {
+    let worst = compare(&Case {
+        oracle: "log2p1",
+        ours: log2p1,
+        argument: |x| x,
+        random: above_minus_one,
+        specials: log2p1_specials,
+        seed: 0x6c6f_6732_7031,
+    });
+    assert!(worst.ulp <= 1.0, "log2p1: {worst:?}");
 }
 
 /// Random phases in turns: a half of them uniform on (−1, 1); a quarter
@@ -155,6 +197,151 @@ fn exponent_specials() -> Vec<f64> {
         specials.extend([z, z.next_up(), z.next_down()]);
     }
     specials.extend([f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1e300, -1e300]);
+    specials
+}
+
+/// Random exponents for exp2m1: a quarter uniform over [−1100, 1030),
+/// overflow included and −1 reached; a quarter small, spread over the binades
+/// below 1/2, the subnormals included, where 2^z − 1 is near 0; a quarter
+/// uniform on (−60, 60), where 2^z and 1 cancel or round together; a quarter
+/// next to a multiple of 1/2 within ±64, where the reduction's k changes.
+fn exponents_minus_one(rng: &mut SplitMix64) -> f64 {
+    match rng.below(4) {
+        0 => rng.unit().mul_add(2130.0, -1100.0),
+        1 => rng.binades(1023 - 2),
+        2 => rng.unit().mul_add(120.0, -60.0),
+        _ => f64::from(i32::try_from(rng.below(257)).expect("below 257") - 128) / 2.0 + rng.binades(1023 - 4),
+    }
+}
+
+fn exponent_minus_one_specials() -> Vec<f64> {
+    let mut specials = vec![
+        0.0,
+        -0.0,
+        f64::from_bits(1),
+        -f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        1e-300,
+        -1e-300,
+    ];
+    for z in [
+        0.5,
+        -0.5,
+        1.0,
+        -1.0,
+        1.5,
+        -1.5,
+        2.0_f64.powi(-60),
+        53.0,
+        54.0,
+        -53.0,
+        -53.5,
+        -54.0,
+        -54.5,
+        1023.0,
+        1023.5,
+        1024.0,
+        -1022.0,
+        -1074.0,
+        -1076.0,
+        -1100.0,
+    ] {
+        let z: f64 = z;
+        specials.extend([z, z.next_up(), z.next_down()]);
+    }
+    specials.extend([f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1e300, -1e300]);
+    specials
+}
+
+/// 2^k for a random k of [−1022, 1023].
+fn power(rng: &mut SplitMix64) -> f64 {
+    f64::from_bits((1 + rng.below(2046)) << 52)
+}
+
+/// A positive x moved by a random number of ulps, from −8 to 8.
+fn nudge(x: f64, rng: &mut SplitMix64) -> f64 {
+    f64::from_bits((x.to_bits() + rng.below(17)) - 8)
+}
+
+/// Random arguments of log2, every one positive: a quarter spread over every
+/// binade, from the subnormals to the largest; a quarter uniform on [1/2, 2),
+/// where log2 x is small or the reduction's split moves; a quarter within
+/// 8 ulp of √2 times a power of two, where the split chooses m; a quarter
+/// within 8 ulp of a power of two.
+fn positives(rng: &mut SplitMix64) -> f64 {
+    match rng.below(4) {
+        0 => rng.binades(2046).abs(),
+        1 => 1.5_f64.mul_add(rng.unit(), 0.5),
+        2 => {
+            let x = SQRT_2 * power(rng);
+            nudge(x, rng)
+        }
+        _ => {
+            let x = power(rng);
+            nudge(x, rng)
+        }
+    }
+}
+
+fn logarithm_specials() -> Vec<f64> {
+    let mut specials = vec![0.0, -0.0, f64::from_bits(1), f64::MIN_POSITIVE, f64::MAX, 1e-300, 1e300];
+    for x in [1.0, 2.0, 0.5, 3.0, 10.0, SQRT_2, SQRT_2 / 2.0, 2.0 * SQRT_2] {
+        let x: f64 = x;
+        specials.extend([x, x.next_up(), x.next_down()]);
+    }
+    specials.extend([-1.0, -f64::MIN_POSITIVE, f64::INFINITY, f64::NEG_INFINITY, f64::NAN]);
+    specials
+}
+
+/// Random arguments of log2p1, every one above −1: a quarter uniform on
+/// (−1, 1); a quarter small, spread over the binades below 1/2, the
+/// subnormals included, of either sign; a quarter above −1 by an amount spread
+/// over the binades below 1/2; a quarter from 1/2 to the largest binary64,
+/// spread over its binades.
+fn above_minus_one(rng: &mut SplitMix64) -> f64 {
+    match rng.below(4) {
+        0 => 2.0_f64.mul_add(rng.unit(), -1.0),
+        1 => rng.binades(1023 - 2),
+        2 => -1.0 + rng.binades(1023 - 2).abs(),
+        _ => f64::from_bits(((1022 + rng.below(1024)) << 52) | (rng.next_u64() >> 12)),
+    }
+}
+
+fn log2p1_specials() -> Vec<f64> {
+    let mut specials = vec![
+        0.0,
+        -0.0,
+        f64::from_bits(1),
+        -f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        -f64::MIN_POSITIVE,
+        1e-300,
+        -1e-300,
+        f64::MAX,
+        1e300,
+    ];
+    // The ends of the range in which log2p1 takes x itself, and points beyond.
+    for x in [
+        SQRT_2 - 1.0,
+        SQRT_2 / 2.0 - 1.0,
+        0.5,
+        -0.5,
+        1.0,
+        -0.75,
+        2.0_f64.powi(53),
+        2.0_f64.powi(-53),
+    ] {
+        let x: f64 = x;
+        specials.extend([x, x.next_up(), x.next_down()]);
+    }
+    specials.extend([
+        -1.0,
+        (-1.0_f64).next_up(),
+        -2.0,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ]);
     specials
 }
 
@@ -245,6 +432,9 @@ fn oracle() -> &'static Path {
             core_math.join("sinpi/sinpi.c"),
             core_math.join("cospi/cospi.c"),
             core_math.join("exp2/exp2.c"),
+            core_math.join("exp2m1/exp2m1.c"),
+            core_math.join("log2/log2.c"),
+            core_math.join("log2p1/log2p1.c"),
         ];
         for source in &functions {
             assert!(

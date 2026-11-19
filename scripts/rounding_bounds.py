@@ -271,6 +271,85 @@ def adaa(
     show("at |h| = 2^-10, at most", remainder * tau2**4 + terms["total"] * U)
 
 
+def binary64(text: str) -> mpmath.mpf:
+    """A binary64 written as a hexadecimal float, as mpmath's."""
+    return mpmath.mpf(float.fromhex(text))
+
+
+def ulp_in_u(v: mpmath.mpf) -> mpmath.mpf:
+    """The spacing of binary64 at |v|, in u, for v normal."""
+    return 2 * mpmath.mpf(2) ** mpmath.floor(mpmath.log(abs(v), 2))
+
+
+def kernel_bound(cs: list[mpmath.mpf], c0: mpmath.mpf, c1: mpmath.mpf, points: list[mpmath.mpf]) -> tuple:
+    """A kernel t (c0 + c1 t + t^2 Q(t)), c0 + c1 t a double-double and t^2 Q rounded: the largest |t^2 Q| beside
+    the sum, the least sum, Horner's bound on Q, and the error of the sum relative to it (u): t^2 Q within Horner's
+    bound and 2u (t^2 and the product), and the one addition that brings it in, u."""
+    ratio = steps = relative = mpmath.mpf(0)
+    least = mpmath.inf
+    for t in points:
+        q, rounding, _ = horner(cs, t)
+        second = abs(t * t * q)
+        total = abs(c0 + c1 * t + t * t * q)
+        least = min(least, total)
+        ratio, steps = max(ratio, second / total), max(steps, rounding)
+        relative = max(relative, second * (rounding + 3) / total)
+    return ratio, least, steps, relative
+
+
+def logarithm(c: Coefficients) -> None:
+    """log2's kernel, t (c0 + c1 t + t^2 Q(t)) for fl(sqrt 2)/2 - 1 <= t < fl(sqrt 2) - 1, t exact."""
+    cs = [c[f"LOG2_{k}"] for k in range(2, 23)]
+    c0, c1 = c["LOG2_0_HI"] + c["LOG2_0_LO"], c["LOG2_1_HI"] + c["LOG2_1_LO"]
+    root = binary64("0x1.6a09e667f3bcdp0")
+    ratio, least, steps, relative = kernel_bound(cs, c0, c1, grid(root / 2 - 1, root - 1))
+    approximation = mpmath.mpf("2.19e-19") / U
+    kernel = relative + approximation
+    print("log2(1 + t), fl(sqrt 2)/2 - 1 <= t < fl(sqrt 2) - 1:")
+    show("t^2 Q beside the sum, at most", ratio)
+    show("the sum, at least", least)
+    show("Q from Horner's steps, within (u)", steps)
+    show("the sum, within (u, relative)", relative)
+    show("with the polynomial's own bound (u, relative)", kernel)
+    # The result is the kernel's double-double rounded once (k = 0), or k plus it, summed exactly but for terms of
+    # the order of u^2 and rounded once. |log2(1 + t)| is at most log2(fl(sqrt 2)), a little above 1/2, and
+    # |k + log2(1 + t)| at least 1 - log2(fl(sqrt 2)), a little below: the kernel's error is at most its own
+    # relative error times |log2(1 + t)| u, beside an ulp of the result of at least u/2 there.
+    top = mpmath.log(root, 2)
+    show("|log2(1 + t)|, at most", top)
+    show("log2 and log2p1, error at most (ulp)", kernel * max(1, top / (ulp_in_u(1 - top) / 1)) + mpmath.mpf(0.5))
+
+
+def exponential_minus_one(c: Coefficients) -> None:
+    """exp2m1's kernel, r (c0 + c1 r + r^2 Q(r)) for |r| <= 1/2, r exact."""
+    cs = [c[f"EXP2M1_{k}"] for k in range(2, 12)]
+    c0, c1 = c["EXP2M1_0_HI"] + c["EXP2M1_0_LO"], c["EXP2M1_1_HI"] + c["EXP2M1_1_LO"]
+    ratio, least, steps, relative = kernel_bound(cs, c0, c1, grid(mpmath.mpf(-1) / 2, mpmath.mpf(1) / 2))
+    approximation = mpmath.mpf("2.41e-19") / U
+    kernel = relative + approximation
+    print("2^r - 1, |r| <= 1/2:")
+    show("r^2 Q beside the sum, at most", ratio)
+    show("the sum, at least", least)
+    show("Q from Horner's steps, within (u)", steps)
+    show("the sum, within (u, relative)", relative)
+    show("with the polynomial's own bound (u, relative)", kernel)
+    show("for |z| <= 1/2, error at most (ulp)", kernel + mpmath.mpf(0.5))
+    # Beyond, the result is (2^k - 1) + 2^k D, D = 2^r - 1, summed exactly but for terms of the order of u^2 and
+    # rounded once: D's error is at most its relative error times 2^k |D| u, beside an ulp of the result.
+    worst, at = mpmath.mpf(0), None
+    for k in range(-54, 61):
+        for r in grid(mpmath.mpf(-1) / 2, mpmath.mpf(1) / 2):
+            if k == 0 or (k == 1 and r == mpmath.mpf(-1) / 2) or (k == -1 and r == mpmath.mpf(1) / 2):
+                continue
+            d = mpmath.power(2, r) - 1
+            result = mpmath.power(2, k) * (1 + d) - 1
+            ratio_here = mpmath.power(2, k) * abs(d) / ulp_in_u(result)
+            if ratio_here > worst:
+                worst, at = ratio_here, (k, r)
+    show(f"2^k |D| beside an ulp of the result, at most (u; at k = {at[0]}, r = {mpmath.nstr(at[1], 3)})", worst)
+    show("beyond, error at most (ulp)", kernel * worst + mpmath.mpf(0.5))
+
+
 def main() -> int:
     """Print the report."""
     c = coefficients()
@@ -280,6 +359,8 @@ def main() -> int:
     show("error, at most (ulp)", max(sin_ulp, cos_ulp))
     show("relative error, at most (u)", max(sin_relative, cos_relative))
     exponential(c)
+    exponential_minus_one(c)
+    logarithm(c)
     sinc_series(c)
     prime_ulp = sinc_derivative(c)
     sine_relative = max(sin_relative, cos_relative)

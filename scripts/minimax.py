@@ -45,6 +45,11 @@ DESCRIPTIONS = {
         "(2 pi t - sin 2 pi t)/t^3 on |t| <= 1/4, the Taylor polynomial: c0 + c2 t^2 + ... + c20 t^20",
     ),
     "pi": ("PI", "π"),
+    "log2": (
+        "LOG2",
+        "log2(1 + t)/t for 1/sqrt 2 <= 1 + t < sqrt 2, on [-0.2929, 0.41422]: c0 + c1 t + ... + c22 t^22",
+    ),
+    "exp2m1": ("EXP2M1", "(2^z - 1)/z on |z| <= 1/2: c0 + c1 z + ... + c11 z^11"),
 }
 
 # The head of the module written, which names its copyright holder and license
@@ -133,9 +138,9 @@ def render(version: str, polynomials: dict[str, Polynomial]) -> str:
         f"// The bounds are those of {version}.",
         "",
         "//! The coefficients of the polynomials, as Sollya's fpminimax designed them in",
-        "//! binary64, the leading one of each a double-double (high and low parts), and",
-        "//! the error of each polynomial, with its coefficients as they are, as Sollya's",
-        "//! supnorm certified it: an upper bound over the whole interval.",
+        "//! binary64, the leading one or two of each a double-double (high and low",
+        "//! parts), and the error of each polynomial, with its coefficients as they are,",
+        "//! as Sollya's supnorm certified it: an upper bound over the whole interval.",
         "",
     ]
     for key, polynomial in polynomials.items():
@@ -144,11 +149,9 @@ def render(version: str, polynomials: dict[str, Polynomial]) -> str:
         if polynomial.bound is not None:
             kind, value = polynomial.bound
             lines.append(f"// Certified {kind} error ≤ {short(value)} ({value}).")
-        powers = sorted(polynomial.coefficients)
-        leading = powers[0] if polynomial.lows else None
-        for power in powers:
+        for power in sorted(polynomial.coefficients):
             value = polynomial.coefficients[power]
-            if power == leading:
+            if power in polynomial.lows:
                 lines += constant(f"{name}_{power}_HI", value, f"The coefficient of power {power}, high part.")
                 low = polynomial.lows[power]
                 lines += constant(f"{name}_{power}_LO", low, f"The coefficient of power {power}, low part.")

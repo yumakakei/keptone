@@ -6,12 +6,14 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! The exponential of base 2 (docs/MATH.md §12.3).
+//! The exponential of base 2, and 2^z − 1 (docs/MATH.md §12.3, §12.5).
 
 use crate::coefficients::{
     EXP2_1_HI, EXP2_1_LO, EXP2_2, EXP2_3, EXP2_4, EXP2_5, EXP2_6, EXP2_7, EXP2_8, EXP2_9, EXP2_10, EXP2_11, EXP2_12,
+    EXP2M1_0_HI, EXP2M1_0_LO, EXP2M1_1_HI, EXP2M1_1_LO, EXP2M1_2, EXP2M1_3, EXP2M1_4, EXP2M1_5, EXP2M1_6, EXP2M1_7,
+    EXP2M1_8, EXP2M1_9, EXP2M1_10, EXP2M1_11,
 };
-use crate::eft::{fast_two_sum, two_product};
+use crate::eft::{fast_two_sum, two_product, two_sum};
 
 /// 2^z: within 0.93 ulp of 2^z, and so within 1 ulp of the correctly rounded
 /// result (MATH §12.3, tested against CORE-MATH's `cr_exp2`).
@@ -53,6 +55,56 @@ pub fn exp2(z: f64) -> f64 {
     }
 }
 
+/// 2^z − 1: within 0.62 ulp of 2^z − 1, and so within 1 ulp of the correctly
+/// rounded result (MATH §12.5, tested against CORE-MATH's `cr_exp2m1`).
+///
+/// For |z| ≤ 1/2 the kernel below gives 2^z − 1 as a double-double, within
+/// 0.096u of itself, rounded once: 0.60 ulp. Beyond, z splits exactly into
+/// k + r, k = round(z) and |r| ≤ 1/2, and the kernel gives D = 2^r − 1, so that
+/// 2^z − 1 = (2^k − 1) + 2^k·D: 2^k − 1 is the sum of two binary64 exactly, as
+/// is that and the high part of 2^k·D, an exact scaling; the low parts, below
+/// an ulp of the result, are summed apart and the whole rounded once. D's error
+/// is below 1.18 times its own beside an ulp of the result, the worst at k = 1,
+/// where 2D reaches −0.59 and the result 0.41: 0.62 ulp. Where k is 1024, the
+/// same is done with 2^1023 and 1/2, and the result doubled, exactly but where
+/// it overflows to +∞ as it should. 2^z − 1 is −1 from z = −54 down, within half
+/// an ulp of it, a tie at −54 rounding to −1, which is even. ±0 gives ±0, +∞
+/// gives +∞, −∞ gives −1 and NaN gives NaN, as C23 has them.
+#[must_use]
+pub fn exp2m1(z: f64) -> f64 {
+    if z.is_nan() || z == 0.0 {
+        return z;
+    }
+    if z >= 1024.0 {
+        return f64::INFINITY;
+    }
+    if z <= -54.0 {
+        return -1.0;
+    }
+    if z.abs() <= 0.5 {
+        let (excess, excess_lo) = exp2m1_kernel(z);
+        return excess + excess_lo;
+    }
+    let k = z.round_ties_even();
+    let (excess, excess_lo) = exp2m1_kernel(z - k);
+    // k is an integer of [−54, 1024], which i64 holds exactly.
+    #[expect(
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        reason = "k is an integer within ±2^11, which i64 holds exactly"
+    )]
+    let k = k as i64;
+    let (scale, one, twice) = if k > 1023 {
+        (power_of_two(1023), 0.5, true)
+    } else {
+        (power_of_two(k), 1.0, false)
+    };
+    let (base, base_lo) = two_sum(scale, -one);
+    let (sum, sum_lo) = two_sum(base, scale * excess);
+    let result = sum + (sum_lo + (base_lo + scale * excess_lo));
+    if twice { 2.0 * result } else { result }
+}
+
 /// 2^k for k in [−1022, 1023], from its exponent bits.
 fn power_of_two(k: i64) -> f64 {
     f64::from_bits((k + 1023).cast_unsigned() << 52)
@@ -82,9 +134,37 @@ fn exp2_kernel(r: f64) -> f64 {
     s + (s_lo + (a_lo + second))
 }
 
+/// 2^r − 1 for |r| ≤ 1/2, r exact: r times c₀ + c₁r + r²·Q(r), as a
+/// double-double.
+///
+/// c₀ + c₁r is a double-double, its parts exact but for terms of the order of
+/// u². What rounds at the order of u is r²Q, |r²Q| ≤ 0.022 of the sum, which is
+/// at least 0.58: Q from Horner's fused steps within 1.3u, r² and the product u
+/// each, and the one addition that brings it in, with the low parts, u: within
+/// 0.094u of the sum, the polynomial's own bound, 2.41 · 10⁻¹⁹ relative, below
+/// 0.003u. The product by r is exact as a double-double but for the rounding of
+/// its low part, of the order of u². (`scripts/rounding_bounds.py` computes the
+/// numbers.)
+#[inline]
+fn exp2m1_kernel(r: f64) -> (f64, f64) {
+    let mut tail = EXP2M1_11;
+    for c in [
+        EXP2M1_10, EXP2M1_9, EXP2M1_8, EXP2M1_7, EXP2M1_6, EXP2M1_5, EXP2M1_4, EXP2M1_3, EXP2M1_2,
+    ] {
+        tail = tail.mul_add(r, c);
+    }
+    let second = r * r * tail;
+    let (linear, linear_lo) = two_product(EXP2M1_1_HI, r);
+    let linear_lo = EXP2M1_1_LO.mul_add(r, linear_lo);
+    let (sum, sum_lo) = fast_two_sum(EXP2M1_0_HI, linear);
+    let sum_lo = second + (sum_lo + (EXP2M1_0_LO + linear_lo));
+    let (excess, excess_lo) = two_product(r, sum);
+    (excess, r.mul_add(sum_lo, excess_lo))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::exp2;
+    use super::{exp2, exp2m1};
 
     #[test]
     fn exact_points() {
@@ -102,5 +182,27 @@ mod tests {
         assert_eq!(exp2(-1075.0).to_bits(), 0.0_f64.to_bits());
         assert_eq!(exp2(f64::NEG_INFINITY).to_bits(), 0.0_f64.to_bits());
         assert!(exp2(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn exact_points_less_one() {
+        // 2^k − 1 for every integer k that binary64 holds it at, and its
+        // rounding beyond: to 2^k from k = 54 up, to −1 from k = −54 down.
+        for k in -60_i32..1024 {
+            let expected = if k >= 54 {
+                exp2(f64::from(k))
+            } else if k <= -54 {
+                -1.0
+            } else {
+                exp2(f64::from(k)) - 1.0
+            };
+            assert_eq!(exp2m1(f64::from(k)).to_bits(), expected.to_bits(), "exp2m1({k})");
+        }
+        assert_eq!(exp2m1(0.0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(exp2m1(-0.0).to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(exp2m1(1024.0), f64::INFINITY);
+        assert_eq!(exp2m1(f64::INFINITY), f64::INFINITY);
+        assert_eq!(exp2m1(f64::NEG_INFINITY), -1.0);
+        assert!(exp2m1(f64::NAN).is_nan());
     }
 }

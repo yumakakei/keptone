@@ -6,13 +6,13 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 //
-//   core_math_oracle sinpi|cospi|exp2
+//   core_math_oracle sinpi|cospi|exp2|exp2m1|log2|log2p1
 //
 // The correctly rounded functions of CORE-MATH (thirdparty/core-math, MIT) as a
 // filter, for the tests of crates/keptone-math/tests/oracle.rs: binary64
 // inputs on standard input, the function's results on standard output, both in
 // the machine's byte order, until the input ends. The tests compile it with
-// Clang, as C23 with every warning an error, link it with the three files of
+// Clang, as C23 with every warning an error, link it with the six files of
 // CORE-MATH it calls, and talk to it through pipes, so that the oracle needs no
 // foreign-function interface in Rust.
 
@@ -27,19 +27,28 @@
 double cr_sinpi(double);
 double cr_cospi(double);
 double cr_exp2(double);
+double cr_exp2m1(double);
+double cr_log2(double);
+double cr_log2p1(double);
 
 enum { CHUNK = 8192 };
 
 int main(int argc, char **argv) {
+  static const struct {
+    const char *name;
+    double (*function)(double);
+  } functions[] = {
+      {"sinpi", cr_sinpi}, {"cospi", cr_cospi}, {"exp2", cr_exp2},
+      {"exp2m1", cr_exp2m1}, {"log2", cr_log2}, {"log2p1", cr_log2p1},
+  };
   double (*function)(double) = nullptr;
-  if (argc == 2 && strcmp(argv[1], "sinpi") == 0) {
-    function = cr_sinpi;
-  } else if (argc == 2 && strcmp(argv[1], "cospi") == 0) {
-    function = cr_cospi;
-  } else if (argc == 2 && strcmp(argv[1], "exp2") == 0) {
-    function = cr_exp2;
-  } else {
-    fputs("usage: core_math_oracle sinpi|cospi|exp2\n", stderr);
+  for (size_t i = 0; argc == 2 && i < sizeof functions / sizeof functions[0]; i++) {
+    if (strcmp(argv[1], functions[i].name) == 0) {
+      function = functions[i].function;
+    }
+  }
+  if (function == nullptr) {
+    fputs("usage: core_math_oracle sinpi|cospi|exp2|exp2m1|log2|log2p1\n", stderr);
     return 2;
   }
 #ifdef _WIN32

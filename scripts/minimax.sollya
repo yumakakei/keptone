@@ -122,4 +122,30 @@ display = hexadecimal;
 print("coefficient", "pi", "0", round(pi, D, RN));
 print("low", "pi", "0", round(pi - round(pi, D, RN), D, RN));
 
+// log2(1 + t)/t for 1/sqrt 2 <= 1 + t < sqrt 2, the interval a little wider on either side: designed against its
+// series, whose terms from the 76th on are below 3e-31 there, with c0 and c1 double-doubles; certified as the
+// kernel's result t p(t) against log2(1 + t), relative, on either side of t = 0, where both vanish. The relative
+// error is t's continuous function, and moves by far less than 1e-30 over the 2^-59 left out.
+L = 0;
+for k from 0 to 75 do L = L + (-1)^k * x^k / ((k + 1) * log(2));
+mons = [|0, ..., 22|];
+fmts = [|DD, DD|];
+for k from 2 to 22 do fmts = fmts :. D;
+p = fpminimax(L, mons, fmts, [-0.29290; 0.41422], floating, relative);
+e = max(sup(supnorm(x * p, log2(1 + x), [-0.29290; -2^-60], relative, 2^-24)),
+        sup(supnorm(x * p, log2(1 + x), [2^-60; 0.41422], relative, 2^-24)));
+emit("log2", p, mons, "relative", e);
+
+// (2^z - 1)/z for |z| <= 1/2, the same way: against its series, whose terms from the 32nd on are below 1e-50, c0 and
+// c1 double-doubles, certified as z q(z) against 2^z - 1 on either side of 0.
+E = 0; f = 1;
+for k from 0 to 30 do { f = f * (k + 1); E = E + log(2)^(k + 1) * x^k / f; };
+mons = [|0, ..., 11|];
+fmts = [|DD, DD|];
+for k from 2 to 11 do fmts = fmts :. D;
+q = fpminimax(E, mons, fmts, [-1/2; 1/2], floating, relative);
+e = max(sup(supnorm(x * q, 2^x - 1, [-1/2; -2^-60], relative, 2^-24)),
+        sup(supnorm(x * q, 2^x - 1, [2^-60; 1/2], relative, 2^-24)));
+emit("exp2m1", q, mons, "relative", e);
+
 quit;

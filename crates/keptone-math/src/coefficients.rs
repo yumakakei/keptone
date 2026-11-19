@@ -10,9 +10,9 @@
 // The bounds are those of Sollya 8.0.
 
 //! The coefficients of the polynomials, as Sollya's fpminimax designed them in
-//! binary64, the leading one of each a double-double (high and low parts), and
-//! the error of each polynomial, with its coefficients as they are, as Sollya's
-//! supnorm certified it: an upper bound over the whole interval.
+//! binary64, the leading one or two of each a double-double (high and low
+//! parts), and the error of each polynomial, with its coefficients as they are,
+//! as Sollya's supnorm certified it: an upper bound over the whole interval.
 
 // sin 2 pi t on |t| <= 1/8, odd: t (c1 + c3 t^2 + ... + c15 t^14).
 // Certified relative error ≤ 7.05e-20 (7.04532152060832100422602250130998946531235560541972517967224e-20).
@@ -157,3 +157,87 @@ pub(crate) const KEPLER_20: f64 = f64::from_bits(0x3f17_215f_879e_1ac9); // 0x1.
 pub(crate) const PI_0_HI: f64 = f64::from_bits(0x4009_21fb_5444_2d18); // 0x1.921fb54442d18p1
 /// The coefficient of power 0, low part.
 pub(crate) const PI_0_LO: f64 = f64::from_bits(0x3ca1_a626_3314_5c07); // 0x1.1a62633145c07p-53
+
+// log2(1 + t)/t for 1/sqrt 2 <= 1 + t < sqrt 2, on [-0.2929, 0.41422]: c0 + c1 t + ... + c22 t^22.
+// Certified relative error ≤ 2.19e-19 (2.187179793912314059307596195158573948447155999019742012023926e-19).
+/// The coefficient of power 0, high part.
+pub(crate) const LOG2_0_HI: f64 = f64::from_bits(0x3ff7_1547_652b_82fe); // 0x1.71547652b82fep0
+/// The coefficient of power 0, low part.
+pub(crate) const LOG2_0_LO: f64 = f64::from_bits(0x3c77_3b04_5eac_d674); // 0x1.73b045eacd674p-56
+/// The coefficient of power 1, high part.
+pub(crate) const LOG2_1_HI: f64 = f64::from_bits(0xbfe7_1547_652b_82fe); // -0x1.71547652b82fep-1
+/// The coefficient of power 1, low part.
+pub(crate) const LOG2_1_LO: f64 = f64::from_bits(0x3c59_2e1f_20da_9400); // 0x1.92e1f20da94p-58
+/// The coefficient of power 2.
+pub(crate) const LOG2_2: f64 = f64::from_bits(0x3fde_c709_dc3a_0405); // 0x1.ec709dc3a0405p-2
+/// The coefficient of power 3.
+pub(crate) const LOG2_3: f64 = f64::from_bits(0xbfd7_1547_652b_83d1); // -0x1.71547652b83d1p-2
+/// The coefficient of power 4.
+pub(crate) const LOG2_4: f64 = f64::from_bits(0x3fd2_776c_50ef_9250); // 0x1.2776c50ef925p-2
+/// The coefficient of power 5.
+pub(crate) const LOG2_5: f64 = f64::from_bits(0xbfce_c709_dc38_90ec); // -0x1.ec709dc3890ecp-3
+/// The coefficient of power 6.
+pub(crate) const LOG2_6: f64 = f64::from_bits(0x3fca_6176_2a84_06ae); // 0x1.a61762a8406aep-3
+/// The coefficient of power 7.
+pub(crate) const LOG2_7: f64 = f64::from_bits(0xbfc7_1547_65c3_a853); // -0x1.7154765c3a853p-3
+/// The coefficient of power 8.
+pub(crate) const LOG2_8: f64 = f64::from_bits(0x3fc4_84b1_3b7e_88bd); // 0x1.484b13b7e88bdp-3
+/// The coefficient of power 9.
+pub(crate) const LOG2_9: f64 = f64::from_bits(0xbfc2_776c_2e53_e010); // -0x1.2776c2e53e01p-3
+/// The coefficient of power 10.
+pub(crate) const LOG2_10: f64 = f64::from_bits(0x3fc0_c9a8_7b10_9186); // 0x1.0c9a87b109186p-3
+/// The coefficient of power 11.
+pub(crate) const LOG2_11: f64 = f64::from_bits(0xbfbe_c713_525d_0f16); // -0x1.ec713525d0f16p-4
+/// The coefficient of power 12.
+pub(crate) const LOG2_12: f64 = f64::from_bits(0x3fbc_68f4_c6e7_5779); // 0x1.c68f4c6e75779p-4
+/// The coefficient of power 13.
+pub(crate) const LOG2_13: f64 = f64::from_bits(0xbfba_60a9_9c2b_c306); // -0x1.a60a99c2bc306p-4
+/// The coefficient of power 14.
+pub(crate) const LOG2_14: f64 = f64::from_bits(0x3fb8_9e71_13b6_0607); // 0x1.89e7113b60607p-4
+/// The coefficient of power 15.
+pub(crate) const LOG2_15: f64 = f64::from_bits(0xbfb7_1fbf_9e78_33b9); // -0x1.71fbf9e7833b9p-4
+/// The coefficient of power 16.
+pub(crate) const LOG2_16: f64 = f64::from_bits(0x3fb5_cdcf_d805_fb3a); // 0x1.5cdcfd805fb3ap-4
+/// The coefficient of power 17.
+pub(crate) const LOG2_17: f64 = f64::from_bits(0xbfb4_3998_21e9_ab3b); // -0x1.4399821e9ab3bp-4
+/// The coefficient of power 18.
+pub(crate) const LOG2_18: f64 = f64::from_bits(0x3fb2_89eb_d157_19a3); // 0x1.289ebd15719a3p-4
+/// The coefficient of power 19.
+pub(crate) const LOG2_19: f64 = f64::from_bits(0xbfb3_2e41_0749_2eba); // -0x1.32e4107492ebap-4
+/// The coefficient of power 20.
+pub(crate) const LOG2_20: f64 = f64::from_bits(0x3fb6_7156_0a05_dece); // 0x1.671560a05decep-4
+/// The coefficient of power 21.
+pub(crate) const LOG2_21: f64 = f64::from_bits(0xbfb4_08a3_e298_2e25); // -0x1.408a3e2982e25p-4
+/// The coefficient of power 22.
+pub(crate) const LOG2_22: f64 = f64::from_bits(0x3fa0_96a4_3e68_8975); // 0x1.096a43e688975p-5
+
+// (2^z - 1)/z on |z| <= 1/2: c0 + c1 z + ... + c11 z^11.
+// Certified relative error ≤ 2.41e-19 (2.407815229662231667952937419485692771559115499258041381835937e-19).
+/// The coefficient of power 0, high part.
+pub(crate) const EXP2M1_0_HI: f64 = f64::from_bits(0x3fe6_2e42_fefa_39ef); // 0x1.62e42fefa39efp-1
+/// The coefficient of power 0, low part.
+pub(crate) const EXP2M1_0_LO: f64 = f64::from_bits(0x3c7a_90c6_adcf_e194); // 0x1.a90c6adcfe194p-56
+/// The coefficient of power 1, high part.
+pub(crate) const EXP2M1_1_HI: f64 = f64::from_bits(0x3fce_bfbd_ff82_c58f); // 0x1.ebfbdff82c58fp-3
+/// The coefficient of power 1, low part.
+pub(crate) const EXP2M1_1_LO: f64 = f64::from_bits(0xbc64_a698_bf9a_cdd4); // -0x1.4a698bf9acdd4p-57
+/// The coefficient of power 2.
+pub(crate) const EXP2M1_2: f64 = f64::from_bits(0x3fac_6b08_d704_a0c6); // 0x1.c6b08d704a0c6p-5
+/// The coefficient of power 3.
+pub(crate) const EXP2M1_3: f64 = f64::from_bits(0x3f83_b2ab_6fba_4e5f); // 0x1.3b2ab6fba4e5fp-7
+/// The coefficient of power 4.
+pub(crate) const EXP2M1_4: f64 = f64::from_bits(0x3f55_d87f_e78a_40c2); // 0x1.5d87fe78a40c2p-10
+/// The coefficient of power 5.
+pub(crate) const EXP2M1_5: f64 = f64::from_bits(0x3f24_3091_2f87_4782); // 0x1.430912f874782p-13
+/// The coefficient of power 6.
+pub(crate) const EXP2M1_6: f64 = f64::from_bits(0x3eef_fcbf_c6d4_869d); // 0x1.ffcbfc6d4869dp-17
+/// The coefficient of power 7.
+pub(crate) const EXP2M1_7: f64 = f64::from_bits(0x3eb6_2c02_2198_a055); // 0x1.62c022198a055p-20
+/// The coefficient of power 8.
+pub(crate) const EXP2M1_8: f64 = f64::from_bits(0x3e7b_524e_c9d0_c0b6); // 0x1.b524ec9d0c0b6p-24
+/// The coefficient of power 9.
+pub(crate) const EXP2M1_9: f64 = f64::from_bits(0x3e3e_4cfb_5f73_54b5); // 0x1.e4cfb5f7354b5p-28
+/// The coefficient of power 10.
+pub(crate) const EXP2M1_10: f64 = f64::from_bits(0x3dfe_9eae_7316_c369); // 0x1.e9eae7316c369p-32
+/// The coefficient of power 11.
+pub(crate) const EXP2M1_11: f64 = f64::from_bits(0x3dbc_3b20_bcd9_5e70); // 0x1.c3b20bcd95e7p-36

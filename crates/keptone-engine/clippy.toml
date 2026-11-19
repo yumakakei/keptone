@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of Keptone. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# keptone-engine's configuration of clippy, which takes it in place of the
+# workspace's ../../clippy.toml and merges nothing: the workspace's names, and
+# f64's and f32's elementary functions refused. Those call the system's libm,
+# whose results differ between systems and versions; keptone-engine takes
+# keptone-math's instead (docs/MATH.md §12, docs/DESIGN.md §4).
+#
+# Names that documentation writes as names, not as code ("..": and clippy's own).
+doc-valid-idents = ["AArch64", "AppKit", "AUv2", "FreeType", "HarfBuzz", "SysEx", ".."]
+disallowed-methods = [
+    { path = "f64::ln", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::log", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::log2", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::log10", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::ln_1p", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::exp", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::exp2", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::exp_m1", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::powf", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::powi", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::sin", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::cos", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::tan", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::sin_cos", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::asin", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::acos", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::atan", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::atan2", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::sinh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::cosh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::tanh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::asinh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::acosh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::atanh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::cbrt", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f64::hypot", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::ln", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::log", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::log2", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::log10", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::ln_1p", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::exp", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::exp2", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::exp_m1", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::powf", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::powi", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::sin", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::cos", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::tan", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::sin_cos", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::asin", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::acos", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::atan", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::atan2", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::sinh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::cosh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::tanh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::asinh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::acosh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::atanh", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::cbrt", reason = "the system's libm: take keptone-math's (MATH §12)" },
+    { path = "f32::hypot", reason = "the system's libm: take keptone-math's (MATH §12)" },
+]

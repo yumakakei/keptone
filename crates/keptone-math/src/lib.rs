@@ -9,14 +9,18 @@
 //! Keptone's reference functions, scalar and in binary64.
 //!
 //! The numerical methods that docs/MATH.md specifies, each a function in plain
-//! Rust that the engine, the editor and the tests share: those of milestone M1
-//! (docs/DESIGN.md §16). The elementary functions of MATH §12:
+//! Rust that the engine, the editor and the tests share: those of milestones M1
+//! and M3 (docs/DESIGN.md §16). The elementary functions of MATH §12, which the
+//! engine and the tools take in place of the system's libm:
 //!
 //! - [`sin2pi`] and [`cos2pi`], the sine and cosine of a phase in turns, within
 //!   1 ulp of the correctly rounded result;
 //! - [`sinc`], within 2 ulp, and its derivative [`sinc_prime`], within 2 ulp
 //!   where |u| < 1/2 and within an absolute 9 · 2⁻⁵³ elsewhere;
-//! - [`exp2`], the exponential of base 2, within 1 ulp;
+//! - [`exp2`], the exponential of base 2, and [`exp2m1`], 2^z − 1 without the
+//!   cancellation near 0, each within 1 ulp;
+//! - [`log2`], the logarithm of base 2, and [`log2p1`], log₂(1 + x) without the
+//!   rounding of 1 + x, each within 1 ulp;
 //!
 //! the closed forms of antiderivative antialiasing of MATH §10, in [`adaa`]:
 //! [`adaa::first_order`], within 9 · 2⁻⁵³ absolute, and
@@ -47,9 +51,11 @@ mod eft;
 mod exponential;
 pub mod kapteyn;
 pub mod kepler;
+mod logarithm;
 mod sinc;
 mod trig;
 
-pub use exponential::exp2;
+pub use exponential::{exp2, exp2m1};
+pub use logarithm::{log2, log2p1};
 pub use sinc::{sinc, sinc_prime};
 pub use trig::{cos2pi, sin2pi};

@@ -8,7 +8,7 @@
 
 [package]
 name = "keptone-math"
-description = "Keptone's reference functions in binary64: sines and exponentials, antiderivative antialiasing, Kepler's equation and its Kapteyn series"
+description = "Keptone's reference functions in binary64: sines, exponentials and logarithms, antiderivative antialiasing, Kepler's equation and its Kapteyn series"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
