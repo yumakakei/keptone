@@ -88,6 +88,7 @@ Keptone writes the members of each object in the order this document gives them,
 | 50 | `tuning.modulation` | `"pitch"`, `"keys"` |
 | 51 | `feedback.max_substeps` | an integer of at least 1 |
 | 52 | `feedback.relaxation_onset` | a number of at least 0 and below 1 |
+| 53 | `scaling.rate_key` | `"frequency"`, `"level"` |
 
 ## 4. Tuning
 

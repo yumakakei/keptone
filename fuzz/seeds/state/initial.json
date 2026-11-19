@@ -54,7 +54,8 @@
     "scaling.key": "key",
     "tuning.modulation": "pitch",
     "feedback.max_substeps": 64,
-    "feedback.relaxation_onset": 0.9
+    "feedback.relaxation_onset": 0.9,
+    "scaling.rate_key": "frequency"
   },
   "tuning": {
     "scale": null,
