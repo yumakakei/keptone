@@ -101,7 +101,7 @@ y_k(t) = g_k(t)\,\sin(2\pi[\theta_k(t) + \mu_k(t)]),\qquad \theta_k(t) = \theta_
 
 - $`g_k`$ is the envelope gain (§3, §4).
 - $`f_k`$ is the instantaneous frequency (§2).
-- $`\mu_k`$ is the phase modulation, in turns, from the operators that modulate $`k`$ in the algorithm (§8). Modulator amplitude $`1`$ deviates the phase by $`1`$ turn. Full-scale gain is $`g = 2`$, so the full-scale index is 2 turns = $`4\pi`$ rad [MSFA `exp2.cc`, `fm_op_kernel.cc`; verify].
+- $`\mu_k`$ is the phase modulation, in turns, from the operators that modulate $`k`$ in the algorithm (§8). Modulator amplitude $`1`$ deviates the phase by $`1`$ turn. Full-scale gain is $`g = 2`$, so the full-scale index is 2 turns = $`4\pi`$ rad [MSFA `exp2.cc`, `fm_op_kernel.cc`] (VERIFICATION V1): the OPS turns the EGS's 12-bit level $`x`$, in 1/256 of an octave, into an amplitude of $`2^{x/256 - 2}`$ of its output's least step [SHIRRIFF-EXP, LEVIEN-HW], $`x`$ being $`T`$ within 16 steps where the EGS gives the top of its 12 bits for no attenuation (§3.3), and adds the modulation to the index of its sine table, $`2^{12}`$ steps a turn [SHIRRIFF-1, SHIRRIFF-SIN]. A modulator's amplitude in turns is then the gain $`g = 2^{T/256 - 14}`$ of §3.4, where the modulation's least step is the index's.
 - Feedback, where the algorithm has it, is §9.
 - The voice output is the sum of its carriers (§14).
 
@@ -268,7 +268,7 @@ q_i = \mathrm{min}(63, \lfloor 41 R_i / 64\rfloor + \text{RS}(k_{\mathrm{s}})),\
 
 - $`\rho`$ is continuous in real $`q`$: it interpolates $`2^{q/4}`$ linearly between multiples of 4.
 - `eg.clock_hz` is the default 49 096. At $`q = 0`$ the level then falls by one step every 4096 samples of the hardware clock, 0.2819 dB/s [LEVIEN-EG].
-- **verify.** MSFA uses the same per-sample increments normalised to 44 100 Hz, so its envelopes run at 44100/49096 ≈ 0.898 of this speed. One of the two is wrong. Settle it with [AJXS-ROM] and with [MRG-EG]'s measured rate-50 decay (time constant 961 samples at 44.1 kHz). The other value stays available as `eg.clock_hz = 44100`.
+- The DX7's sample clock is 49 096 Hz, its OPS taking 96 operators every 20.368 μs [DX7-SERVICE]. MSFA's envelope applies the same increments at every sample of its own rate [MSFA `env.cc`], so that at 44.1 kHz its speeds are 44 100/49 096 ≈ 0.898 of these: an effect of its sample rate, not a measurement (VERIFICATION V7). `eg.clock_hz = 44100` gives MSFA's speeds.
 - `eg.rate_law = dx7 | exponential`. `exponential` uses $`C\cdot 2^{q/4}`$.
 
 ### 4.2 Decay (target below current)
@@ -458,7 +458,7 @@ so that 15 gives 99 and the steps between give values between the range's steps.
 
 ### 8.1 Algorithm data
 
-The 32 algorithms are data: edges $`j \to k`$, the carrier set, and the feedback edges. Derive them from [DX7-MANUAL]'s chart and check them against two independent encodings, [SHIRRIFF-ALG] and [MSFA]'s `FmCore::algorithms` [verify] (VERIFICATION V16). A test asserts that all three agree in one canonical form, each algorithm's edges, each of unit gain, its carriers and its feedback edges, into which MSFA's flags and the OPS's control bits that [SHIRRIFF-ALG] reads are decoded. Algorithms 4 and 6 have feedback loops that span several operators [MSFA flags; DX7-MANUAL]. The rest have at most a self-loop. A feedback edge whose FB is 0 is not in the graph (§9.1).
+The 32 algorithms are data: edges $`j \to k`$, the carrier set, and the feedback edges. Derive them from [DX7-MANUAL]'s chart and check them against two independent encodings, [SHIRRIFF-ALG] and [MSFA]'s `FmCore::algorithms` (VERIFICATION V16). A test asserts that all three agree in one canonical form, each algorithm's edges, each of unit gain, its carriers and its feedback edges, into which MSFA's flags and the OPS's control bits that [SHIRRIFF-ALG] reads are decoded. Algorithms 4 and 6 have feedback loops that span several operators [MSFA flags; DX7-MANUAL]. The rest have at most a self-loop. A feedback edge whose FB is 0 is not in the graph (§9.1).
 
 ### 8.2 Evaluation order
 
@@ -488,7 +488,7 @@ An operator switched off (parameter 155 [DX7-MANUAL]) gives nothing, as a carrie
 y[n] = g\,\sin\left(2\pi\left(\theta[n] + \kappa\,\frac{y[n-1] + y[n-2]}{2}\right)\right),\qquad \kappa = 2^{\text{FB} - 8}\ \text{turns per unit},\ \text{FB} = 1\dots 7
 ```
 
-FB = 0 means no feedback: the operator has no feedback edge (§8.1). Between the steps κ is interpolated (§0.6), from 0 at FB 0, so that a feedback grows from nothing; above 7 the steps go on as the formula gives them, and below 0 along the first step, so that κ falls below 0 and the feedback is inverted. The mean of the last two outputs is Tomisawa's anti-hunting filter [LEVIEN-HW, AJXS-ANALYSIS, MSFA `compute_fb`; verify κ]. In radians the loop gain is
+FB = 0 means no feedback: the operator has no feedback edge (§8.1). Between the steps κ is interpolated (§0.6), from 0 at FB 0, so that a feedback grows from nothing; above 7 the steps go on as the formula gives them, and below 0 along the first step, so that κ falls below 0 and the feedback is inverted. The mean of the last two outputs is Tomisawa's anti-hunting filter, which the OPS forms in an adder of its own and scales by a power of two for each step of FB [SHIRRIFF-ALG, LEVIEN-HW, AJXS-ANALYSIS, MSFA `compute_fb`]; the scale of κ, MSFA's, is provisional (VERIFICATION V17). In radians the loop gain is
 
 ```math
 \beta = 2\pi\kappa g
