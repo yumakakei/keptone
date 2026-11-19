@@ -500,7 +500,7 @@ These are recorded here and settled by the author (and GRØVeN where it is their
 11. ~~How far the family reaches~~ — **decided: the DX7's six-operator family** (2026-11-17; §6.4).
 12. ~~How many parts by default~~ — **decided: 2** (2026-11-17; §6.4).
 13. ~~The function data or the supplement~~ — **decided: the supplement, as the DX7II** (2026-11-17; MATH §13.5).
-14. **How each law continues beyond its scale** (MATH §0.5): for each law of MATH §2–§14, its formula extended, its table continued, or a limit of the instrument kept; written with the engine (M3) and with the family's sound (M9a).
+14. ~~How each law continues beyond its scale~~ — **decided: its formula as written, its table along its end steps, a limit of the instrument acting on the parameters on their scales** (2026-11-19; MATH §0.5, §0.7).
 
 ## 16. Milestones
 
