@@ -459,11 +459,11 @@ r = \frac{99s}{15}
 
 so that 15 gives 99 and the steps between give values between the range's steps. With `firmware`, it is $`r = \lfloor 53s/8\rfloor`$, as the DX7's firmware computes it, the high byte of $`8 \cdot 212s`$: 0, 6, 13, 19, 26, 33, 39, 46, 53, 59, 66, 72, 79, 86, 92, 99 [AJXS-ROM]. A range written as a sensitivity is $`15r/99`$, which a dump rounds to a step as `syx.export_rounding` says; under either scale, a range given by a step comes back to that step when rounded to the nearest; rounded down, ten of the firmware's sixteen do not, those of 1, 2, 3, 4, 6, 7, 9, 11, 12 and 14.
 
-## 8. Operators and algorithms (`keptone-engine::graph`)
+## 8. Operators and algorithms (`keptone-model::graph`, `keptone-engine::graph`)
 
 ### 8.1 Algorithm data
 
-The 32 algorithms are data: edges $`j \to k`$, the carrier set, and the feedback edges. Derive them from [DX7-MANUAL]'s chart and check them against two independent encodings, [SHIRRIFF-ALG] and [MSFA]'s `FmCore::algorithms` (VERIFICATION V16). A test asserts that all three agree in one canonical form, each algorithm's edges, each of unit gain, its carriers and its feedback edges, into which MSFA's flags and the OPS's control bits that [SHIRRIFF-ALG] reads are decoded. Algorithms 4 and 6 have feedback loops that span several operators [MSFA flags; DX7-MANUAL]. The rest have at most a self-loop. A feedback edge whose FB is 0 is not in the graph (§9.1).
+The 32 algorithms are data: edges $`j \to k`$, the carrier set, and the feedback edges, each algorithm a graph of six operators like any other (§8.4). They are transcribed from the chart printed on the instruments' panels [DX7-PANEL] and checked against two independent encodings, [SHIRRIFF-ALG] and [MSFA]'s `FmCore::algorithms` (VERIFICATION V16). A test asserts that all three agree in one canonical form, each algorithm's edges, each of unit gain, its carriers and its feedback edges, into which `scripts/algorithm_sources.py` decodes MSFA's flags and the OPS's control bits that [SHIRRIFF-ALG] reads. Algorithms 4 and 6 have feedback loops that span several operators, closed by the edges from OP4 and from OP5 to OP6 [DX7-PANEL, SHIRRIFF-ALG, MSFA]. The rest have at most a self-loop. A feedback edge whose FB is 0 is not in the graph (§9.1).
 
 ### 8.2 Evaluation order
 
@@ -479,7 +479,7 @@ The OPS can run a different algorithm in each voice; the DX7 does not use this [
 
 ### 8.4 User graphs
 
-Any directed graph over $`N`$ operators (`graph.operators`, default 6) is accepted. The rules above apply unchanged. A graph comes with its own feedback gains and carrier set (DESIGN §11.2).
+Any directed graph over $`N`$ operators (`graph.operators`, default 6) is accepted: an edge joins any operator to any other, in either direction, or to itself, loops of any length and in any number are allowed, and each edge is a modulation or a feedback edge, as in §8.1. The rules above apply unchanged. A graph comes with its own feedback gains and carrier set (DESIGN §11.2).
 
 ### 8.5 Operator switches
 
@@ -831,6 +831,8 @@ An error in ulp is measured from the correctly rounded result, in units in the l
 | Series vs point solution | where both apply and the tail is negligible | ≤ 1e-14 |
 | Phase increment | §2.5's closed form and its Gauss–Legendre rule against mpmath quadrature, over pitches that move linearly, as a sine and in steps within a sample, and pitches that barely move | within a bound from rounding analysis, beside the test |
 | Relaxation | renders with each sample's substeps doubled, twice, on patches with β from below `feedback.relaxation_onset` to beyond `feedback.max_substeps`'s reach | observed order 2; the error within a bound beside the test |
+| Algorithm data | the table against [MSFA]'s flags and the OPS's ROM as [SHIRRIFF-ALG] reads it, both decoded by `scripts/algorithm_sources.py` (§8.1) | all 32 identical in the canonical form |
+| Evaluation order | §8.2's components and their order for the 32 algorithms, with their feedback edges and without them; for random graphs, against the reachability that Warshall's closure of their edges gives; for a chain and a loop of 200 000 operators | exact |
 | Feedback loops | §9.7's equation's residual over a grid of gains and phases, and iteration counts | as the Kepler solver's |
 | EG | closed form vs high-precision integration of the ODE; segment times vs §4.3's $`t^{\ast}`$ | ≤ 1e-12 relative |
 | Sample-rate independence | the same input at 44.1, 48, 96 and 192 kHz, its events on the grid of 1/300 s that the four rates share; each voice's control values ($`T_k`$, $`p_k`$, $`P_{\text{EG}}`$, $`\ell`$, $`w`$ and its segments' instants), read through a probe of the tests, against mpmath references at each rate's own samples, and the rates against one another at the instants they share; the audio at those instants where every law is in closed form, and its spectrum below 20 kHz where one is integrated step by step (§9.6) | each control value within a bound from rounding analysis, absolute in its unit, its derivation beside the test; the audio within the bound of its phases' rounding; the spectrum: see the alias metric |

@@ -16,5 +16,8 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[dependencies]
+keptone-model = { path = "../keptone-model" }
+
 [lints]
 workspace = true

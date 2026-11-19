@@ -15,6 +15,10 @@
 //! bit-identical however the host splits time into blocks, and the same in the
 //! audible band at every sample rate (MATH §0.3).
 //!
-//! Nothing is here yet: the crate is filled in milestones M3 and M4
-//! (docs/DESIGN.md §16).
+//! It is filled in milestones M3 and M4 (docs/DESIGN.md §16). So far:
+//!
+//! - [`graph`]: the order in which a voice evaluates its operators, a graph's
+//!   strongly connected components, for any graph.
 #![forbid(unsafe_code)]
+
+pub mod graph;

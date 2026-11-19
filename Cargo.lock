@@ -13,6 +13,9 @@ version = "0.1.0"
 [[package]]
 name = "keptone-engine"
 version = "0.1.0"
+dependencies = [
+ "keptone-model",
+]
 
 [[package]]
 name = "keptone-host"

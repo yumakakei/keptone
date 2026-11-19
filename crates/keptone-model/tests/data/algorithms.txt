@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Written by scripts/algorithm_sources.py; do not edit.
+#
+# The DX7's 32 algorithms as two encodings give them, each decoded into the
+# canonical form of docs/MATH.md §8.1:
+#
+#   msfa  the table `algorithms` of [MSFA]'s app/src/main/jni/fm_core.cc;
+#   ops   the OPS's algorithm ROM as [SHIRRIFF-ALG] reads it from the die.
+#
+# Each line: the source, the algorithm, then its modulations j>k (operator j
+# modulates operator k in the same sample), its feedback edges j>k (j's output
+# modulates k a sample later on the DX7) and its carriers, the three lists
+# separated by "|", "-" for an empty one.
+#
+# SHA-256 of fm_core.cc read: 5039002970c22183944aa9719b3342231ceee441244b8a7dfdf039d2fafaa07d
+# SHA-256 of the post read:   ce6130082ac4bf72ca35a9e6c61fa37db871ea85a51d38701b2ac3271ab4dcf5
+msfa 1: 2>1 4>3 5>4 6>5 | 6>6 | 1 3
+msfa 2: 2>1 4>3 5>4 6>5 | 2>2 | 1 3
+msfa 3: 2>1 3>2 5>4 6>5 | 6>6 | 1 4
+msfa 4: 2>1 3>2 5>4 6>5 | 4>6 | 1 4
+msfa 5: 2>1 4>3 6>5 | 6>6 | 1 3 5
+msfa 6: 2>1 4>3 6>5 | 5>6 | 1 3 5
+msfa 7: 2>1 4>3 5>3 6>5 | 6>6 | 1 3
+msfa 8: 2>1 4>3 5>3 6>5 | 4>4 | 1 3
+msfa 9: 2>1 4>3 5>3 6>5 | 2>2 | 1 3
+msfa 10: 2>1 3>2 5>4 6>4 | 3>3 | 1 4
+msfa 11: 2>1 3>2 5>4 6>4 | 6>6 | 1 4
+msfa 12: 2>1 4>3 5>3 6>3 | 2>2 | 1 3
+msfa 13: 2>1 4>3 5>3 6>3 | 6>6 | 1 3
+msfa 14: 2>1 4>3 5>4 6>4 | 6>6 | 1 3
+msfa 15: 2>1 4>3 5>4 6>4 | 2>2 | 1 3
+msfa 16: 2>1 3>1 5>1 4>3 6>5 | 6>6 | 1
+msfa 17: 2>1 3>1 5>1 4>3 6>5 | 2>2 | 1
+msfa 18: 2>1 3>1 4>1 5>4 6>5 | 3>3 | 1
+msfa 19: 2>1 3>2 6>4 6>5 | 6>6 | 1 4 5
+msfa 20: 3>1 3>2 5>4 6>4 | 3>3 | 1 2 4
+msfa 21: 3>1 3>2 6>4 6>5 | 3>3 | 1 2 4 5
+msfa 22: 2>1 6>3 6>4 6>5 | 6>6 | 1 3 4 5
+msfa 23: 3>2 6>4 6>5 | 6>6 | 1 2 4 5
+msfa 24: 6>3 6>4 6>5 | 6>6 | 1 2 3 4 5
+msfa 25: 6>4 6>5 | 6>6 | 1 2 3 4 5
+msfa 26: 3>2 5>4 6>4 | 6>6 | 1 2 4
+msfa 27: 3>2 5>4 6>4 | 3>3 | 1 2 4
+msfa 28: 2>1 4>3 5>4 | 5>5 | 1 3 6
+msfa 29: 4>3 6>5 | 6>6 | 1 2 3 5
+msfa 30: 4>3 5>4 | 5>5 | 1 2 3 6
+msfa 31: 6>5 | 6>6 | 1 2 3 4 5
+msfa 32: - | 6>6 | 1 2 3 4 5 6
+ops 1: 2>1 4>3 5>4 6>5 | 6>6 | 1 3
+ops 2: 2>1 4>3 5>4 6>5 | 2>2 | 1 3
+ops 3: 2>1 3>2 5>4 6>5 | 6>6 | 1 4
+ops 4: 2>1 3>2 5>4 6>5 | 4>6 | 1 4
+ops 5: 2>1 4>3 6>5 | 6>6 | 1 3 5
+ops 6: 2>1 4>3 6>5 | 5>6 | 1 3 5
+ops 7: 2>1 4>3 5>3 6>5 | 6>6 | 1 3
+ops 8: 2>1 4>3 5>3 6>5 | 4>4 | 1 3
+ops 9: 2>1 4>3 5>3 6>5 | 2>2 | 1 3
+ops 10: 2>1 3>2 5>4 6>4 | 3>3 | 1 4
+ops 11: 2>1 3>2 5>4 6>4 | 6>6 | 1 4
+ops 12: 2>1 4>3 5>3 6>3 | 2>2 | 1 3
+ops 13: 2>1 4>3 5>3 6>3 | 6>6 | 1 3
+ops 14: 2>1 4>3 5>4 6>4 | 6>6 | 1 3
+ops 15: 2>1 4>3 5>4 6>4 | 2>2 | 1 3
+ops 16: 2>1 3>1 5>1 4>3 6>5 | 6>6 | 1
+ops 17: 2>1 3>1 5>1 4>3 6>5 | 2>2 | 1
+ops 18: 2>1 3>1 4>1 5>4 6>5 | 3>3 | 1
+ops 19: 2>1 3>2 6>4 6>5 | 6>6 | 1 4 5
+ops 20: 3>1 3>2 5>4 6>4 | 3>3 | 1 2 4
+ops 21: 3>1 3>2 6>4 6>5 | 3>3 | 1 2 4 5
+ops 22: 2>1 6>3 6>4 6>5 | 6>6 | 1 3 4 5
+ops 23: 3>2 6>4 6>5 | 6>6 | 1 2 4 5
+ops 24: 6>3 6>4 6>5 | 6>6 | 1 2 3 4 5
+ops 25: 6>4 6>5 | 6>6 | 1 2 3 4 5
+ops 26: 3>2 5>4 6>4 | 6>6 | 1 2 4
+ops 27: 3>2 5>4 6>4 | 3>3 | 1 2 4
+ops 28: 2>1 4>3 5>4 | 5>5 | 1 3 6
+ops 29: 4>3 6>5 | 6>6 | 1 2 3 5
+ops 30: 4>3 5>4 | 5>5 | 1 2 3 6
+ops 31: 6>5 | 6>6 | 1 2 3 4 5
+ops 32: - | 6>6 | 1 2 3 4 5 6

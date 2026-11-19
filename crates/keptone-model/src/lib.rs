@@ -12,14 +12,15 @@
 //! every field of a value is typed: a number is any finite binary64, on its
 //! instrument's scale or beyond it (docs/MATH.md §0.5), and an enumeration, a
 //! switch or an index is one of what there is, so that nothing that the engine
-//! cannot take can be represented (docs/DESIGN.md §2, §11). So far, in milestone
-//! M2
-//! (docs/DESIGN.md §16):
+//! cannot take can be represented (docs/DESIGN.md §2, §11). So far, in milestones
+//! M2 and M3 (docs/DESIGN.md §16):
 //!
 //! - [`voice`]: the DX7's voice, every parameter typed, and the numbers
 //!   the DX7 gives its parameters;
 //! - [`function`]: the DX7's function data, typed as well, and their
 //!   numbers;
+//! - [`graph`]: the operator graph, of any number of operators, and the DX7's
+//!   32 algorithms as graphs;
 //! - [`performance`]: the performances of the DX1 and the TX7, two sides of
 //!   function data each, and their numbers;
 //! - [`supplement`]: the DX7II's supplement of a voice, its additional
@@ -63,6 +64,7 @@
 
 pub mod dx7ii;
 pub mod function;
+pub mod graph;
 pub mod id;
 pub mod json;
 pub mod part;

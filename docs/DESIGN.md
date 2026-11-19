@@ -69,7 +69,7 @@ crates/
   keptone-cpu/        processor features and the level in effect (as kiral-cpu)
   keptone-math/       reference elementary functions, ADAA, Kepler, Kapteyn tables
   keptone-kernels/    vector forms of keptone-math/engine loops, per architecture (§10)
-  keptone-model/      patches, function data, DX7 SysEx/.syx, state format, tuning files
+  keptone-model/      patches, function data, operator graphs, DX7 SysEx/.syx, state format, tuning files
   keptone-engine/     voices, envelopes, LFO, graph, feedback, oversampling, mixing
   keptone-rt/         wait-free queues and mailboxes (the only lock-free code; Miri/loom-tested)
   keptone-host/       format-neutral processor: parameter table, event decoding, threads, state
@@ -103,7 +103,7 @@ assets/themes/      the built-in themes (*.keptone-theme), embedded in keptone-u
 | keptone-cpu | Features and level in effect; `KEPTONE_ISA=<level>` caps it and `KEPTONE_KERNELS=portable` forces the reference (kiral's `Request`). | forbid | std |
 | keptone-math | Reference functions (MATH §9, §10, §12), all `#[inline]`, all scalar binary64 with `mul_add`. | forbid | — |
 | keptone-kernels | Vector forms, one module per architecture (§10). Each call into assembly is one `unsafe` block whose comment says what was checked. | per-arch modules only | keptone-cpu, keptone-math |
-| keptone-model | Typed patch model, every number any finite binary64 (MATH §0.5); DX7 codecs (1-voice, 32-voice packed, the DX7II's supplements, performances, system set-up, micro tunings and fractional scalings, the TX802's performances and system set-up, the DX1's and the TX7's performances, parameter change incl. function group 2, the DX7's panel switches, the DX7II's switch remote and supplements, and the TX7's changes, request messages); parts and patches as Keptone plays them, the settings of MATH §17, and the parameters' stable IDs and names (§7.4); native state (docs/STATE-FORMAT.md); `.scl` and `.kbm`. | forbid | keptone-math (checksums need nothing else) |
+| keptone-model | Typed patch model, every number any finite binary64 (MATH §0.5); the operator graph, of any number of operators, with the DX7's 32 algorithms as graphs (MATH §8); DX7 codecs (1-voice, 32-voice packed, the DX7II's supplements, performances, system set-up, micro tunings and fractional scalings, the TX802's performances and system set-up, the DX1's and the TX7's performances, parameter change incl. function group 2, the DX7's panel switches, the DX7II's switch remote and supplements, and the TX7's changes, request messages); parts and patches as Keptone plays them, the settings of MATH §17, and the parameters' stable IDs and names (§7.4); native state (docs/STATE-FORMAT.md); `.scl` and `.kbm`. | forbid | keptone-math (checksums need nothing else) |
 | keptone-engine | MATH §1–§14, parts among them (§6.4). Owns no threads and allocates only in `prepare()`. | forbid | keptone-math, keptone-kernels, keptone-model |
 | keptone-rt | SPSC ring, triple-buffer mailbox, drop-queue. | yes (atomics + `UnsafeCell`), each block one operation | std |
 | keptone-host | Processor/main/worker split (§5), parameter table and smoothing, event decoding (CLAP events, MIDI 1.0, MIDI 2.0 UMP, SysEx), the parts' channels, the family's performances and system set-ups as parts (§6.4), state save/load. | forbid | engine, model, rt |

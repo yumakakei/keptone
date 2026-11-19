@@ -216,11 +216,11 @@ Rules while dragging:
 
 ### 3.3 What the engine does with a new graph mid-note
 
-Sounding voices keep their compiled graph until they end unless `graph.switch = immediate | next-note` (default `next-note`). `immediate` swaps at the next sample with the operators' phases and envelope states kept. It clicks when the change is large, which is the user's choice.
+A sounding voice takes a new graph as MATH §8.3 says: under `graph.algorithm_scope = patch`, the default, from the instant the new patch reaches it, its operators' phases and envelopes going on, which clicks when the change is large, the user's choice; under `voice`, it keeps the graph that it started with until it ends.
 
 ### 3.4 Layout
 
-The 32 preset algorithms are drawn as in the DX7 manual's chart, with node positions stored with the algorithm data (MATH §8.1). A user graph is laid out automatically when it is created or when the user presses "Tidy":
+The 32 preset algorithms are drawn as the chart printed on the instruments' panels draws them [DX7-PANEL], with node positions stored with the algorithm data (MATH §8.1). A user graph is laid out automatically when it is created or when the user presses "Tidy":
 
 1. Choose the edges to draw upward with Eades–Lin–Smyth's greedy heuristic for a small feedback arc set [EADES-FAS].
 2. Assign layers by longest path from the bus, so carriers sit at the bottom.
