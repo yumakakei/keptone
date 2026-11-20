@@ -139,25 +139,19 @@ pub fn gauss_increment(ratio: f64, length: f64, pitches: [f64; 3]) -> f64 {
     scaled(ratio * length * mean, whole)
 }
 
-/// How a phase adds its increments (MATH §2.5, `osc.phase_accumulator`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Accumulator {
-    /// One rounding a sample: within N·2⁻⁵³ turns of the exact phase after N
-    /// samples of increments below 1 turn at most, and about √N·2⁻⁵³ as the
-    /// roundings fall.
-    Plain,
-    /// Each rounding kept beside the phase, by two-sums: within 2⁻⁵³ turns of
-    /// the exact phase, and N·2⁻¹⁰⁵ more after N samples at most.
-    Compensated,
-}
-
-/// An operator's phase in turns, in [0, 1) (MATH §2.5), with the low part that
-/// [`Accumulator::Compensated`] keeps, which is 0 under `Plain`.
+/// An operator's phase in turns, in [0, 1) (MATH §2.5), and what its sums have
+/// rounded away, which is kept beside it.
+///
+/// The phase is summed by two-sums, so that it runs at the frequency that its
+/// increments give: a sum rounded once a sample would be within N·2⁻⁵³ turns
+/// of the exact phase after N samples only, the roundings of a steady
+/// increment adding up rather than cancelling, an error of the frequency of
+/// hundreds of u at low frequencies (MATH §2.5).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Phase {
     /// The phase, in [0, 1).
     turns: f64,
-    /// What the compensated sum has rounded away, a few steps of 2⁻⁵³ at most.
+    /// What the sums have rounded away, a step of 2⁻⁵³ at most.
     low: f64,
 }
 
@@ -184,40 +178,30 @@ impl Phase {
     /// The phase after an increment of so many turns, the whole turns taken
     /// away: θ ← θ + Δ, then θ ← θ − ⌊θ⌋ (MATH §2.5).
     ///
-    /// Under [`Accumulator::Plain`] θ + Δ rounds once, within (1 + |Δ|)·2⁻⁵³
-    /// turns, and the whole turns go exactly where θ + Δ is at least 0
-    /// (Sterbenz) and with one more rounding of 2⁻⁵⁴ below; a sum that rounds
-    /// to 1 is 0, the nearer on the circle. Under `Compensated`, θ + Δ, the
-    /// whole turns' removal and the low part are summed by two-sums, which lose
-    /// only the roundings of the small parts' sums, of the order of 2⁻¹⁰⁶ a
-    /// sample, and the low part is folded into the phase as far as binary64
-    /// holds it. Where |Δ| reaches 2⁵² turns, a whole number of turns at
-    /// binary64's precision, `Plain`'s sum rounds to an integer and the phase
-    /// becomes 0, and `Compensated` keeps the phase as it was, exactly.
-    pub fn advance(&mut self, increment: f64, accumulator: Accumulator) {
-        match accumulator {
-            Accumulator::Plain => {
-                let sum = self.turns + increment;
-                self.turns = wrapped(sum - sum.floor());
-            }
-            Accumulator::Compensated => {
-                let (sum, error) = two_sum(self.turns, increment);
-                let whole = sum.floor();
-                let (rest, removal) = two_sum(sum, -whole);
-                let (mut turns, mut low) = two_sum(rest, (error + removal) + self.low);
-                if turns < 0.0 {
-                    let (up, up_error) = two_sum(turns, 1.0);
-                    turns = up;
-                    low += up_error;
-                }
-                if turns >= 1.0 {
-                    let (down, down_error) = two_sum(turns, -1.0);
-                    turns = down;
-                    low += down_error;
-                }
-                *self = Self { turns, low };
-            }
+    /// θ + Δ, the whole turns' removal and what earlier sums rounded away are
+    /// summed by two-sums, which lose only the roundings of the small parts'
+    /// sums, of the order of 2⁻¹⁰⁶ a sample, and what is rounded away is
+    /// folded into the phase as far as binary64 holds it: within 2⁻⁵³ turns of
+    /// the exact sum of the increments, and N·2⁻¹⁰⁵ more after N samples at
+    /// most. A sum that rounds to 1 is 0, the nearer on the circle. An
+    /// increment of 2⁵² turns or more, a whole number of turns at binary64's
+    /// precision, leaves the phase as it was, exactly.
+    pub fn advance(&mut self, increment: f64) {
+        let (sum, error) = two_sum(self.turns, increment);
+        let whole = sum.floor();
+        let (rest, removal) = two_sum(sum, -whole);
+        let (mut turns, mut low) = two_sum(rest, (error + removal) + self.low);
+        if turns < 0.0 {
+            let (up, up_error) = two_sum(turns, 1.0);
+            turns = up;
+            low += up_error;
         }
+        if turns >= 1.0 {
+            let (down, down_error) = two_sum(turns, -1.0);
+            turns = down;
+            low += down_error;
+        }
+        *self = Self { turns, low };
     }
 }
 

@@ -10,12 +10,12 @@
 //! moves linearly, in closed form, and smoothly, by the Gauss–Legendre rule,
 //! against their exact values at binary64 inputs, which
 //! `scripts/phase_references.py` computed with mpmath (`tests/data/phase.txt`),
-//! within the bounds that their functions document; and the accumulator
-//! against the exact sum of its increments, which integers hold.
+//! within the bounds that their functions document; and the phase against the
+//! exact sum of its increments, which integers hold.
 
 use core::f64::consts::{LN_2, PI};
 
-use keptone_engine::pitch::phase::{Accumulator, Phase, gauss_increment, gauss_instants, linear_increment};
+use keptone_engine::pitch::phase::{Phase, gauss_increment, gauss_instants, linear_increment};
 
 /// u = 2⁻⁵³, the unit roundoff of binary64.
 const U: f64 = f64::EPSILON / 2.0;
@@ -200,43 +200,79 @@ fn turns_of(units: i128) -> f64 {
 
 /// How far a phase lies from an exact one on the circle, in turns. Every
 /// increment here is a multiple of 2⁻⁸⁰ of magnitude 2⁻²⁸ or more, and so is
-/// every sum that either accumulator rounds, the sums below 2⁻²⁸ being exact,
-/// and every part that the compensated one keeps: each phase is a multiple of
-/// 2⁻⁸⁰, and the distance is exact.
-fn distance(phase: Phase, exact: i128) -> f64 {
-    let d = (units(phase.turns()) - exact).rem_euclid(TURN);
+/// every sum that a phase rounds, the sums below 2⁻²⁸ being exact, and every
+/// part that the two-sums keep: each phase is a multiple of 2⁻⁸⁰, and the
+/// distance is exact.
+fn distance(turns: f64, exact: i128) -> f64 {
+    let d = (units(turns) - exact).rem_euclid(TURN);
     turns_of(d.min(TURN - d))
 }
 
-/// Advances phases by these increments under both accumulators, and checks
-/// them against the exact phase after N samples: within N·2⁻⁵³ under
-/// `Plain`, and under `Compensated` within its low part, 2⁻⁵⁴ at most, and the
-/// roundings of its small parts, N·4u² at most, none here, all of them exact.
-fn accumulate(start: f64, increments: impl Iterator<Item = f64>) {
-    let mut plain = Phase::new(start);
-    let mut compensated = Phase::new(start);
+/// Advances a phase by these increments, and beside it a sum rounded once a
+/// sample, θ + Δ then θ − ⌊θ⌋, as MATH §2.5 measures it against the phase's
+/// two-sums; checks the phase against the exact sum of the increments, within
+/// what its two-sums keep beside it, 2⁻⁵⁴ at most, and the roundings of their
+/// small parts, N·4u² at most, none here, all of them exact; and checks the
+/// rounded sum within N·2⁻⁵³. Gives both distances, in turns.
+fn accumulate(start: f64, increments: impl Iterator<Item = f64>) -> (f64, f64) {
+    let mut phase = Phase::new(start);
+    let mut rounded = start;
     let mut exact = units(start);
     let mut count = 0_u32;
     for increment in increments {
-        plain.advance(increment, Accumulator::Plain);
-        compensated.advance(increment, Accumulator::Compensated);
+        phase.advance(increment);
+        let sum = rounded + increment;
+        rounded = sum - sum.floor();
+        if rounded >= 1.0 {
+            rounded = 0.0;
+        }
         exact += units(increment);
         count += 1;
-        assert!((0.0..1.0).contains(&plain.turns()) && (0.0..1.0).contains(&compensated.turns()));
+        assert!((0.0..1.0).contains(&phase.turns()));
     }
     let n = f64::from(count);
-    let plain_error = distance(plain, exact);
-    let compensated_error = distance(compensated, exact);
-    assert!(plain_error <= n * 2.0 * U, "plain: {plain_error:e} after {count}");
+    let error = distance(phase.turns(), exact);
+    let rounded_error = distance(rounded, exact);
+    assert!(error <= U + n * 4.0 * U * U, "{error:e} after {count}");
     assert!(
-        compensated_error <= U + n * 4.0 * U * U,
-        "compensated: {compensated_error:e} after {count}"
+        rounded_error <= n * 2.0 * U,
+        "rounded once a sample: {rounded_error:e} after {count}"
     );
-    println!("{count} increments: plain {plain_error:e}, compensated {compensated_error:e} turns from the exact phase");
+    println!("{count} increments: {error:e} turns from the exact phase, {rounded_error:e} rounded once a sample");
+    (error, rounded_error)
 }
 
 #[test]
-fn the_accumulators_against_the_exact_phase() {
+fn steady_tones_run_at_the_frequency_of_their_increments() {
+    // 20 s of a steady tone: rounded once a sample, the roundings of the same
+    // increment add up rather than cancel, an error of the frequency that the
+    // phase runs at, which the two-sums do not make (MATH §2.5).
+    for (rate, frequency) in [
+        (48_000_u32, 4.8),
+        (48_000, 55.0),
+        (48_000, 440.0),
+        (48_000, 3520.0),
+        (192_000, 4.8),
+        (192_000, 440.0),
+    ] {
+        let step = frequency / f64::from(rate);
+        let samples = 20 * rate;
+        let (error, rounded) = accumulate(
+            0.0,
+            std::iter::repeat_n(step, usize::try_from(samples).expect("a count")),
+        );
+        let turns = step * f64::from(samples);
+        println!(
+            "{rate} Hz, a tone of {frequency} Hz: an error of the frequency of {:.1}u, and of {:.1}u rounded once a \
+             sample",
+            error / turns / U,
+            rounded / turns / U
+        );
+    }
+}
+
+#[test]
+fn the_phase_against_the_exact_sum() {
     // A note at 440 Hz for 20 s at 48 kHz, in steps of 440/48000 turns.
     let step = 440.0 / 48_000.0;
     accumulate(0.0, std::iter::repeat_n(step, 960_000));
@@ -269,28 +305,22 @@ fn a_phase_stays_within_a_turn() {
     }
     assert_eq!(Phase::new(-0.25).turns(), 0.75);
     assert_eq!(Phase::new(-1e-20).turns(), 0.0);
-    // Just below a whole turn, 1 − 2⁻⁶⁰, a sum rounds to 1, which is 0.
+    // Just below a whole turn, 1 − 2⁻⁶⁰, a sum rounds to 1, which is 0, and
+    // −2⁻⁶⁰ is kept beside it; an increment of 0 then brings the phase below
+    // 0, and a turn added brings it back.
     let tiny = f64::from_bits((1023 - 60) << 52);
     let mut phase = Phase::new(tiny);
-    phase.advance(-2.0 * tiny, Accumulator::Plain);
+    phase.advance(-2.0 * tiny);
     assert_eq!(phase.turns(), 0.0);
-    let mut phase = Phase::new(tiny);
-    phase.advance(-2.0 * tiny, Accumulator::Compensated);
+    phase.advance(0.0);
     assert_eq!(phase.turns(), 0.0);
-    // Compensated keeps −2⁻⁶⁰ beside the 0; an increment of 0 then brings the
-    // phase below 0, and a turn added brings it back.
-    phase.advance(0.0, Accumulator::Compensated);
-    assert_eq!(phase.turns(), 0.0);
-    phase.advance(0.5, Accumulator::Compensated);
+    phase.advance(0.5);
     assert_eq!(phase.turns(), 0.5);
-    // An increment of 2⁵² turns or more: Plain's phase becomes 0, and
-    // Compensated keeps it.
+    // An increment of 2⁵² turns or more, a whole number of turns, leaves the
+    // phase as it was.
     for big in [BIG, 1e20, f64::MAX] {
-        let mut plain = Phase::new(0.25);
-        plain.advance(big, Accumulator::Plain);
-        assert_eq!(plain.turns(), 0.0);
-        let mut compensated = Phase::new(0.25);
-        compensated.advance(big, Accumulator::Compensated);
-        assert_eq!(compensated.turns(), 0.25, "{big:e}");
+        let mut phase = Phase::new(0.25);
+        phase.advance(big);
+        assert_eq!(phase.turns(), 0.25, "{big:e}");
     }
 }

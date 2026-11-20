@@ -131,13 +131,13 @@ fn numbers_names_and_ids() {
     }
     assert_eq!(settings.get(beyond()), None);
     // A setting added later takes the next number, whatever its section.
-    assert_eq!(settings::number_of("json.max_depth"), Some(47));
-    assert_eq!(settings::number_of("tuning.transpose_octave"), Some(48));
-    assert_eq!(settings::number_of("scaling.key"), Some(49));
-    assert_eq!(settings::number_of("tuning.modulation"), Some(50));
-    assert_eq!(settings::number_of("feedback.max_substeps"), Some(51));
-    assert_eq!(settings::number_of("feedback.relaxation_onset"), Some(52));
-    assert_eq!(settings::number_of("scaling.rate_key"), Some(53));
+    assert_eq!(settings::number_of("json.max_depth"), Some(46));
+    assert_eq!(settings::number_of("tuning.transpose_octave"), Some(47));
+    assert_eq!(settings::number_of("scaling.key"), Some(48));
+    assert_eq!(settings::number_of("tuning.modulation"), Some(49));
+    assert_eq!(settings::number_of("feedback.max_substeps"), Some(50));
+    assert_eq!(settings::number_of("feedback.relaxation_onset"), Some(51));
+    assert_eq!(settings::number_of("scaling.rate_key"), Some(52));
 }
 
 /// The number after the last setting's.

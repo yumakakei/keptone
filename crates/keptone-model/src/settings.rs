@@ -146,7 +146,7 @@ const fn count(name: &'static str, least: u64, default: u64) -> Spec {
 }
 
 /// How many settings there are.
-pub const COUNT: usize = 54;
+pub const COUNT: usize = 53;
 
 /// Every setting, in the order of MATH §17's table; a setting's place is its
 /// number.
@@ -154,7 +154,6 @@ pub const SPECS: [Spec; COUNT] = [
     number("tuning.a4_hz", Bounds::Positive, 440.0),
     choice("tuning.source", &["12-tet", "scala", "mts-esp"]),
     choice("osc.fixed_detune", &["msfa", "symmetric", "none"]),
-    choice("osc.phase_accumulator", &["plain", "compensated"]),
     choice("osc.free_phase_start", &["continue", "zero", "random"]),
     number("eg.clock_hz", Bounds::Positive, 49096.0),
     choice("eg.rate_law", &["dx7", "exponential"]),

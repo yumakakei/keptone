@@ -5,7 +5,6 @@
     "tuning.a4_hz": 440,
     "tuning.source": "12-tet",
     "osc.fixed_detune": "msfa",
-    "osc.phase_accumulator": "plain",
     "osc.free_phase_start": "continue",
     "eg.clock_hz": 49096,
     "eg.rate_law": "dx7",
