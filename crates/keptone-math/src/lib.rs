@@ -29,7 +29,8 @@
 //! equation, [`kepler::solve`], whose residual is within 4u max(1, |Φ|), and
 //! the coefficients of its Fourier series, the Kapteyn series, by a DFT and in
 //! tables of Chebyshev series in β, with the bounds of their tail, in
-//! [`kapteyn`].
+//! [`kapteyn`]; and the error-free transformations that these are built on and
+//! that the engine shares, in [`eft`].
 //!
 //! These are the portable forms, which every vector form in `keptone-kernels`
 //! must agree with to within its accuracy contract (MATH §0.2). They use
@@ -47,7 +48,7 @@
 
 pub mod adaa;
 pub mod coefficients;
-mod eft;
+pub mod eft;
 mod exponential;
 pub mod kapteyn;
 pub mod kepler;

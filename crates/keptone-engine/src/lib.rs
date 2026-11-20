@@ -20,7 +20,8 @@
 //! - [`graph`]: the order in which a voice evaluates its operators, a graph's
 //!   strongly connected components, for any graph;
 //! - [`pitch`]: the laws of pitch and frequency, from the key after
-//!   transposition and 12-TET to an operator's ratio, detune and fixed pitch.
+//!   transposition and 12-TET to an operator's ratio, detune and fixed pitch,
+//!   and in [`pitch::phase`] the phase that the frequency advances.
 #![forbid(unsafe_code)]
 
 pub mod graph;
