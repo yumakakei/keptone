@@ -19,10 +19,14 @@
 //!
 //! - [`graph`]: the order in which a voice evaluates its operators, a graph's
 //!   strongly connected components, for any graph;
+//! - [`level`]: the level curve, the envelope's part of an operator's total
+//!   level, the total level and its gain;
 //! - [`pitch`]: the laws of pitch and frequency, from the key after
 //!   transposition and 12-TET to an operator's ratio, detune and fixed pitch,
 //!   and in [`pitch::phase`] the phase that the frequency advances.
 #![forbid(unsafe_code)]
 
+mod binary64;
 pub mod graph;
+pub mod level;
 pub mod pitch;

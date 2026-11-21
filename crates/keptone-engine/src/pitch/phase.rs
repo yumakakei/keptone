@@ -25,7 +25,8 @@ use core::f64::consts::LN_2;
 use keptone_math::eft::{two_product, two_sum};
 use keptone_math::{exp2, exp2m1};
 
-use super::{HIGHEST_PITCH, finite, scaled, split};
+use super::HIGHEST_PITCH;
+use crate::binary64::{finite, scaled, split};
 
 /// Below this the mean of 2⁻ˣ over [0, w] is 1 − w ln 2/2 within u/2500.
 const SMALL: f64 = 1.0 / 1_073_741_824.0;
