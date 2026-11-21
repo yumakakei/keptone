@@ -17,6 +17,8 @@
 //!
 //! It is filled in milestones M3 and M4 (docs/DESIGN.md §16). So far:
 //!
+//! - [`eg`]: the laws of the operator envelope's rates and segments, the rate
+//!   and its speed, the attack and the jump that starts it, and the wait;
 //! - [`graph`]: the order in which a voice evaluates its operators, a graph's
 //!   strongly connected components, for any graph;
 //! - [`level`]: the level curve, an operator's offset from its output level,
@@ -28,6 +30,8 @@
 #![forbid(unsafe_code)]
 
 mod binary64;
+pub mod eg;
 pub mod graph;
 pub mod level;
 pub mod pitch;
+mod steps;

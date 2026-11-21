@@ -24,6 +24,7 @@ use keptone_math::{exp2, log2};
 use keptone_model::voice::Curve;
 
 use crate::binary64::{finite, scaled, split};
+use crate::steps::{between, lerp};
 
 /// s(L) at the steps 0 to 20, \[MSFA `scaleoutlevel`, LEVIEN-EG\] and the
 /// firmware's values as well, whose table holds 127 − s(L) \[AJXS-ROM
@@ -51,32 +52,6 @@ pub fn curve(level: f64) -> f64 {
     let below = CURVE[usize::from(step)];
     let above = CURVE[usize::from(step) + 1];
     (level - f64::from(step)).mul_add(above - below, below)
-}
-
-/// below + part·(above − below), saturated (MATH §0.5): the linear step
-/// between two values of a law at whole inputs (MATH §0.6).
-fn lerp(part: f64, below: f64, above: f64) -> f64 {
-    finite(part.mul_add(finite(above - below), below))
-}
-
-/// A law at whole inputs, linear between them (MATH §0.6): `at` at the integer
-/// at or below `x` and at the next, weighted by x's part, or `at(x)` alone
-/// where x is whole.
-///
-/// Of values of the law within e of themselves and at most M in magnitude, the
-/// result is within e + 4uM of the law between them: x's part is exact but in
-/// (−1, 0), where it rounds within u/2, the difference of the two values
-/// rounds within u of itself, at most 2M, and the fused step within u of the
-/// result.
-fn between(x: f64, at: impl Fn(f64) -> f64) -> f64 {
-    let whole = x.floor();
-    let below = at(whole);
-    let part = x - whole;
-    if part > 0.0 {
-        lerp(part, below, at(whole + 1.0))
-    } else {
-        below
-    }
 }
 
 /// G(x) of MATH §3.2 at a whole key x, ⌊(x − 1)/3⌋. Exact where |x| < 2⁵³:
