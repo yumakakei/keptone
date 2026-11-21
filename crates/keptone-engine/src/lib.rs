@@ -17,8 +17,10 @@
 //!
 //! It is filled in milestones M3 and M4 (docs/DESIGN.md §16). So far:
 //!
-//! - [`eg`]: the laws of the operator envelope's rates and segments, the rate
-//!   and its speed, the attack and the jump that starts it, and the wait;
+//! - [`eg`]: the operator envelope, the laws of its rates and segments, the
+//!   rate and its speed, the attack and the jump that starts it, and the wait,
+//!   and in [`eg::envelope`] the envelope that runs its segments by them, timed
+//!   as the DX7's, through its key events, holds and live changes;
 //! - [`graph`]: the order in which a voice evaluates its operators, a graph's
 //!   strongly connected components, for any graph;
 //! - [`level`]: the level curve, an operator's offset from its output level,
@@ -26,7 +28,9 @@
 //!   an operator's total level, the total level and its gain;
 //! - [`pitch`]: the laws of pitch and frequency, from the key after
 //!   transposition and 12-TET to an operator's ratio, detune and fixed pitch,
-//!   and in [`pitch::phase`] the phase that the frequency advances.
+//!   and in [`pitch::phase`] the phase that the frequency advances;
+//! - [`time`]: the instants at which segments start and from which they count
+//!   their time.
 #![forbid(unsafe_code)]
 
 mod binary64;
@@ -35,3 +39,4 @@ pub mod graph;
 pub mod level;
 pub mod pitch;
 mod steps;
+pub mod time;

@@ -6,11 +6,14 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! The operator envelope (docs/MATH.md §4), so far the laws of its rates and of
-//! its segments: the rate q of a segment from its rate parameter, the rate
-//! scaling and the key of the rates; the speed ρ(q) at which its level moves;
-//! and, in the progress that a segment has made, its attack, the jump that
-//! starts it, the progress at which it reaches a target, and its wait.
+//! The operator envelope (docs/MATH.md §4): the laws of its rates and of its
+//! segments, here, and the envelope itself, which runs its segments by them,
+//! in [`envelope`]. The laws: the rate q of a segment from its rate parameter,
+//! the rate scaling and the key of the rates; the speed ρ(q) at which its
+//! level moves; in the progress that a segment has made, its attack, the jump
+//! that starts it, the progress at which it reaches a target, and its wait;
+//! the DX7's floor, which times the segments; and the level below which an
+//! operator is silent.
 //!
 //! A level is a total level T in the DX7's steps (MATH §3.3), and a speed is in
 //! steps a second. The progress of a segment is ∫ρ dt from its start, in
@@ -28,6 +31,8 @@ use keptone_math::{exp2, exp2m1, log2p1};
 use crate::binary64::{finite, scaled, split};
 use crate::level::FULL_SCALE;
 use crate::steps::between;
+
+pub mod envelope;
 
 /// ⌊41R/64⌋ + RS(k) of MATH §4.1 at a whole rate R, sensitivity KRS and key k,
 /// the rate before its bound: RS = ⌊KRS·clamp(⌊k/3⌋ − 7, 0, 31)/8⌋
@@ -237,4 +242,25 @@ pub const WAIT: f64 = 480.0;
 pub fn wait(first: bool, moved: f64) -> f64 {
     let wait = WAIT * (1.0 - moved.abs().min(1.0));
     if first { wait / 20.0 } else { wait }
+}
+
+/// The DX7's floor of MATH §4.6, 16 steps, 90 dB below full scale
+/// \[MSFA `Env::advance`, LEVIEN-EG\]: the DX7 holds an operator's level no
+/// lower, and its segments start, wait and end where they would with their
+/// levels and targets taken no lower. Keptone keeps that timing and takes the
+/// level on below it ([`envelope`]).
+pub const FLOOR: f64 = 16.0;
+
+/// log₂ 10/20, correctly rounded: the octaves of gain in a decibel.
+const OCTAVES_PER_DECIBEL: f64 = f64::from_bits(0x3fc5_42a5_a12e_1c5b);
+
+/// The level of MATH §4.6 below which an operator has gain 0, until a segment
+/// takes its level above it: for `eg.end_db`, D decibels of gain relative to
+/// g = 1, 256(14 + D·log₂ 10/20), −4920.136 at the default, −200 dB.
+///
+/// The constant within u of itself, the fused step within u of its result and
+/// the scaling by 256 exact: within u(256|D·log₂ 10/20| + |T|) of the level T.
+#[must_use]
+pub fn end_level(end_db: f64) -> f64 {
+    256.0 * end_db.mul_add(OCTAVES_PER_DECIBEL, 14.0)
 }
