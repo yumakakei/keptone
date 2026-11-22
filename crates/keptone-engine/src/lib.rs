@@ -33,6 +33,8 @@
 //!   the fade of its delay;
 //! - [`peg`]: the pitch envelope, its levels and speeds from the DX7's tables
 //!   and the envelope that moves a voice's pitch through them;
+//! - [`portamento`]: the portamento's speed, and a voice's glide toward its
+//!   target, with glissando or without;
 //! - [`pitch`]: the laws of pitch and frequency, from the key after
 //!   transposition and 12-TET to an operator's ratio, detune and fixed pitch,
 //!   and in [`pitch::phase`] the phase that the frequency advances;
@@ -50,6 +52,7 @@ pub mod level;
 pub mod lfo;
 pub mod peg;
 pub mod pitch;
+pub mod portamento;
 pub mod random;
 mod steps;
 pub mod time;
