@@ -24,6 +24,9 @@
 //!   rate and its speed, the attack and the jump that starts it, and the wait,
 //!   and in [`eg::envelope`] the envelope that runs its segments by them, timed
 //!   as the DX7's, through its key events, holds and live changes;
+//! - [`feedback`]: an operator's feedback, the scale of FB and the loop gain,
+//!   the delay-free point solution and the models for a loop gain of 1 and
+//!   more: relaxation, the DX7's recurrence and clamp;
 //! - [`graph`]: the order in which a voice evaluates its operators, a graph's
 //!   strongly connected components, for any graph;
 //! - [`level`]: the level curve, an operator's offset from its output level,
@@ -47,6 +50,7 @@
 mod binary64;
 pub mod control;
 pub mod eg;
+pub mod feedback;
 pub mod graph;
 pub mod level;
 pub mod lfo;
