@@ -26,6 +26,8 @@
 //! - [`level`]: the level curve, an operator's offset from its output level,
 //!   its keyboard level scaling and the key's velocity, the envelope's part of
 //!   an operator's total level, the total level and its gain;
+//! - [`peg`]: the pitch envelope, its levels and speeds from the DX7's tables
+//!   and the envelope that moves a voice's pitch through them;
 //! - [`pitch`]: the laws of pitch and frequency, from the key after
 //!   transposition and 12-TET to an operator's ratio, detune and fixed pitch,
 //!   and in [`pitch::phase`] the phase that the frequency advances;
@@ -37,6 +39,7 @@ mod binary64;
 pub mod eg;
 pub mod graph;
 pub mod level;
+pub mod peg;
 pub mod pitch;
 mod steps;
 pub mod time;
