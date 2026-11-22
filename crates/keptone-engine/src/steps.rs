@@ -37,3 +37,16 @@ pub(crate) fn between(x: f64, at: impl Fn(f64) -> f64) -> f64 {
         below
     }
 }
+
+/// ⌊165n/64⌋ at a whole n, the firmware's scaling of a step of a parameter by
+/// 165/64, from 0 to 99 to 0 to 255 \[AJXS-ROM `PATCH_ACTIVATE_SCALE_VALUE`\]:
+/// n splits exactly into 64q + r, Euclid's r from 0 up to 64, so that
+/// ⌊165n/64⌋ = 165q + ⌊165r/64⌋ takes its floor of an exact value however
+/// large n is. Exact below 2⁵³ in magnitude, |n| below 3.49·10¹⁵; beyond within
+/// 2u of itself, the product's and the sum's roundings, and binary64's largest
+/// finite number, with its sign, where it lies beyond it (MATH §0.5).
+pub(crate) fn scale_value(whole: f64) -> f64 {
+    let q = (whole / 64.0).floor();
+    let r = whole - 64.0 * q;
+    finite(165.0 * q + (165.0 * r / 64.0).floor())
+}

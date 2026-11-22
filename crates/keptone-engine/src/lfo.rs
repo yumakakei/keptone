@@ -23,7 +23,7 @@ use keptone_model::voice::Wave;
 
 use crate::binary64::{finite, scaled};
 use crate::random;
-use crate::steps::lerp;
+use crate::steps::{lerp, scale_value};
 use crate::time::Instant;
 
 /// The rate F of the firmware's timer, 9.4265 MHz/(8·3165), correctly rounded
@@ -40,18 +40,15 @@ const STILL: f64 = 9_007_199_254_740_992.0;
 /// lies beyond binary64's largest finite number, the frequency then lying
 /// beyond it too.
 ///
-/// S splits exactly into 64q + r, so that a = 165q + ⌊165r/64⌋ takes its floor
-/// of an exact value: a is exact below 2⁵³ and within 2u of itself beyond,
-/// where ⌊(a − 160)/4⌋ is within 7u of itself, its argument within 3u of the
-/// exact one and the floor of a value from 2⁵¹ on at most 2⁻⁵¹ of that value
-/// from the exact one's floor, and 11 added within u more. So the advance is
-/// exact where the increment is below 2⁵³, S below 7.36·10⁷; within u of
-/// itself, the product's rounding, where a is below 2⁵³, S below 3.49·10¹⁵;
-/// and within 11u beyond.
+/// a takes its floor of an exact value ([`scale_value`]): it is exact below
+/// 2⁵³ and within 2u of itself beyond, where ⌊(a − 160)/4⌋ is within 7u of
+/// itself, its argument within 3u of the exact one and the floor of a value
+/// from 2⁵¹ on at most 2⁻⁵¹ of that value from the exact one's floor, and 11
+/// added within u more. So the advance is exact where the increment is below
+/// 2⁵³, S below 7.36·10⁷; within u of itself, the product's rounding, where a
+/// is below 2⁵³, S below 3.49·10¹⁵; and within 11u beyond.
 fn advance(speed: f64) -> f64 {
-    let q = (speed / 64.0).floor();
-    let r = speed - 64.0 * q;
-    let a = 165.0 * q + (165.0 * r / 64.0).floor();
+    let a = scale_value(speed);
     if a < 160.0 {
         11.0 * a.max(1.0) / 65536.0
     } else {

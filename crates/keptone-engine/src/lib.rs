@@ -17,6 +17,9 @@
 //!
 //! It is filled in milestones M3 and M4 (docs/DESIGN.md §16). So far:
 //!
+//! - [`control`]: the controllers' depths, the depths of the LFO's
+//!   modulations, the EG bias, the amplitude that an operator keeps and the
+//!   level by which that lowers it, the LFO's pitch, and the bend;
 //! - [`eg`]: the operator envelope, the laws of its rates and segments, the
 //!   rate and its speed, the attack and the jump that starts it, and the wait,
 //!   and in [`eg::envelope`] the envelope that runs its segments by them, timed
@@ -40,6 +43,7 @@
 #![forbid(unsafe_code)]
 
 mod binary64;
+pub mod control;
 pub mod eg;
 pub mod graph;
 pub mod level;

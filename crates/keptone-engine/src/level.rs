@@ -24,7 +24,7 @@ use keptone_math::{exp2, log2};
 use keptone_model::voice::Curve;
 
 use crate::binary64::{finite, scaled, split};
-use crate::steps::{between, lerp};
+use crate::steps::{between, lerp, scale_value};
 
 /// s(L) at the steps 0 to 20, \[MSFA `scaleoutlevel`, LEVIEN-EG\] and the
 /// firmware's values as well, whose table holds 127 − s(L) \[AJXS-ROM
@@ -151,7 +151,7 @@ pub struct Scaling {
 /// scaling before its bound, the depth scaled as the LFO's depths are
 /// \[AJXS-ROM `PATCH_ACTIVATE_SCALE_VALUE`\].
 fn unbounded(curve_value: f64, depth: f64) -> f64 {
-    let scaled_depth = (finite(165.0 * depth) / 64.0).floor();
+    let scaled_depth = scale_value(depth);
     (finite(curve_value * scaled_depth) / 256.0).floor()
 }
 
@@ -196,7 +196,8 @@ fn signed_scaling(distance: f64, left: Side, right: Side) -> Scaling {
 /// scale's nearer end, interpolated in the depth (MATH §0.7).
 ///
 /// Its values at whole distances and depths, below 2⁵³ in magnitude, are exact
-/// where ⌊165D/64⌋ is, as it is where |165D| ≤ 2⁵³, and C(u)·⌊165D/64⌋/256,
+/// where ⌊165D/64⌋ is, as it is below 2⁵³, |D| below 3.49·10¹⁵, its floor
+/// taken of an exact value, and C(u)·⌊165D/64⌋/256,
 /// which [`scaling_curve`]'s 3.82u and the product's rounding keep within 4.82u
 /// of itself, is exact or lies farther than that from every integer: so at
 /// every whole distance and depth of the scales. Elsewhere a floor is within 1
