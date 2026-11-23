@@ -138,9 +138,9 @@ The lints follow kiral and JPEG-Unround exactly: `unsafe_op_in_unsafe_fn = forbi
 
 ### 6.1 Compile step (main thread)
 
-`CompiledPatch::new(&Patch, &Settings) -> CompiledPatch` is total. A patch is what a part plays (§6.4): a DX7 voice, with the DX7II's supplement and fractional scaling where it has them. Each part's patch is compiled by itself, with the part's own parameters, so that a change to one part recompiles that part alone.
+`CompiledPatch::new(&Patch, &Function, &Configuration) -> CompiledPatch` is total: a part's patch, its function data and the engine's configuration, the settings it takes typed, which the engine checks when it is prepared and refuses by name where M3 does not compute them (§16). A patch is what a part plays (§6.4): a DX7 voice, with the DX7II's supplement and fractional scaling where it has them. Each part's patch is compiled by itself, with the part's own parameters, so that a change to one part recompiles that part alone.
 
-- Every table lookup of MATH §2–§7 is resolved into binary64 coefficients.
+- What depends on the patch alone, a table's value or a law's, is resolved into binary64 coefficients; what depends on a note, its key and its velocity, at the note's key-on.
 - The algorithm graph is reduced to SCCs, an evaluation order, ADAA offsets $`s_k`$ (MATH §10.5) and delay-line requirements.
 - The Kapteyn tables are prepared if any operator might need them (MATH §9.5). Large tables are built on the worker thread before the patch that needs them is published, so that a patch reaches the audio thread complete and no output depends on when the worker finishes (MATH §0.2).
 

@@ -17,6 +17,10 @@
 //!
 //! It is filled in milestones M3 and M4 (docs/DESIGN.md §16). So far:
 //!
+//! - [`compile`]: a part's compiled patch, what its voices play, its patch and
+//!   function data as the laws take them;
+//! - [`configuration`]: the settings that the engine takes, typed, and those
+//!   whose values M3 does not compute, which it refuses;
 //! - [`control`]: the controllers' depths, the depths of the LFO's
 //!   modulations, the EG bias, the amplitude that an operator keeps and the
 //!   level by which that lowers it, the LFO's pitch, and the bend;
@@ -48,6 +52,8 @@
 #![forbid(unsafe_code)]
 
 mod binary64;
+pub mod compile;
+pub mod configuration;
 pub mod control;
 pub mod eg;
 pub mod feedback;
