@@ -230,6 +230,36 @@ impl PitchEnvelope {
         }
     }
 
+    /// The level's slope in octaves a sample until it reaches its target
+    /// ([`PitchEnvelope::corner`]): the step toward the target, and 0 where the
+    /// piece starts at its target.
+    #[must_use]
+    pub fn slope(&self) -> f64 {
+        if self.piece.to > self.piece.from {
+            self.piece.step
+        } else if self.piece.to < self.piece.from {
+            -self.piece.step
+        } else {
+            0.0
+        }
+    }
+
+    /// The instant at which the level reaches its target, its corner (MATH
+    /// §2.5): its segment's end where it is in a segment, and also where a
+    /// change has re-anchored a hold or the rest toward a new level (MATH
+    /// §4.7), which no segment ends; none where it starts there or does not
+    /// move, or the instant lies beyond the samples that an instant counts.
+    /// The distance and its quotient by the step round within u each, as the
+    /// end's do.
+    #[must_use]
+    pub fn corner(&self) -> Option<Instant> {
+        let distance = finite(self.piece.to - self.piece.from).abs();
+        if distance == 0.0 || self.piece.step <= 0.0 {
+            return None;
+        }
+        self.piece.start.after(distance / self.piece.step)
+    }
+
     /// Ends its segment at [`PitchEnvelope::end`] and starts what follows there:
     /// after segment 0 or 1 the next, from the target reached; after segment 2
     /// the hold at L3, and after segment 3 the rest at L4. Nothing where it

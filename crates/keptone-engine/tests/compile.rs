@@ -75,6 +75,7 @@ fn the_configuration_reads_every_setting_it_takes() {
     assert_eq!(configuration.feedback.max_iterations, 16);
     assert_eq!(configuration.feedback.relaxation_onset, 0.9);
     assert_eq!(configuration.feedback.max_substeps, 64);
+    assert_eq!(configuration.max_pieces, 256);
     assert_eq!(configuration.voice_count, 16);
     assert_eq!(configuration.idle_s, 0.5);
     assert_eq!(configuration.part_count, 2);
@@ -94,6 +95,7 @@ fn the_configuration_reads_every_setting_it_takes() {
         ("feedback.max_iterations", Value::Integer(3)),
         ("feedback.relaxation_onset", Value::Number(0.25)),
         ("feedback.max_substeps", Value::Integer(9)),
+        ("osc.max_pieces", Value::Integer(12)),
         ("voice.count", Value::Integer(5)),
         ("engine.idle_s", Value::Number(2.0)),
         ("part.count", Value::Integer(7)),
@@ -114,6 +116,7 @@ fn the_configuration_reads_every_setting_it_takes() {
     assert_eq!(configuration.feedback.max_iterations, 3);
     assert_eq!(configuration.feedback.relaxation_onset, 0.25);
     assert_eq!(configuration.feedback.max_substeps, 9);
+    assert_eq!(configuration.max_pieces, 12);
     assert_eq!(configuration.voice_count, 5);
     assert_eq!(configuration.idle_s, 2.0);
     assert_eq!(configuration.part_count, 7);

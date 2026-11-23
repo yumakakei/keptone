@@ -64,7 +64,7 @@ fn count(settings: &Settings, name: &'static str, default: u64) -> usize {
     usize::try_from(integer(settings, name, default)).unwrap_or(usize::MAX)
 }
 
-/// A count that a solver takes, at most `u32::MAX`.
+/// A count that a solver or a sample's integral takes, at most `u32::MAX`.
 fn iterations(settings: &Settings, name: &'static str, default: u64) -> u32 {
     u32::try_from(integer(settings, name, default)).unwrap_or(u32::MAX)
 }
@@ -282,6 +282,8 @@ pub struct Configuration {
     pub fixed_detune: FixedDetune,
     /// `osc.free_phase_start`.
     pub free_phase_start: FreePhaseStart,
+    /// `osc.max_pieces`.
+    pub max_pieces: u32,
     /// The settings that an envelope takes, `eg.clock_hz`, `eg.rate_law`,
     /// `eg.attack_jump` and `eg.static_segments`, with the engine's rate.
     pub envelope: envelope::Settings,
@@ -367,6 +369,7 @@ impl Configuration {
                 1 => FreePhaseStart::Zero,
                 _ => FreePhaseStart::Random,
             },
+            max_pieces: iterations(settings, "osc.max_pieces", 256),
             envelope: envelope::Settings {
                 sample_rate,
                 clock_hz: number(settings, "eg.clock_hz", 49096.0),

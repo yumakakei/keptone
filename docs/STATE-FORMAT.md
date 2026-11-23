@@ -88,6 +88,7 @@ Keptone writes the members of each object in the order this document gives them,
 | 50 | `feedback.max_substeps` | an integer of at least 1 |
 | 51 | `feedback.relaxation_onset` | a number of at least 0 and below 1 |
 | 52 | `scaling.rate_key` | `"frequency"`, `"level"` |
+| 53 | `osc.max_pieces` | an integer of at least 1 |
 
 ## 4. Tuning
 

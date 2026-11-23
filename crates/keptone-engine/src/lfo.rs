@@ -263,6 +263,75 @@ impl Fade {
             (Stage::Full, _) => 1.0,
         }
     }
+
+    /// Its form from an instant on: as [`Fade::at`] takes its stages, with the
+    /// samples from the instant to their ends.
+    fn fading(&self, at: Instant) -> Fading {
+        const FULL: Fading = Fading {
+            depth: 1.0,
+            rise: None,
+            full: None,
+            length: 0.0,
+        };
+        let samples = at.samples_since(self.start).max(0.0);
+        match self.stage {
+            Stage::Full => FULL,
+            Stage::Waiting => {
+                let left = (1.0 - self.passed) * self.wait;
+                if samples < left {
+                    Fading {
+                        depth: 0.0,
+                        rise: Some(left - samples),
+                        full: Some(finite(left + self.rise) - samples),
+                        length: self.rise,
+                    }
+                } else {
+                    let passed = (samples - left) / self.rise;
+                    if passed < 1.0 {
+                        Fading {
+                            depth: passed,
+                            rise: None,
+                            full: Some(finite(left + self.rise) - samples),
+                            length: self.rise,
+                        }
+                    } else {
+                        FULL
+                    }
+                }
+            }
+            Stage::Rising => {
+                let passed = self.passed + samples / self.rise;
+                if passed < 1.0 {
+                    Fading {
+                        depth: passed,
+                        rise: None,
+                        full: Some((1.0 - self.passed) * self.rise - samples),
+                        length: self.rise,
+                    }
+                } else {
+                    FULL
+                }
+            }
+        }
+    }
+}
+
+/// The fade w of an LFO's delay from an instant on (MATH §6.4), as a voice's
+/// pitch takes it within a sample (§2.5): w there, and the samples from there
+/// to where its rise starts and to where it is full, over which it rises
+/// linearly from 0 to 1. The instants are those at which the LFO's own fade
+/// changes its stage, within the rounding of their differences from the
+/// instant, u of them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fading {
+    /// w at the instant.
+    pub depth: f64,
+    /// The samples to the rise's start, none where it rises or is full.
+    pub rise: Option<f64>,
+    /// The samples to where it is full, none where it is.
+    pub full: Option<f64>,
+    /// The rise's length in samples, t₂·fₑ.
+    pub length: f64,
 }
 
 /// The LFO's phase from its last start (MATH §6.1): the turns there, from 0 up
@@ -432,8 +501,7 @@ impl Lfo {
     pub fn wave(&self, at: Instant, wave: Wave) -> f64 {
         let (turns, wraps) = self.phase.at(at);
         let held = if wave == Wave::SampleAndHold {
-            let draws = self.phase.draws.wrapping_add(wraps);
-            random::sample_hold(random::value(self.seed, self.base.wrapping_add(draws).wrapping_add(1)))
+            self.held(self.phase.draws.wrapping_add(wraps))
         } else {
             0.0
         };
@@ -444,5 +512,26 @@ impl Lfo {
     #[must_use]
     pub fn fade(&self, at: Instant) -> f64 {
         self.fade.depth(at)
+    }
+
+    /// The fade of its delay from an instant on: w there and where its stages
+    /// end.
+    #[must_use]
+    pub fn fading(&self, at: Instant) -> Fading {
+        self.fade.fading(at)
+    }
+
+    /// Its phase's advance a sample, f/fₑ in turns: from 2⁵³ on the phase stands
+    /// still (MATH §6.1).
+    #[must_use]
+    pub const fn step(&self) -> f64 {
+        self.phase.step
+    }
+
+    /// The value that its sample and hold holds after a count of draws, its
+    /// first counted as 0 (MATH §6.3), as [`Lfo::wave`] takes it.
+    #[must_use]
+    pub fn held(&self, draws: u64) -> f64 {
+        random::sample_hold(random::value(self.seed, self.base.wrapping_add(draws).wrapping_add(1)))
     }
 }

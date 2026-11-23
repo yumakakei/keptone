@@ -401,10 +401,10 @@ fn a_refusal_says_where() {
         "\"voice.op6.eg.rate.1\": 99",
         "\"voice.op6.eg.rate.1\": 1e400",
     ));
-    assert_eq!((error.line, error.column), (97, 7));
+    assert_eq!((error.line, error.column), (98, 7));
     assert_eq!(
         error.to_string(),
-        "a number that the parameter does not take at /parts/0/voice.op6.eg.rate.1, line 97, column 7"
+        "a number that the parameter does not take at /parts/0/voice.op6.eg.rate.1, line 98, column 7"
     );
     // The opening brace of the object that lacks a member.
     let error = refusal(&initial_with("    \"lfo.seed\": 0,\n", ""));
@@ -416,7 +416,7 @@ fn a_refusal_says_where() {
     let error = refusal(&initial_with("      \"part.on\": false,\n", ""));
     assert_eq!(
         (error.pointer.as_str(), error.line, error.column),
-        ("/parts/1/part.on", 251, 5)
+        ("/parts/1/part.on", 252, 5)
     );
     // The text itself, where it is not JSON, or not an object.
     let error = refusal("{\"format\": }");

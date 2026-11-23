@@ -27,6 +27,9 @@ use crate::binary64::finite;
 use crate::peg;
 use crate::time::Instant;
 
+/// 2⁵³: the most steps that a glissando counts at once.
+const STEPS: f64 = 9_007_199_254_740_992.0;
+
 /// κ of MATH §7.3, the portamento's speed in octaves a second at a TIME: the
 /// pitch envelope's speed of the rate 99 − TIME, pr\[99 − TIME\]·F/8192 (MATH
 /// §5), between and beyond its steps as §5 takes it; from TIME 1 down to 0 the
@@ -144,6 +147,18 @@ impl Glide {
         self.end
     }
 
+    /// The unit of its offset.
+    #[must_use]
+    pub const fn unit(&self) -> Unit {
+        self.unit
+    }
+
+    /// 4κ/fₑ, the rate of its law a sample, at which e^(−4κt) falls.
+    #[must_use]
+    pub const fn rate(&self) -> f64 {
+        self.rate
+    }
+
     /// Reaches its target at its end: from there on its offset is 0.
     pub fn next(&mut self) {
         if let Some(end) = self.end {
@@ -247,13 +262,77 @@ impl Glissando {
         if self.step <= 0.0 {
             return None;
         }
-        let direction = self.direction();
-        let samples = if self.steps_first() {
-            finite(direction.mul_add(finite(self.heard - self.glide), self.steps + 1.0)) / self.step
+        if self.steps_first() {
+            self.step_at(self.steps)
         } else {
-            -direction * self.glide / self.step
-        };
+            self.start.after(-self.direction() * self.glide / self.step)
+        }
+    }
+
+    /// The instant of the key heard's step from a count of whole keys stepped
+    /// since the anchor to one more: the glide a whole key beyond the key heard
+    /// after that count. Non-decreasing in the count, as every rounding on the
+    /// way is.
+    fn step_at(&self, steps: f64) -> Option<Instant> {
+        let samples = finite(self.direction().mul_add(finite(self.heard - self.glide), steps + 1.0)) / self.step;
         self.start.after(samples)
+    }
+
+    /// The steps that the key heard takes from the anchor's count before the
+    /// glide reaches its target: from s to s + 1 while s + 1 lies short of the
+    /// target, at most 2⁵³, beyond which a count is no integer of binary64's.
+    fn possible(&self) -> f64 {
+        let reach = -self.direction() * self.heard;
+        (reach.ceil() - 1.0 - self.steps).clamp(0.0, STEPS)
+    }
+
+    /// The steps of [`Glissando::possible`] whose instants lie at or before an
+    /// instant, by bisection, the instants being non-decreasing: at most 54
+    /// halvings, however many steps they are.
+    fn steps_by(&self, at: Instant) -> f64 {
+        if self.glide == 0.0 || self.step <= 0.0 {
+            return 0.0;
+        }
+        let (mut low, mut high) = (0.0, self.possible());
+        while high > low {
+            let middle = ((low + high + 1.0) / 2.0).floor();
+            if self
+                .step_at(self.steps + middle - 1.0)
+                .is_some_and(|instant| instant <= at)
+            {
+                low = middle;
+            } else {
+                high = middle - 1.0;
+            }
+        }
+        low
+    }
+
+    /// The changes of the key heard at or before an instant, made at once: the
+    /// state that [`Glissando::next`] at each [`Glissando::end`] up to it leaves,
+    /// its steps counted by bisection, so that the work does not grow with
+    /// them (MATH §2.5), and then the glide's arrival, or the key heard taking
+    /// the target at once, where that lies at or before the instant.
+    pub fn advance(&mut self, to: Instant) {
+        let steps = self.steps_by(to);
+        if steps > 0.0 {
+            self.steps += steps;
+            self.end = self.next_end();
+        }
+        let arrives = self.glide == 0.0 || !self.steps_first();
+        if arrives && self.end.is_some_and(|end| end <= to) {
+            self.next();
+        }
+    }
+
+    /// The key heard's offset from the target at an instant at or after its
+    /// anchor, in keys: [`Glissando::offset`] after [`Glissando::advance`] to
+    /// the instant.
+    #[must_use]
+    pub fn offset_at(&self, at: Instant) -> f64 {
+        let mut advanced = *self;
+        advanced.advance(at);
+        advanced.offset()
     }
 
     /// The key heard's offset from the target, in keys, from its last change

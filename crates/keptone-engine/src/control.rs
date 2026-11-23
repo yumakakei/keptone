@@ -155,6 +155,27 @@ pub fn modulation(depth_parameter: f64, fade: f64, controllers: Limited) -> Limi
     Limited { value, on_scale }.at_most(SATURATION)
 }
 
+/// The fade w of the LFO's delay at which the second evaluation of
+/// [`modulation`] reaches 255/256 and saturates, the corner of the depth that
+/// a rising fade moves (MATH §2.5): (255/256 − c₂)/d₂, c₂ the second
+/// evaluation of the controllers' depth and d₂ the [`depth`] of the depth
+/// parameter at its scale's nearer end; none where that lies outside (0, 1),
+/// where no fade of a rise reaches it, or where d₂ is 0.
+///
+/// The difference and the quotient round within u each: the fade lies within
+/// 2u of the exact one relatively, beside d₂'s relative error, which
+/// [`depth`] documents. The depth is continuous there, so that a part of the
+/// pitch split near the corner errs by the second order of the distance.
+#[must_use]
+pub fn saturating_fade(depth_parameter: f64, controllers: Limited) -> Option<f64> {
+    let slope = depth(depth_parameter.clamp(0.0, 99.0));
+    if slope <= 0.0 {
+        return None;
+    }
+    let fade = finite(SATURATION - controllers.on_scale) / slope;
+    (fade > 0.0 && fade < 1.0).then_some(fade)
+}
+
 /// b of MATH §7.1, the EG bias of the controllers assigned to it
 /// \[AJXS-ROM `MOD_PROCESS_INPUT_SOURCES`\]: the sum of their ranges' depths,
 /// saturating at 255/256, less the sum of their depths x·r, and at least 0,
