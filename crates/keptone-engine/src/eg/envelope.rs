@@ -25,18 +25,36 @@
 //! moves T and every target and leaves the segments where they were. A piece
 //! of law counts its progress ∫ρ dt from an instant at its speed, which holds
 //! still within it: a change of a rate, a level, the rate scaling or the key
-//! of the rates starts a new piece there (§4.7).
+//! of the rates starts a new piece there (§4.7). Where the key of the rates
+//! moves within a sample, [`Envelope::run`] drives it over that sample: each
+//! piece of the key adds the progress that it makes to a base from which the
+//! piece of law counts, and a segment ends at the instant within the sample
+//! at which its progress reaches its end.
 //!
 //! Its time is the engine's, in instants (§0.1). At each instant, the segments
 //! that end at or before it end first ([`Envelope::end`], [`Envelope::next`]),
 //! as a sample at or after a segment's end takes the next segment; then the
 //! events there act; and then the level is read (MATH §0.3).
 
+use keptone_math::eft::two_sum;
+
 use crate::binary64::finite;
 use crate::level::{envelope as envelope_level, total};
+use crate::pieces::Keys;
+use crate::pitch::phase::gauss_instants;
 use crate::time::Instant;
 
+use super::progress::{Rates, Reach, advance};
 use super::{FLOOR, RateLaw, attack, attack_progress, jump, rate, speed, wait};
+
+/// The most segments that end within one sample: segments 0, 1 and 2 to the
+/// hold, or segment 3 to the rest, and one more for a key-on's.
+const ENDS: usize = 4;
+
+/// The instant τ samples after the start of a sample, exactly for τ from 0 to 1.
+fn instant_after(from: Instant, samples: f64) -> Instant {
+    from.after(samples).unwrap_or(from)
+}
 
 /// The settings that an envelope takes (MATH §17), and the engine's rate.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -106,10 +124,18 @@ impl Law {
 /// A piece of law: a law from an instant on, at a speed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Piece {
-    /// The instant from which its progress counts.
+    /// The instant from which its progress counts at its step.
     start: Instant,
-    /// Its progress a sample, ρ/fₑ.
+    /// The progress that it had made by `start`: 0 where it begins there, and
+    /// where the rates' key moves (MATH §4.7) the sum of what the samples
+    /// since its beginning have made, beside `low`.
+    base: f64,
+    /// What the sums of `base` have rounded away.
+    low: f64,
+    /// Its progress a sample from `start`, ρ/fₑ.
     step: f64,
+    /// The rates' key at which its step is taken.
+    key: f64,
     /// Its law.
     law: Law,
     /// The progress from its start at which its segment ends, none where the
@@ -152,23 +178,28 @@ fn own_law(from: Option<f64>, to: Option<f64>, jumps: bool) -> Law {
 
 /// The envelope of an operator (MATH §4).
 ///
-/// Its level at an instant follows its piece's law at the progress Φ = step·Δ,
-/// Δ the samples since the piece's start and the step ρ/fₑ. The speed is
-/// within 2.5u of its value at the rate that [`rate`] gives, 2.86u under the
-/// exponential law ([`speed`]), and within a quarter of the rate's error more,
-/// the speed's slope in the rate being at most a quarter of the speed; the
-/// quotient rounds within u, Δ within u(|Δ| + 1/2) and the product within u:
-/// the progress lies within Φ(ε + 2u) + u·step/2 of ∫ρ dt at the parameters'
-/// binary64 values, ε the step's relative error, and a step more for each
-/// sample of its start's error. A law passes the progress's error on by its
-/// slope, 1 for a fall and max(1, 2 + (3840 − T₀)/256) for an attack from T₀,
-/// beside its own ([`attack`]); a piece starts from a target, which carries
-/// the errors of E(L) and of the total level ([`envelope_level`], [`total`]),
-/// or from where the piece before it was, whose error its law passes on; and
-/// an end lies within its start's error, and its progress's and the step's
-/// over the step, of the exact instant. `scripts/envelope_references.py`
-/// follows these through every piece of the scenarios that tests/envelope.rs
-/// runs.
+/// Its level at an instant follows its piece's law at the progress Φ = Φ₀ +
+/// step·Δ, Δ the samples since the piece's start, the step ρ/fₑ and Φ₀ the
+/// progress that the samples driven since the law's start made, 0 where none
+/// was: each piece of the key's within the bound that
+/// `super::progress::advance` gives, or past the budget the rule's on the
+/// sample's equal parts, summed by two-sums, whose total rounds within u|Φ|.
+/// The speed is within 2.5u of its value at the rate that [`rate`] gives, 2.86u
+/// under the exponential law ([`speed`]), and within a quarter of the rate's
+/// error more, the speed's slope in the rate being at most a quarter of the
+/// speed; the quotient rounds within u, Δ within u(|Δ| + 1/2) and the product
+/// within u: the progress lies within Φ(ε + 2u) + u·step/2 of ∫ρ dt at the
+/// parameters' binary64 values, ε the step's relative error, and a step more
+/// for each sample of its start's error. A law passes the progress's error on
+/// by its slope, 1 for a fall and max(1, 2 + (3840 − T₀)/256) for an attack
+/// from T₀, beside its own ([`attack`]); a piece starts from a target, which
+/// carries the errors of E(L) and of the total level ([`envelope_level`],
+/// [`total`]), or from where the piece before it was, whose error its law
+/// passes on; and an end lies within its start's error, and its progress's and
+/// the step's over the step, of the exact instant.
+/// `scripts/envelope_references.py` follows these through every piece of the
+/// scenarios that tests/envelope.rs runs, and `scripts/drive_references.py`
+/// through the driven samples of those that tests/drive.rs runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Envelope {
     /// Where it is.
@@ -193,7 +224,10 @@ impl Envelope {
             stage: Stage::Resting,
             piece: Piece {
                 start: at,
+                base: 0.0,
+                low: 0.0,
                 step: 0.0,
+                key: f64::NEG_INFINITY,
                 law,
                 end: None,
             },
@@ -208,9 +242,11 @@ impl Envelope {
         self.stage
     }
 
-    /// The progress of its piece at an instant, from its start: none before it.
+    /// The progress of its piece at an instant: what it had made by its start
+    /// and its step times the samples since, none before it.
     fn progress(&self, at: Instant) -> f64 {
-        finite(self.piece.step * at.samples_since(self.piece.start).max(0.0))
+        let moved = finite(self.piece.step * at.samples_since(self.piece.start).max(0.0));
+        finite(self.piece.base + (self.piece.low + moved))
     }
 
     /// T at an instant at or after its piece's start, at the offset O there; none
@@ -228,11 +264,11 @@ impl Envelope {
     /// instant counts.
     #[must_use]
     pub fn end(&self) -> Option<Instant> {
-        let progress = self.piece.end?;
-        if progress <= 0.0 {
+        let left = finite(self.piece.end? - (self.piece.base + self.piece.low));
+        if left <= 0.0 {
             Some(self.piece.start)
         } else {
-            self.piece.start.after(progress / self.piece.step)
+            self.piece.start.after(left / self.piece.step)
         }
     }
 
@@ -242,7 +278,16 @@ impl Envelope {
     /// 2 the hold at L3, and after segment 3 the rest at L4, in each of which
     /// the level goes on by the segment's law. Nothing where it holds.
     pub fn next(&mut self, parameters: &Parameters, settings: &Settings, key: f64, offset: f64) {
-        let (Some(at), Some(progress)) = (self.end(), self.piece.end) else {
+        if let Some(at) = self.end() {
+            self.finish(at, parameters, settings, key, offset);
+        }
+    }
+
+    /// Ends its segment at an instant at which its progress reaches the
+    /// segment's end, and starts what follows there, as [`Envelope::next`]
+    /// does at [`Envelope::end`].
+    fn finish(&mut self, at: Instant, parameters: &Parameters, settings: &Settings, key: f64, offset: f64) {
+        let Some(progress) = self.piece.end else {
             return;
         };
         match self.stage {
@@ -298,6 +343,232 @@ impl Envelope {
             self.counted = finite(self.counted + progress);
         }
         self.anchor(at, level, parameters, settings, key);
+    }
+
+    /// The rates of its stage (MATH §4.1): the rate R of its segment, R3 while
+    /// it holds and R4 while it rests, and the operator's rate scaling, with
+    /// the settings.
+    fn rates(&self, parameters: &Parameters, settings: &Settings) -> Rates {
+        let index = match self.stage {
+            Stage::Segment(segment) => usize::from(segment),
+            Stage::Held => 2,
+            Stage::Resting => 3,
+        };
+        Rates {
+            rate: parameters.rates[index],
+            sensitivity: parameters.rate_scaling,
+            clock_hz: settings.clock_hz,
+            law: settings.rate_law,
+            sample_rate: settings.sample_rate,
+        }
+    }
+
+    /// Takes its piece's progress at an instant into its base, from which it
+    /// counts at no step: the progress that a sample on which the rates' key
+    /// moves adds to.
+    fn freeze(&mut self, at: Instant) {
+        let moved = finite(self.piece.step * at.samples_since(self.piece.start).max(0.0));
+        let (base, error) = two_sum(self.piece.base, finite(self.piece.low + moved));
+        self.piece.base = base;
+        self.piece.low = error;
+        self.piece.start = at;
+        self.piece.step = 0.0;
+    }
+
+    /// Adds a progress to its base, keeping what the sum rounds away beside it.
+    fn add(&mut self, progress: f64) {
+        let (base, error) = two_sum(self.piece.base, progress);
+        self.piece.base = base;
+        self.piece.low = finite(self.piece.low + error);
+    }
+
+    /// Its closed form from an instant on at the speed of a key, which a sample
+    /// where the key holds still there takes on.
+    fn settle(&mut self, at: Instant, key: f64, parameters: &Parameters, settings: &Settings) {
+        let rates = self.rates(parameters, settings);
+        self.piece.start = at;
+        self.piece.key = key;
+        self.piece.step = rates.step(key);
+    }
+
+    /// The progress left in its segment from its base, none where it holds.
+    fn remaining(&self) -> Option<f64> {
+        let made = finite(self.piece.base + self.piece.low);
+        self.piece.end.map(|end| finite(end - made).max(0.0))
+    }
+
+    /// Runs it over the sample that runs one engine sample from an instant
+    /// (MATH §4.7), at the rates' key over that sample, `keys`, and the offset
+    /// O that a segment starting at an instant within it takes, calling `ends`
+    /// with the instant of each segment that ends within the sample, in their
+    /// order, once the sample is done.
+    ///
+    /// Where the key holds still over the sample at the key that its piece's
+    /// speed was taken at, its closed form goes on, each segment ending at
+    /// [`Envelope::end`]. Elsewhere each piece of the key gives its progress
+    /// (`super::progress::advance`), which a two-sum adds to the piece's base,
+    /// and a segment whose progress reaches its end within a piece ends at
+    /// that instant, where the next starts and the piece goes on at its
+    /// rates; at the sample's end the closed form takes over from there at the
+    /// key's speed there. A sample past the budget of `osc.max_pieces` takes
+    /// instead the rule on that many equal parts of the sample, ρ at its
+    /// instants, a segment that ends within a part ending where its progress,
+    /// taken as even across the part, reaches its end.
+    pub fn run(
+        &mut self,
+        from: Instant,
+        keys: &Keys,
+        parameters: &Parameters,
+        settings: &Settings,
+        offset: impl Fn(Instant) -> f64,
+        mut ends: impl FnMut(Instant),
+    ) {
+        let to = instant_after(from, 1.0);
+        if let Some(key) = keys.still()
+            && finite(key - self.piece.key) == 0.0
+        {
+            for _ in 0..ENDS {
+                let Some(end) = self.end().filter(|end| *end <= to) else {
+                    break;
+                };
+                self.next(parameters, settings, key, offset(end));
+                ends(end);
+            }
+            return;
+        }
+        let saved = *self;
+        let mut found = [None; ENDS];
+        let walked = keys
+            .pieces()
+            .is_some_and(|pieces| self.drive(from, pieces, keys.limit(), parameters, settings, &offset, &mut found));
+        if !walked {
+            *self = saved;
+            found = [None; ENDS];
+            self.fallback(from, keys, parameters, settings, &offset, &mut found);
+        }
+        for end in found.into_iter().flatten() {
+            ends(end);
+        }
+    }
+
+    /// The driven walk over a sample's pieces of the key, within the budget;
+    /// false where it runs out.
+    #[expect(clippy::too_many_arguments, reason = "a sample's run takes all that it depends on")]
+    fn drive(
+        &mut self,
+        from: Instant,
+        pieces: &[crate::pieces::KeyPiece],
+        limit: u32,
+        parameters: &Parameters,
+        settings: &Settings,
+        offset: &impl Fn(Instant) -> f64,
+        found: &mut [Option<Instant>; ENDS],
+    ) -> bool {
+        self.freeze(from);
+        let mut budget = f64::from(limit);
+        let mut count = 0;
+        let mut last = self.piece.key;
+        for piece in pieces {
+            let (mut key, mut start, mut length) = (piece.key, piece.start, piece.length);
+            loop {
+                let rates = self.rates(parameters, settings);
+                let left = self.remaining();
+                match advance(&rates, &key, length, left, &mut budget) {
+                    None => return false,
+                    Some(Reach::Beyond(progress)) => {
+                        self.add(progress);
+                        last = key.at(length);
+                        break;
+                    }
+                    Some(Reach::Within(samples)) => {
+                        if count >= ENDS {
+                            return false;
+                        }
+                        let at = instant_after(from, start + samples);
+                        let reached = key.at(samples);
+                        // The progress to the end, which a hold or the rest
+                        // after it goes on from by the same law.
+                        self.add(left.unwrap_or(0.0));
+                        self.finish(at, parameters, settings, reached, offset(at));
+                        self.freeze(at);
+                        found[count] = Some(at);
+                        count += 1;
+                        key = key.later(samples);
+                        start += samples;
+                        length -= samples;
+                    }
+                }
+            }
+        }
+        self.settle(instant_after(from, 1.0), last, parameters, settings);
+        true
+    }
+
+    /// The fallback past the budget: the rule on `osc.max_pieces` equal parts
+    /// of the sample, the rates' key at its instants from the sample's pieces
+    /// or, past their budget, as the key's own fallback took it.
+    fn fallback(
+        &mut self,
+        from: Instant,
+        keys: &Keys,
+        parameters: &Parameters,
+        settings: &Settings,
+        offset: &impl Fn(Instant) -> f64,
+        found: &mut [Option<Instant>; ENDS],
+    ) {
+        self.freeze(from);
+        let count = keys.limit();
+        let boundary = |index: u32| {
+            if index >= count {
+                1.0
+            } else {
+                f64::from(index) / f64::from(count)
+            }
+        };
+        let held = self.piece.key;
+        let key_at = |index: u32, node: usize, samples: f64| match keys.pieces() {
+            Some(pieces) => pieces
+                .iter()
+                .find(|piece| samples < piece.start + piece.length)
+                .or(pieces.last())
+                .map_or(held, |piece| piece.key.at(samples - piece.start)),
+            None => keys
+                .nodes()
+                .get(usize::try_from(index).unwrap_or(usize::MAX))
+                .map_or(held, |nodes| nodes[node]),
+        };
+        let mut ended = 0;
+        let mut last = held;
+        for index in 0..count {
+            let start = boundary(index);
+            let length = boundary(index + 1) - start;
+            let instants = gauss_instants(length);
+            let at_nodes = [0, 1, 2].map(|node| key_at(index, node, start + instants[node]));
+            let mut taken = 0.0;
+            loop {
+                let rates = self.rates(parameters, settings);
+                let [first, middle, end] = at_nodes.map(|key| rates.step(key));
+                let whole = finite(length * 5.0_f64.mul_add(first + end, 8.0 * middle) / 18.0);
+                let rest = finite(whole * (1.0 - taken));
+                match self.remaining() {
+                    Some(left) if left <= rest && whole > 0.0 && ended < ENDS => {
+                        taken = (taken + left / whole).min(1.0);
+                        let at = instant_after(from, start + taken * length);
+                        self.add(left);
+                        self.finish(at, parameters, settings, at_nodes[1], offset(at));
+                        self.freeze(at);
+                        found[ended] = Some(at);
+                        ended += 1;
+                    }
+                    _ => {
+                        self.add(rest);
+                        break;
+                    }
+                }
+            }
+            last = at_nodes[2];
+        }
+        self.settle(instant_after(from, 1.0), last, parameters, settings);
     }
 
     /// Starts a segment at an instant from a level, at an offset.
@@ -363,7 +634,10 @@ impl Envelope {
         let end = matches!(self.stage, Stage::Segment(_)).then(|| moved.max(waited - self.counted));
         self.piece = Piece {
             start: at,
+            base: 0.0,
+            low: 0.0,
             step: rho / settings.sample_rate,
+            key,
             law,
             end,
         };

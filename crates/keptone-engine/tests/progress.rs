@@ -181,3 +181,74 @@ fn a_piece_spends_its_budget() {
     let mut budget = 0.0;
     assert_eq!(advance(&rates, &key, 0.0, None, &mut budget), Some(Reach::Beyond(0.0)));
 }
+
+#[test]
+fn a_later_key_follows_the_same_law() {
+    // From any instant of a piece on, the key's law is the same: a piece that
+    // starts τ samples in takes kᴿ(τ) at its start, bit for bit, and kᴿ(τ + σ)
+    // at σ within the bound below; a glide keeps its sign until it arrives,
+    // and then leaves a key that holds its line.
+    let u = f64::EPSILON / 2.0;
+    let keys = [
+        Key::still(60.0),
+        Key {
+            key: 60.0,
+            slope: 0.01,
+            glide: 0.0,
+            rate: 0.0,
+        },
+        Key {
+            key: 60.0,
+            slope: 0.0,
+            glide: 12.0,
+            rate: 0.001,
+        },
+        Key {
+            key: 60.0,
+            slope: 0.0,
+            glide: -12.0,
+            rate: 0.001,
+        },
+        Key {
+            key: 40.0,
+            slope: -0.002,
+            glide: -7.5,
+            rate: 0.0003,
+        },
+        Key {
+            key: 90.0,
+            slope: 0.003,
+            glide: 24.0,
+            rate: 0.01,
+        },
+    ];
+    for key in keys {
+        assert_eq!(key.later(0.0), key);
+        for tau in [0.5, 10.0, 300.0, 1e4] {
+            let later = key.later(tau);
+            assert_eq!(later.at(0.0).to_bits(), key.at(tau).to_bits(), "{key:?} at {tau}");
+            assert_eq!(later.slope.to_bits(), key.slope.to_bits());
+            assert!(
+                later.glide == 0.0 || later.glide.signum() == key.glide.signum(),
+                "{key:?} at {tau}: {later:?}"
+            );
+            // Every glide here arrives before 10⁴ samples.
+            if tau >= 1e4 {
+                assert_eq!((later.glide, later.rate), (0.0, 0.0), "{key:?} at {tau}");
+            }
+            for sigma in [0.25, 1.0, 100.0, 2e4] {
+                // Key::at rounds within u(|k| + |b|t) + 4.35u(|d| + 3) + u|kᴿ|,
+                // t the instant. The later key's start rounds within u(|k| +
+                // |b|τ) and 4.35u(|d| + 3), which its glide's law carries at a
+                // factor e^(−ρσ) ≤ 1, before its own evaluation; and τ + σ
+                // rounds within u(τ + σ), which moves kᴿ by at most u(|b|t +
+                // 0.37(|d| + 3)). Their sum lies below 3u|k| + 4u|b|t +
+                // 17.8u(|d| + 3) + 2u|kᴿ|.
+                let t = tau + sigma;
+                let (a, b) = (later.at(sigma), key.at(t));
+                let bound = 20.0 * u * (key.key.abs() + key.slope.abs() * t + key.glide.abs() + 3.0 + b.abs());
+                assert!((a - b).abs() <= bound, "{key:?} at {tau} + {sigma}: {a} against {b}");
+            }
+        }
+    }
+}

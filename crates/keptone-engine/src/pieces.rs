@@ -29,6 +29,13 @@
 //! a glide or a glissando in keys moves it by a twelfth of an octave a key, so
 //! that `tuning.modulation`'s two modes are the same (§2.1).
 //!
+//! The rates' key of the operators' envelopes over a sample, [`Keys`], is
+//! split likewise where the pitch envelope reaches its target and where the
+//! portamento changes, the LFO taking no part in it (MATH §2.6), each piece a
+//! line with a glide's law beside it (`crate::eg::progress::Key`); past the
+//! budget, it is the key at the rule's instants of `osc.max_pieces` equal
+//! parts of the sample, as the phase's fallback takes the pitch.
+//!
 //! The pieces' signals are those of `crate::peg`, `crate::portamento`,
 //! `crate::lfo` and `crate::control`, each within the error that its laws
 //! document; the forms here document theirs, and tests/pieces.rs measures the
@@ -44,6 +51,7 @@ use keptone_model::voice::Wave;
 
 use crate::binary64::finite;
 use crate::control::{Limited, modulation, saturating_fade};
+use crate::eg::progress::Key;
 use crate::lfo::{Fading, Lfo, shape};
 use crate::peg::{self, PitchEnvelope};
 use crate::pitch::phase::{gauss_increment, gauss_instants, linear_increment};
@@ -507,6 +515,24 @@ impl Portamento {
         }
     }
 
+    /// Its offset at an instant in keys, a glide's as its law gives it in keys
+    /// and its rate, or a glissando's key heard; under 12-TET twelve keys to
+    /// an octave.
+    fn keys(&self, at: Instant) -> (f64, Option<f64>) {
+        match self {
+            Self::Still => (0.0, None),
+            Self::Glide(glide) => {
+                let offset = glide.offset(at);
+                let keys = match glide.unit() {
+                    Unit::Octaves => finite(12.0 * offset),
+                    Unit::Keys => offset,
+                };
+                (keys, Some(glide.rate()))
+            }
+            Self::Glissando(glissando) => (glissando.offset(), None),
+        }
+    }
+
     /// Its offset at an instant in octaves, once [`Portamento::advance`] has
     /// taken it there: a glide's, or a glissando's key heard.
     fn octaves(&self, at: Instant) -> f64 {
@@ -914,5 +940,221 @@ fn fallback(parts: &mut Parts, from: Instant, signals: &Signals<'_>) {
             *fixed = lfo;
         }
         parts.push(Part::Rule { length, pitches, fixed });
+    }
+}
+
+/// A piece of a sample of the rates' key kᴿ (MATH §2.6, §4.7): where it starts
+/// in the sample, its length, and the key's law on it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KeyPiece {
+    /// The samples from the sample's start to its start.
+    pub start: f64,
+    /// Its length in samples.
+    pub length: f64,
+    /// The key's law on it, from its start.
+    pub key: Key,
+}
+
+/// The rates' key kᴿ over a sample (MATH §2.6, §4.7): its pieces between the
+/// instants where the pitch envelope and the portamento give it a corner or a
+/// jump, or, past the budget of `osc.max_pieces`, the key at the rule's three
+/// instants of that many equal parts of the sample (MATH §2.5), held in
+/// memory that the engine takes when it is prepared.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Keys {
+    /// The pieces, where the walk takes them.
+    pieces: Vec<KeyPiece>,
+    /// The key at the rule's instants of each equal part, past the budget.
+    nodes: Vec<[f64; 3]>,
+    /// `osc.max_pieces`.
+    limit: u32,
+    /// Whether the walk took the pieces.
+    walked: bool,
+}
+
+impl Keys {
+    /// Room for so many pieces and parts, at least 1, or none where the memory
+    /// cannot be had.
+    #[must_use]
+    pub fn new(limit: u32) -> Option<Self> {
+        let limit = limit.max(1);
+        let count = usize::try_from(limit).ok()?;
+        let (mut pieces, mut nodes) = (Vec::new(), Vec::new());
+        pieces.try_reserve_exact(count).ok()?;
+        nodes.try_reserve_exact(count).ok()?;
+        Some(Self {
+            pieces,
+            nodes,
+            limit,
+            walked: true,
+        })
+    }
+
+    /// The most pieces or parts that it holds, `osc.max_pieces`.
+    #[must_use]
+    pub const fn limit(&self) -> u32 {
+        self.limit
+    }
+
+    /// The pieces of the last sample, where the walk took them, and none where
+    /// it took the rule's equal parts.
+    #[must_use]
+    pub fn pieces(&self) -> Option<&[KeyPiece]> {
+        self.walked.then_some(self.pieces.as_slice())
+    }
+
+    /// The key at the rule's three instants of each equal part of the last
+    /// sample, where the walk took them.
+    #[must_use]
+    pub fn nodes(&self) -> &[[f64; 3]] {
+        &self.nodes
+    }
+
+    /// The key over the last sample where it held still there, one piece over
+    /// the whole sample with neither a slope nor a glide that moves.
+    #[must_use]
+    pub fn still(&self) -> Option<f64> {
+        match self.pieces() {
+            Some([piece])
+                if piece.length >= 1.0
+                    && piece.key.slope == 0.0
+                    && (piece.key.glide == 0.0 || piece.key.rate <= 0.0) =>
+            {
+                Some(piece.key.at(0.0))
+            }
+            _ => None,
+        }
+    }
+
+    /// A key that holds still over the sample, as the level's key does under
+    /// `scaling.rate_key = level` (MATH §2.6).
+    pub fn hold(&mut self, key: f64) {
+        self.pieces.clear();
+        self.nodes.clear();
+        self.walked = true;
+        self.pieces.push(KeyPiece {
+            start: 0.0,
+            length: 1.0,
+            key: Key::still(key),
+        });
+    }
+
+    /// The pieces of kᴿ over the sample that runs one engine sample from an
+    /// instant, under `scaling.rate_key = frequency` (MATH §2.6): k′ plus 12
+    /// keys an octave of the pitch envelope's level and the portamento's
+    /// offset under 12-TET, k′ the key after transposition, `key`;
+    /// split where the pitch envelope reaches its target and where the
+    /// portamento changes, a glide's arrival or a glissando's step, each piece
+    /// a part of the budget; past it, the key at the rule's instants of
+    /// `osc.max_pieces` equal parts, each signal by its own law there. The
+    /// signals' own states are left as they are.
+    pub fn walk(
+        &mut self,
+        from: Instant,
+        key: f64,
+        pitch_envelope: PitchEnvelope,
+        parameters: &peg::Parameters,
+        portamento: Portamento,
+        sample_rate: f64,
+    ) {
+        self.walked = self.walk_pieces(from, key, pitch_envelope, parameters, portamento, sample_rate);
+        if !self.walked {
+            self.walk_nodes(from, key, pitch_envelope, parameters, portamento, sample_rate);
+        }
+    }
+
+    /// The walk's pieces, while the budget lasts; false where it does not.
+    fn walk_pieces(
+        &mut self,
+        from: Instant,
+        key: f64,
+        pitch_envelope: PitchEnvelope,
+        parameters: &peg::Parameters,
+        portamento: Portamento,
+        sample_rate: f64,
+    ) -> bool {
+        self.pieces.clear();
+        self.nodes.clear();
+        let (mut envelope, mut portamento) = (pitch_envelope, portamento);
+        let most = usize::try_from(self.limit)
+            .unwrap_or(usize::MAX)
+            .min(self.pieces.capacity());
+        let mut samples = 0.0;
+        while samples < 1.0 {
+            if self.pieces.len() >= most {
+                return false;
+            }
+            let at = instant_after(from, samples);
+            advance(&mut envelope, parameters, &mut portamento, at, sample_rate);
+            let since = |instant: Option<Instant>| instant.map(|instant| instant.samples_since(from));
+            let next = earliest(
+                samples,
+                [
+                    since(envelope.corner()),
+                    since(portamento.end()),
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+            );
+            let moving = envelope.corner().is_some_and(|corner| corner > at);
+            let (offset, rate) = portamento.keys(at);
+            let (glide, rate, heard) = match rate {
+                Some(rate) if offset != 0.0 => (offset, rate, 0.0),
+                Some(_) => (0.0, 0.0, 0.0),
+                None => (0.0, 0.0, offset),
+            };
+            self.pieces.push(KeyPiece {
+                start: samples,
+                length: next - samples,
+                key: Key {
+                    key: finite(finite(12.0_f64.mul_add(envelope.level(at), key)) + heard),
+                    slope: if moving { finite(12.0 * envelope.slope()) } else { 0.0 },
+                    glide,
+                    rate,
+                },
+            });
+            samples = next;
+        }
+        true
+    }
+
+    /// The key at the rule's instants of `osc.max_pieces` equal parts of the
+    /// sample, each signal taken there by its own law.
+    fn walk_nodes(
+        &mut self,
+        from: Instant,
+        key: f64,
+        pitch_envelope: PitchEnvelope,
+        parameters: &peg::Parameters,
+        portamento: Portamento,
+        sample_rate: f64,
+    ) {
+        self.pieces.clear();
+        self.nodes.clear();
+        let count = self.limit;
+        let boundary = |index: u32| {
+            if index >= count {
+                1.0
+            } else {
+                f64::from(index) / f64::from(count)
+            }
+        };
+        let (mut envelope, mut portamento) = (pitch_envelope, portamento);
+        for index in 0..count {
+            let start = boundary(index);
+            let length = boundary(index + 1) - start;
+            let mut nodes = [0.0; 3];
+            for (node, instant) in nodes.iter_mut().zip(gauss_instants(length)) {
+                let at = instant_after(from, start + instant);
+                advance(&mut envelope, parameters, &mut portamento, at, sample_rate);
+                let (offset, _) = portamento.keys(at);
+                *node = finite(finite(12.0_f64.mul_add(envelope.level(at), key)) + offset);
+            }
+            if self.nodes.len() < self.nodes.capacity() {
+                self.nodes.push(nodes);
+            }
+        }
     }
 }

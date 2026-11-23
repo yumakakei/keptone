@@ -103,6 +103,27 @@ impl Key {
         finite(line + offset)
     }
 
+    /// The key's law from τ samples into the piece on, as a piece that starts
+    /// there takes it: the line moved by bτ, and the glide's offset there with
+    /// its rate, its law being the same from any of its instants. The line
+    /// rounds within u|k + bτ| and the offset as [`Key::at`]'s does.
+    #[must_use]
+    pub fn later(&self, samples: f64) -> Self {
+        let glide = if self.glide == 0.0 {
+            0.0
+        } else {
+            let from = self.glide.abs();
+            let falling = exp2m1(-(self.rate * samples) * LOG2_E);
+            (from + 3.0).mul_add(falling, from).max(0.0).copysign(self.glide)
+        };
+        Self {
+            key: self.slope.mul_add(samples, self.key),
+            slope: self.slope,
+            glide,
+            rate: if glide == 0.0 { 0.0 } else { self.rate },
+        }
+    }
+
     /// The instant within (0, L) at which kᴿ′ = b − ρg·e^(−ρτ) vanishes and
     /// kᴿ turns, g its amplitude: e^(−ρτ) = b/(ρg), which only a slope and a
     /// glide of one sign reach, b below ρg; none elsewhere. The quotient, its
