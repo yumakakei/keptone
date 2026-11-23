@@ -211,6 +211,22 @@ fn bell(bounds: [f64; 6]) -> f64 {
     terms.into_iter().fold(0.0, |sum, term| finite(sum + term))
 }
 
+/// The equal parts of a piece of so many samples on which the rule's
+/// truncation stays below 2⁻⁶⁰ of each part's integral (MATH §2.5), its
+/// integrand f smooth on it and a₁ … a₆ bounds of the first six derivatives of
+/// ln f there: the fewest on which h⁶B₆e^(a₁h) ≤ 2016000·2⁻⁶⁰, or 0.3 % more at
+/// most, as [`Piece::count`] derives them; 1 where B₆ is 0, the rule being
+/// exact there, and beyond every integer, or +∞, where the bounds are.
+pub(crate) fn rule_parts(bounds: [f64; 6], length: f64) -> f64 {
+    let bell = bell(bounds);
+    if bell <= 0.0 {
+        return 1.0;
+    }
+    let first = exp2(log2(TRUNCATION / bell) / 6.0) * SAFETY;
+    let part = first * exp2(-(bounds[0] * first / 6.0) * LOG2_E);
+    (length / part).ceil().max(1.0)
+}
+
 /// The phase φ₀ + sτ, reduced to [0, 1): the product formed exactly as the sum
 /// of two binary64 numbers (two-product), its whole turns taken away exactly,
 /// and the rest summed with φ₀ in two roundings, within u(3 + |lo|) turns of
@@ -324,14 +340,7 @@ impl Piece {
         if self.linear().is_some() {
             return 1.0;
         }
-        let bounds = self.bounds();
-        let bell = bell(bounds);
-        if bell <= 0.0 {
-            return 1.0;
-        }
-        let first = exp2(log2(TRUNCATION / bell) / 6.0) * SAFETY;
-        let length = first * exp2(-(bounds[0] * first / 6.0) * LOG2_E);
-        (self.length / length).ceil().max(1.0)
+        rule_parts(self.bounds(), self.length)
     }
 
     /// The voice's λ at τ samples into the piece, in the ratio mode and in the

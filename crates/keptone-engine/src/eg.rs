@@ -7,8 +7,9 @@
 // (LICENSES/GPL-3.0-or-later.txt).
 
 //! The operator envelope (docs/MATH.md §4): the laws of its rates and of its
-//! segments, here, and the envelope itself, which runs its segments by them,
-//! in [`envelope`]. The laws: the rate q of a segment from its rate parameter,
+//! segments, here, the envelope itself, which runs its segments by them, in
+//! [`envelope`], and in [`progress`] a segment's progress over a piece of a
+//! sample on which its rates' key moves. The laws: the rate q of a segment from its rate parameter,
 //! the rate scaling and the key of the rates; the speed ρ(q) at which its
 //! level moves; in the progress that a segment has made, its attack, the jump
 //! that starts it, the progress at which it reaches a target, and its wait;
@@ -33,6 +34,7 @@ use crate::level::FULL_SCALE;
 use crate::steps::between;
 
 pub mod envelope;
+pub mod progress;
 
 /// ⌊41R/64⌋ + RS(k) of MATH §4.1 at a whole rate R, sensitivity KRS and key k,
 /// the rate before its bound: RS = ⌊KRS·clamp(⌊k/3⌋ − 7, 0, 31)/8⌋

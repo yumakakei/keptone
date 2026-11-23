@@ -27,7 +27,9 @@
 //! - [`eg`]: the operator envelope, the laws of its rates and segments, the
 //!   rate and its speed, the attack and the jump that starts it, and the wait,
 //!   and in [`eg::envelope`] the envelope that runs its segments by them, timed
-//!   as the DX7's, through its key events, holds and live changes;
+//!   as the DX7's, through its key events, holds and live changes, and in
+//!   [`eg::progress`] a segment's progress over a piece of a sample on which
+//!   its rates' key moves;
 //! - [`feedback`]: an operator's feedback, the scale of FB and the loop gain,
 //!   the delay-free point solution and the models for a loop gain of 1 and
 //!   more: relaxation, the DX7's recurrence and clamp;
