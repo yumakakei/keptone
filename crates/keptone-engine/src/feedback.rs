@@ -15,7 +15,8 @@
 //! and clamp, the point solution with |β| held below 1. Each is a function of
 //! its inputs at an engine sample and, for the relaxation, at the instants of
 //! its substeps, which the voice gives (MATH §0.3). Loops through several
-//! operators (§9.7) are the voice's, which composes them.
+//! operators (§9.7) are `crate::graph::evaluation`'s, which composes them and
+//! solves them by the substeps' and the delay-free solution's iterations here.
 //!
 //! Each function documents its error against the law's exact value at its
 //! binary64 inputs; tests/feedback.rs measures each against exact values
@@ -274,14 +275,56 @@ impl Relaxation {
 /// The root of one trapezoidal substep's equation (see [`Relaxation`]), from
 /// the lagged value and the output at its start, θ and g at its end, κ and a.
 fn solve(start: f64, before: f64, phase: f64, gain: f64, kappa: f64, a: f64, max_iterations: u32) -> f64 {
+    trapezoid(start, before, a, gain, kappa, max_iterations, |lagged| {
+        let turns = kappa.mul_add(lagged, phase);
+        Fed {
+            turns,
+            value: finite(gain * sin2pi(turns)),
+            slope: finite(gain * TAU * kappa * cos2pi(turns)),
+        }
+    })
+}
+
+/// What a fed-back signal Y gives at a value of it: the phase in turns of the
+/// operator that it enters, θ + μ + κY, by which the stopping rules measure a
+/// step; the output that feeds back, G(Y); and G′(Y).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Fed {
+    /// θ + μ + κY of the operator that the feedback enters, in turns.
+    pub(crate) turns: f64,
+    /// G(Y).
+    pub(crate) value: f64,
+    /// G′(Y).
+    pub(crate) slope: f64,
+}
+
+/// The root of a trapezoidal substep's equation F(Y) = (1 + a)Y − (1 − a)Yₖ −
+/// a·yₖ − a·G(Y) = 0 of the relaxation (MATH §9.6, §9.7), from the lagged value
+/// Yₖ and the output yₖ at the substep's start, a, a bound of |G| at its end
+/// and κ: by Newton from Yₖ inside its bracket, Y within a·|bound|/(1 + a) of
+/// ((1 − a)Yₖ + a·yₖ)/(1 + a), bisecting where a step leaves it, and stopping
+/// where a step moves the fed-back phase by at most 2u·max(1/(2π), |θ + μ +
+/// κY|) turns, that phase reduced to a half turn, or after
+/// `feedback.max_iterations`. A self-loop's G is g sin 2π(θ + κY) ([`Relaxation`],
+/// whose documentation bounds the root's error); a loop's, its operators
+/// composed. F′ = 1 + a − a·G′ lies above 0 where a(B − 1) < 1, B a bound of
+/// |G′|, which the substeps keep, so that the root is unique.
+pub(crate) fn trapezoid(
+    start: f64,
+    before: f64,
+    a: f64,
+    bound: f64,
+    kappa: f64,
+    max_iterations: u32,
+    mut fed: impl FnMut(f64) -> Fed,
+) -> f64 {
     let centre = finite(finite((1.0 - a) * start + a * before) / (1.0 + a));
-    let reach = finite(a * gain.abs() / (1.0 + a));
+    let reach = finite(a * bound.abs() / (1.0 + a));
     let (mut low, mut high) = (centre - reach, centre + reach);
     let mut lagged = start.max(low).min(high);
     for _ in 0..max_iterations {
-        let turns = kappa.mul_add(lagged, phase);
-        let residual =
-            finite((1.0 + a).mul_add(lagged, -finite((1.0 - a) * start)) - a * before - a * gain * sin2pi(turns));
+        let at = fed(lagged);
+        let residual = finite((1.0 + a).mul_add(lagged, -finite((1.0 - a) * start)) - a * before - a * at.value);
         if residual > 0.0 {
             high = lagged;
         } else if residual < 0.0 {
@@ -289,10 +332,10 @@ fn solve(start: f64, before: f64, phase: f64, gain: f64, kappa: f64, a: f64, max
         } else {
             break;
         }
-        let slope = finite(1.0 + a - a * gain * TAU * kappa * cos2pi(turns));
+        let slope = finite(1.0 + a - a * at.slope);
         let step = -residual / slope;
         let next = lagged + step;
-        if (step * kappa).abs() <= 2.0 * U * reduced(turns).abs().max(ONE_RADIAN) {
+        if (step * kappa).abs() <= 2.0 * U * reduced(at.turns).abs().max(ONE_RADIAN) {
             return next.max(low).min(high);
         }
         lagged = if low < next && next < high {
@@ -302,4 +345,51 @@ fn solve(start: f64, before: f64, phase: f64, gain: f64, kappa: f64, a: f64, max
         };
     }
     lagged
+}
+
+/// The delay-free solution y = G(y) of a loop through several operators
+/// (MATH §9.7), y the output that feeds back: Newton on F(y) = y − G(y) inside
+/// [−|bound|, |bound|], a bound of |G|, from a start, bisecting where a step
+/// leaves the bracket, and stopping where a step moves the fed-back phase by
+/// at most 2u·max(1/(2π), |θ + μ + κy|) turns, that phase reduced to a half
+/// turn, or after `feedback.max_iterations`.
+///
+/// Where the loop's gain B lies below 1, F′ = 1 − G′ ≥ 1 − B > 0, so that the
+/// root is unique, and the last step's y lies within the residual's error, the
+/// error of G at its binary64 inputs and u(|y| + |G|), over |F′|, of it, but
+/// for a term of the second order in the step, which the stopping rule makes
+/// negligible.
+pub(crate) fn fixed_point(
+    start: f64,
+    bound: f64,
+    kappa: f64,
+    max_iterations: u32,
+    mut fed: impl FnMut(f64) -> Fed,
+) -> f64 {
+    let reach = bound.abs();
+    let (mut low, mut high) = (-reach, reach);
+    let mut value = start.max(low).min(high);
+    for _ in 0..max_iterations {
+        let at = fed(value);
+        let residual = finite(value - at.value);
+        if residual > 0.0 {
+            high = value;
+        } else if residual < 0.0 {
+            low = value;
+        } else {
+            break;
+        }
+        let slope = finite(1.0 - at.slope);
+        let step = -residual / slope;
+        let next = value + step;
+        if (step * kappa).abs() <= 2.0 * U * reduced(at.turns).abs().max(ONE_RADIAN) {
+            return next.max(low).min(high);
+        }
+        value = if low < next && next < high {
+            next
+        } else {
+            low + (high - low) / 2.0
+        };
+    }
+    value
 }

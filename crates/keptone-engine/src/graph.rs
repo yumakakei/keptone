@@ -14,6 +14,8 @@
 //! Any graph has them, whatever its operators and its loops (MATH §8.4); the
 //! DX7's algorithms are graphs like any other (`keptone_model::graph`).
 
+pub mod evaluation;
+
 use std::collections::BinaryHeap;
 
 use keptone_model::graph::Graph;

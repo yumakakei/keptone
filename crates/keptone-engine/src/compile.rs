@@ -26,6 +26,7 @@ use crate::configuration::Configuration;
 use crate::control::{amplitude_sensitivity, pitch_sensitivity};
 use crate::eg::envelope;
 use crate::feedback::kappa;
+use crate::graph::evaluation::Plan;
 use crate::graph::{Component, components};
 use crate::level::Side;
 use crate::peg;
@@ -205,6 +206,8 @@ pub struct CompiledPatch {
     pub components: Vec<Component>,
     /// Its feedback edges and their κ.
     pub feedback: Vec<FeedbackEdge>,
+    /// What a voice evaluates at each engine sample (MATH §8.2, §9).
+    pub plan: Plan,
     /// The pitch envelope's rates and levels (MATH §5).
     pub pitch_envelope: peg::Parameters,
     /// The LFO's parameters (MATH §6).
@@ -232,7 +235,7 @@ impl CompiledPatch {
         let fb = voice.feedback.get();
         // FB exactly 0 has no feedback edge (MATH §8.1, §9.1).
         let graph = Graph::of_algorithm(voice.algorithm, fb != 0.0);
-        let feedback = graph
+        let feedback: Vec<FeedbackEdge> = graph
             .edges()
             .iter()
             .filter(|edge| edge.kind == Kind::Feedback)
@@ -242,15 +245,18 @@ impl CompiledPatch {
                 kappa: kappa(fb),
             })
             .collect();
+        let components = components(&graph);
+        let plan = Plan::new(&graph, &components, &feedback);
         Self {
             operators: voice
                 .operators
                 .iter()
                 .map(|operator| CompiledOperator::new(operator, configuration))
                 .collect(),
-            components: components(&graph),
+            components,
             graph,
             feedback,
+            plan,
             pitch_envelope: peg::Parameters {
                 rates: voice.pitch_envelope.rates.map(keptone_model::voice::Value::get),
                 levels: voice.pitch_envelope.levels.map(keptone_model::voice::Value::get),
