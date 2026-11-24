@@ -53,7 +53,10 @@
 //! - [`random`]: the random source, `SplitMix64` read at counters, and a part's
 //!   streams;
 //! - [`time`]: the instants at which segments start and from which they count
-//!   their time.
+//!   their time;
+//! - [`voice`]: one voice, the note it plays and its operators' phases,
+//!   envelopes, offsets and switches, integrated over each engine sample and
+//!   evaluated through its graph at the sample's instant.
 #![forbid(unsafe_code)]
 
 mod binary64;
@@ -72,3 +75,4 @@ pub mod portamento;
 pub mod random;
 mod steps;
 pub mod time;
+pub mod voice;

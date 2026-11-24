@@ -301,7 +301,15 @@ pub fn kept(bias: Limited, depth: Limited, wave: f64) -> f64 {
 /// relative error times |ΔT|.
 #[must_use]
 pub fn attenuation(max_steps: f64, ams: f64, kept: f64) -> f64 {
-    let scale = finite(max_steps / 8.0 * amplitude_sensitivity(ams));
+    lowering(max_steps, amplitude_sensitivity(ams), kept)
+}
+
+/// ΔT of MATH §7.2 at the sensitivity α(AMS) itself, as the compiled patch
+/// holds it ([`amplitude_sensitivity`]), within the bound that [`attenuation`]
+/// documents beyond α's own error.
+#[must_use]
+pub fn lowering(max_steps: f64, sensitivity: f64, kept: f64) -> f64 {
+    let scale = finite(max_steps / 8.0 * sensitivity);
     if scale == 0.0 {
         0.0
     } else if kept <= 0.0 {

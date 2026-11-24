@@ -461,6 +461,43 @@ impl Lfo {
         }
     }
 
+    /// The LFO of a voice under `lfo.scope = voice` from the key-on of the
+    /// part's m-th note (MATH §6.5): its delay starting there; with LFO SYNC
+    /// its phase starting at 0 there, and without it the part's phase, which no
+    /// key-on resets, the same closed form from the same start, at the part's
+    /// speed either way; and its sample-and-hold values from the stream of the
+    /// part's voices, its c-th value since the key-on, from 0, of index
+    /// 2³²m + c + 1 (MATH §6.3).
+    #[must_use]
+    pub fn of_voice(
+        part: &Self,
+        at: Instant,
+        sync: bool,
+        delay: f64,
+        sample_rate: f64,
+        stream: u64,
+        note: u64,
+    ) -> Self {
+        let base = note << 32;
+        let (phase, base) = if sync {
+            let phase = Phase {
+                start: at,
+                turns: 0.0,
+                step: part.phase.step,
+                draws: 0,
+            };
+            (phase, base)
+        } else {
+            (part.phase, base.wrapping_sub(part.draws(at)))
+        };
+        Self {
+            phase,
+            fade: Fade::of(at, delay, sample_rate, Stage::Waiting, 0.0),
+            seed: stream,
+            base,
+        }
+    }
+
     /// A change of speed at an instant, which carries the phase over without a
     /// jump (MATH §6.1).
     pub fn set_speed(&mut self, at: Instant, speed: f64, sample_rate: f64) {

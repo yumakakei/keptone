@@ -535,7 +535,8 @@ impl Portamento {
 
     /// Its offset at an instant in octaves, once [`Portamento::advance`] has
     /// taken it there: a glide's, or a glissando's key heard.
-    fn octaves(&self, at: Instant) -> f64 {
+    #[must_use]
+    pub fn octaves(&self, at: Instant) -> f64 {
         match self {
             Self::Still => 0.0,
             Self::Glide(_) => self.glide(at).map_or(0.0, |(octaves, _)| octaves),

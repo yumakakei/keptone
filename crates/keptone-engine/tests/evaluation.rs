@@ -180,7 +180,11 @@ fn outputs_within_their_bound() {
             if n > 0.0 {
                 case.plan.integrate(
                     &mut memory,
-                    |k, s| case.laws[k].at((n - 1.0) + s, n - 1.0),
+                    |s, out: &mut [(f64, f64)]| {
+                        for (k, slot) in out.iter_mut().enumerate() {
+                            *slot = case.laws[k].at((n - 1.0) + s, n - 1.0);
+                        }
+                    },
                     &before,
                     &case.settings,
                     case.rate,
@@ -334,7 +338,17 @@ fn a_memory_is_renewed_where_its_component_changes() {
     let lagging = |plan: &Plan, memory: &mut Memory, integrate: bool| {
         let mut outputs = [0.0; 6];
         if integrate {
-            plan.integrate(memory, |k, _| at(k), &[0.0; 6], &relaxation, 48_000.0);
+            plan.integrate(
+                memory,
+                |_, out: &mut [(f64, f64)]| {
+                    for (k, slot) in out.iter_mut().enumerate() {
+                        *slot = at(k);
+                    }
+                },
+                &[0.0; 6],
+                &relaxation,
+                48_000.0,
+            );
         }
         plan.output(memory, at, &relaxation, &mut outputs);
         outputs.map(f64::to_bits)
@@ -396,7 +410,11 @@ fn the_relaxation_of_a_loop_converges_at_order_two() {
                 if n > 0.0 {
                     plan.integrate(
                         &mut memory,
-                        |k, s| law(k, ((n - 1.0) + s) / rate),
+                        |s, out: &mut [(f64, f64)]| {
+                            for (k, slot) in out.iter_mut().enumerate() {
+                                *slot = law(k, ((n - 1.0) + s) / rate);
+                            }
+                        },
                         &before,
                         &settings,
                         rate,

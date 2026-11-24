@@ -169,16 +169,17 @@ impl Plan {
     }
 
     /// The lags of the relaxation over an engine sample (MATH §9.6, §9.7),
-    /// by the laws that held over it: `within(k, τ)` gives operator k's θ in
-    /// turns and its gain g at τ samples into the sample, from 0, the instant
-    /// before, to 1, the sample's own, as those laws give them there.
-    /// `before` holds the operators' outputs at the instant before, at which a
-    /// stage's modulators outside it, which none of the DX7's algorithms has
-    /// (§8.1), are held over the substeps; user graphs (M8b) will take them at
-    /// the substeps' instants. Nothing under the other models, which keep no
-    /// lag, nor for a renewed memory, whose voice starts at the next output's
-    /// instant, nor where the memory or `before` holds fewer operators than
-    /// the plan.
+    /// by the laws that held over it: `values(τ, out)` writes every
+    /// operator's θ in turns and its gain g at τ samples into the sample, from
+    /// 0, the instant before, to 1, the sample's own, as those laws give them
+    /// there, into `out`, by the operators' indices; it is asked once for each
+    /// instant that a stage takes. `before` holds the operators' outputs at
+    /// the instant before, at which a stage's modulators outside it, which
+    /// none of the DX7's algorithms has (§8.1), are held over the substeps;
+    /// user graphs (M8b) will take them at the substeps' instants. Nothing
+    /// under the other models, which keep no lag, nor for a renewed memory,
+    /// whose voice starts at the next output's instant, nor where the memory
+    /// or `before` holds fewer operators than the plan.
     ///
     /// τ and the substeps are taken at the larger of the loop gain's
     /// magnitudes at the sample's two ends, B of §9.7, β for a self-loop
@@ -187,7 +188,7 @@ impl Plan {
     pub fn integrate(
         &self,
         memory: &mut Memory,
-        within: impl Fn(usize, f64) -> (f64, f64),
+        mut values: impl FnMut(f64, &mut [(f64, f64)]),
         before: &[f64],
         settings: &Feedback,
         sample_rate: f64,
@@ -202,38 +203,46 @@ impl Plan {
             lagging,
             scratch,
             slopes,
+            start,
+            end,
+            from,
+            to,
             ..
         } = memory;
+        let mut ends_taken = false;
         for stage in &self.stages {
             let Stage::Feedback(stage) = stage else {
                 continue;
             };
-            let to = stage.to;
-            if fresh[to] {
+            let entered = stage.to;
+            if fresh[entered] {
                 continue;
             }
-            let ends = [0.0, 1.0].map(|samples| self.gain(stage, |k| within(k, samples).1).abs());
+            if !ends_taken {
+                values(0.0, &mut start[..count]);
+                values(1.0, &mut end[..count]);
+                ends_taken = true;
+            }
+            let ends = [&*start, &*end].map(|at| self.gain(stage, |k| at[k].1).abs());
             let largest = ends[0].max(ends[1]);
             let tau = feedback::lag(largest, settings.relaxation_onset, settings.tau_s);
-            lagging[to] = tau > 0.0;
+            lagging[entered] = tau > 0.0;
             if tau <= 0.0 {
                 continue;
             }
             let steps = feedback::substeps(largest, tau, sample_rate, settings.max_substeps).max(1);
             let a = finite(1.0 / (2.0 * tau * sample_rate * f64::from(steps)));
-            let instant = |j: u32| {
-                if j >= steps {
-                    1.0
-                } else {
-                    f64::from(j) / f64::from(steps)
-                }
-            };
             scratch[..count].copy_from_slice(&before[..count]);
-            let mut value = lagged[to];
+            from[..count].copy_from_slice(&start[..count]);
+            let mut value = lagged[entered];
             for j in 1..=steps {
-                let (start, end) = (instant(j - 1), instant(j));
-                let yielded = self.chain(stage, stage.kappa, value, |k| within(k, start), scratch, slopes);
-                let bound = within(stage.from, end).1;
+                if j >= steps {
+                    to[..count].copy_from_slice(&end[..count]);
+                } else {
+                    values(f64::from(j) / f64::from(steps), &mut to[..count]);
+                }
+                let yielded = self.chain(stage, stage.kappa, value, |k| from[k], scratch, slopes);
+                let bound = to[stage.from].1;
                 value = feedback::trapezoid(
                     value,
                     yielded.value,
@@ -241,10 +250,11 @@ impl Plan {
                     bound,
                     stage.kappa,
                     settings.max_iterations,
-                    |fed| self.chain(stage, stage.kappa, fed, |k| within(k, end), scratch, slopes),
+                    |fed| self.chain(stage, stage.kappa, fed, |k| to[k], scratch, slopes),
                 );
+                core::mem::swap(from, to);
             }
-            lagged[to] = value;
+            lagged[entered] = value;
         }
     }
 
@@ -323,6 +333,7 @@ impl Plan {
             lagging,
             scratch,
             slopes,
+            ..
         } = memory;
         let to = stage.to;
         let single = stage.order.len() == 1;
@@ -562,6 +573,14 @@ pub struct Memory {
     scratch: Vec<f64>,
     /// Their derivatives in the fed-back value.
     slopes: Vec<f64>,
+    /// The operators' θ and g at the sample's start.
+    start: Vec<(f64, f64)>,
+    /// At its end.
+    end: Vec<(f64, f64)>,
+    /// At a substep's start.
+    from: Vec<(f64, f64)>,
+    /// At its end.
+    to: Vec<(f64, f64)>,
 }
 
 impl Memory {
@@ -582,6 +601,10 @@ impl Memory {
             lagging: filled(operators, false)?,
             scratch: filled(operators, 0.0)?,
             slopes: filled(operators, 0.0)?,
+            start: filled(operators, (0.0, 0.0))?,
+            end: filled(operators, (0.0, 0.0))?,
+            from: filled(operators, (0.0, 0.0))?,
+            to: filled(operators, (0.0, 0.0))?,
         })
     }
 
@@ -616,6 +639,13 @@ impl Memory {
                 self.fresh[stage.to] = true;
             }
         }
+    }
+
+    /// Sets every stage's state to 0, its voice going on, as MATH §13.4 does
+    /// once a voice has been silent for `engine.idle_s`.
+    pub fn zero(&mut self) {
+        self.lagged.fill(0.0);
+        self.before.fill(0.0);
     }
 
     /// Sets each state whose magnitude lies below 2⁻⁵⁰⁰ to 0, as MATH §13.4
