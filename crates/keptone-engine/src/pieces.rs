@@ -784,8 +784,17 @@ impl Fade {
 /// walk or the fallback gives them (MATH §2.5); the signals' own states are
 /// left as they are, which [`advance`] then takes to the sample's end.
 pub fn sample(parts: &mut Parts, from: Instant, signals: &Signals<'_>) {
-    if !walk(parts, from, signals) {
-        fallback(parts, from, signals);
+    span(parts, from, 1.0, signals);
+}
+
+/// The parts of a span of a sample, so many samples from an instant, as
+/// [`sample`] gives a whole sample's: walked through the same corners and
+/// jumps, or past the budget on `osc.max_pieces` equal parts of the span; the
+/// part of a sample up to an instant within it at which the relaxation takes
+/// θ and g (MATH §9.6). A span of 1 is the sample.
+pub fn span(parts: &mut Parts, from: Instant, length: f64, signals: &Signals<'_>) {
+    if !walk(parts, from, length, signals) {
+        fallback(parts, from, length, signals);
     }
 }
 
@@ -814,25 +823,25 @@ fn instant_after(from: Instant, samples: f64) -> Instant {
     from.after(samples).unwrap_or(from)
 }
 
-/// The least of the changes after τ, and of 1, the sample's end.
-fn earliest(samples: f64, changes: [Option<f64>; 6]) -> f64 {
+/// The least of the changes after τ, and of the span's end.
+fn earliest(samples: f64, end: f64, changes: [Option<f64>; 6]) -> f64 {
     changes
         .into_iter()
         .flatten()
         .filter(|change| *change > samples)
-        .fold(1.0, f64::min)
+        .fold(end, f64::min)
 }
 
-/// The walk over a sample: its pieces between the instants where a signal has
-/// a corner or a jump, and their parts, while the budget of `osc.max_pieces`
-/// parts lasts, each piece taking one at least; false where it does not, and
-/// at once where the LFO's wave has more corners and edges in the sample than
-/// the budget, each of which would take a piece.
-fn walk(parts: &mut Parts, from: Instant, signals: &Signals<'_>) -> bool {
+/// The walk over a span of a sample: its pieces between the instants where a
+/// signal has a corner or a jump, and their parts, while the budget of
+/// `osc.max_pieces` parts lasts, each piece taking one at least; false where
+/// it does not, and at once where the LFO's wave has more corners and edges in
+/// the span than the budget, each of which would take a piece.
+fn walk(parts: &mut Parts, from: Instant, length: f64, signals: &Signals<'_>) -> bool {
     parts.parts.clear();
     let mut budget = f64::from(parts.limit);
     let grid = Grid::new(signals.lfo, signals.wave, from);
-    if grid.cells() >= budget {
+    if grid.cells() * length >= budget {
         return false;
     }
     let mut envelope = signals.pitch_envelope;
@@ -840,7 +849,7 @@ fn walk(parts: &mut Parts, from: Instant, signals: &Signals<'_>) -> bool {
     let fade = Fade::new(signals.lfo.fading(from));
     let corner = saturating_fade(signals.depth, signals.controllers).and_then(|fade_at| fade.reaching(fade_at));
     let mut samples = 0.0;
-    while samples < 1.0 {
+    while samples < length {
         let at = instant_after(from, samples);
         advance(
             &mut envelope,
@@ -853,6 +862,7 @@ fn walk(parts: &mut Parts, from: Instant, signals: &Signals<'_>) -> bool {
         let cell = grid.cell(samples);
         let next = earliest(
             samples,
+            length,
             [
                 since(envelope.corner()),
                 since(portamento.end()),
@@ -908,16 +918,16 @@ fn parts_of(count: f64) -> u32 {
 }
 
 /// The fallback past the budget (MATH §2.5): the rule on `osc.max_pieces`
-/// equal parts of the sample, each signal taken at the rule's instants by its
+/// equal parts of the span, each signal taken at the rule's instants by its
 /// own law, whatever its corners and jumps.
-fn fallback(parts: &mut Parts, from: Instant, signals: &Signals<'_>) {
+fn fallback(parts: &mut Parts, from: Instant, length: f64, signals: &Signals<'_>) {
     parts.parts.clear();
     let count = parts.limit;
     let boundary = |index: u32| {
         if index >= count {
-            1.0
+            length
         } else {
-            f64::from(index) / f64::from(count)
+            length * f64::from(index) / f64::from(count)
         }
     };
     let mut envelope = signals.pitch_envelope;
@@ -970,6 +980,8 @@ pub struct Keys {
     limit: u32,
     /// Whether the walk took the pieces.
     walked: bool,
+    /// The length of the span that they cover, 1 for a sample.
+    length: f64,
 }
 
 impl Keys {
@@ -987,6 +999,7 @@ impl Keys {
             nodes,
             limit,
             walked: true,
+            length: 1.0,
         })
     }
 
@@ -994,6 +1007,13 @@ impl Keys {
     #[must_use]
     pub const fn limit(&self) -> u32 {
         self.limit
+    }
+
+    /// The length in samples of the span that the last walk covered, 1 for a
+    /// whole sample.
+    #[must_use]
+    pub const fn length(&self) -> f64 {
+        self.length
     }
 
     /// The pieces of the last sample, where the walk took them, and none where
@@ -1010,13 +1030,13 @@ impl Keys {
         &self.nodes
     }
 
-    /// The key over the last sample where it held still there, one piece over
-    /// the whole sample with neither a slope nor a glide that moves.
+    /// The key over the last span where it held still there, one piece over
+    /// the whole span with neither a slope nor a glide that moves.
     #[must_use]
     pub fn still(&self) -> Option<f64> {
         match self.pieces() {
             Some([piece])
-                if piece.length >= 1.0
+                if piece.length >= self.length
                     && piece.key.slope == 0.0
                     && (piece.key.glide == 0.0 || piece.key.rate <= 0.0) =>
             {
@@ -1029,12 +1049,18 @@ impl Keys {
     /// A key that holds still over the sample, as the level's key does under
     /// `scaling.rate_key = level` (MATH §2.6).
     pub fn hold(&mut self, key: f64) {
+        self.hold_over(key, 1.0);
+    }
+
+    /// A key that holds still over a span of so many samples.
+    pub fn hold_over(&mut self, key: f64, length: f64) {
         self.pieces.clear();
         self.nodes.clear();
         self.walked = true;
+        self.length = length;
         self.pieces.push(KeyPiece {
             start: 0.0,
-            length: 1.0,
+            length,
             key: Key::still(key),
         });
     }
@@ -1057,16 +1083,42 @@ impl Keys {
         portamento: Portamento,
         sample_rate: f64,
     ) {
-        self.walked = self.walk_pieces(from, key, pitch_envelope, parameters, portamento, sample_rate);
+        self.span(from, 1.0, key, pitch_envelope, parameters, portamento, sample_rate);
+    }
+
+    /// The pieces of kᴿ over a span of a sample, so many samples from an
+    /// instant, as [`Keys::walk`] gives a whole sample's; past the budget, the
+    /// key at the rule's instants of `osc.max_pieces` equal parts of the span.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a span's key takes all the signals that move it"
+    )]
+    pub fn span(
+        &mut self,
+        from: Instant,
+        length: f64,
+        key: f64,
+        pitch_envelope: PitchEnvelope,
+        parameters: &peg::Parameters,
+        portamento: Portamento,
+        sample_rate: f64,
+    ) {
+        self.length = length;
+        self.walked = self.walk_pieces(from, length, key, pitch_envelope, parameters, portamento, sample_rate);
         if !self.walked {
-            self.walk_nodes(from, key, pitch_envelope, parameters, portamento, sample_rate);
+            self.walk_nodes(from, length, key, pitch_envelope, parameters, portamento, sample_rate);
         }
     }
 
     /// The walk's pieces, while the budget lasts; false where it does not.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a span's key takes all the signals that move it"
+    )]
     fn walk_pieces(
         &mut self,
         from: Instant,
+        length: f64,
         key: f64,
         pitch_envelope: PitchEnvelope,
         parameters: &peg::Parameters,
@@ -1080,7 +1132,7 @@ impl Keys {
             .unwrap_or(usize::MAX)
             .min(self.pieces.capacity());
         let mut samples = 0.0;
-        while samples < 1.0 {
+        while samples < length {
             if self.pieces.len() >= most {
                 return false;
             }
@@ -1089,6 +1141,7 @@ impl Keys {
             let since = |instant: Option<Instant>| instant.map(|instant| instant.samples_since(from));
             let next = earliest(
                 samples,
+                length,
                 [
                     since(envelope.corner()),
                     since(portamento.end()),
@@ -1121,10 +1174,15 @@ impl Keys {
     }
 
     /// The key at the rule's instants of `osc.max_pieces` equal parts of the
-    /// sample, each signal taken there by its own law.
+    /// span, each signal taken there by its own law.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a span's key takes all the signals that move it"
+    )]
     fn walk_nodes(
         &mut self,
         from: Instant,
+        length: f64,
         key: f64,
         pitch_envelope: PitchEnvelope,
         parameters: &peg::Parameters,
@@ -1136,9 +1194,9 @@ impl Keys {
         let count = self.limit;
         let boundary = |index: u32| {
             if index >= count {
-                1.0
+                length
             } else {
-                f64::from(index) / f64::from(count)
+                length * f64::from(index) / f64::from(count)
             }
         };
         let (mut envelope, mut portamento) = (pitch_envelope, portamento);

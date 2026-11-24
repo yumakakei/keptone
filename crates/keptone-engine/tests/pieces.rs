@@ -19,7 +19,7 @@
 use keptone_engine::control::{Limited, Source, controllers, modulation, pitch_sensitivity};
 use keptone_engine::lfo::Lfo;
 use keptone_engine::peg::{self, PitchEnvelope};
-use keptone_engine::pieces::{Part, Parts, Piece, Portamento, Shape, Signals, advance, sample};
+use keptone_engine::pieces::{Part, Parts, Piece, Portamento, Shape, Signals, advance, sample, span};
 use keptone_engine::pitch::phase::gauss_instants;
 use keptone_engine::portamento::{self, Glide, Glissando, Unit};
 use keptone_engine::time::Instant;
@@ -217,6 +217,7 @@ impl Random {
 
 /// What moves a voice's pitch in a scenario: its states, as a voice keeps
 /// them between samples.
+#[derive(Clone)]
 struct Voice {
     /// Its pitch envelope.
     envelope: PitchEnvelope,
@@ -239,6 +240,20 @@ struct Voice {
 }
 
 impl Voice {
+    /// A copy of it whose states are taken to an instant, as the walk takes
+    /// them within a sample.
+    fn clone_at(&self, at: Instant) -> Self {
+        let mut copy = self.clone();
+        advance(
+            &mut copy.envelope,
+            &copy.parameters,
+            &mut copy.portamento,
+            at,
+            copy.sample_rate,
+        );
+        copy
+    }
+
     /// The signals of its states.
     fn signals(&self) -> Signals<'_> {
         Signals {
@@ -354,14 +369,19 @@ fn voice(random: &mut Random, sample_rate: f64) -> Voice {
     }
 }
 
-/// Checks a sample's parts against the voice's signals: their lengths tile the
-/// sample, within the rounding of the pieces' lengths, u a piece; and at
-/// interior instants of each part, the rule's or a linear part's quarters, λ
-/// agrees with the signals' laws within their bound, but within the
-/// uncertainty of a jump of the LFO's wave, its phase's 6u turns over its
-/// step, and that of the instant, which the sum of the lengths before it
-/// carries; returns the parts' count.
+/// Checks a sample's parts against the voice's signals (see [`checked_over`]).
 fn checked(parts: &Parts, from: Instant, voice: &Voice) -> usize {
+    checked_over(parts, from, 1.0, voice)
+}
+
+/// Checks the parts of a span of so many samples against the voice's signals:
+/// their lengths tile the span, within the rounding of the pieces' lengths, u
+/// a piece; and at interior instants of each part, the rule's or a linear
+/// part's quarters, λ agrees with the signals' laws within their bound, but
+/// within the uncertainty of a jump of the LFO's wave, its phase's 6u turns
+/// over its step, and that of the instant, which the sum of the lengths before
+/// it carries; returns the parts' count.
+fn checked_over(parts: &Parts, from: Instant, span: f64, voice: &Voice) -> usize {
     let (mut start, mut sum_low) = (0.0, 0.0);
     let jumps = matches!(
         voice.wave,
@@ -414,8 +434,8 @@ fn checked(parts: &Parts, from: Instant, voice: &Voice) -> usize {
     }
     let total = start + sum_low;
     assert!(
-        (total - 1.0).abs() <= 2.0 * U * real(count),
-        "the parts cover {total} of the sample"
+        (total - span).abs() <= 2.0 * U * real(count),
+        "the parts cover {total} of the span of {span}"
     );
     count
 }
@@ -469,6 +489,158 @@ fn walks_follow_their_signals() {
     println!("walks: {samples} samples, at most {most} parts in one, {fallbacks} past the budget, {held} holds moving");
     assert!(fallbacks > 0 && most == 256, "some samples past the budget");
     assert!(held > 5, "holds moved by a change");
+}
+
+/// 2⁻⁶⁰, the rule's truncation relative to a part's integral (MATH §2.5).
+const TRUNCATION: f64 = f64::from_bits((1023 - 60) << 52);
+
+/// A span's increment at the ratio mode's unit ratio and no constant, ∫2^λ
+/// over the span, its parts' increments summed, with the bound of its error:
+/// each part's within 12u of its exact value in closed form and within 8u and
+/// the rule's truncation, 2⁻⁶⁰ of it, by the rule, and λ's rounding moves it by
+/// ln 2·u/2·|λ| relatively (`keptone_engine::pieces`); the sum adds u of each
+/// partial sum.
+fn increment_of(parts: &Parts) -> (f64, f64) {
+    let (mut sum, mut bound) = (0.0, 0.0);
+    for part in parts.as_slice() {
+        let value = part.increment(1.0, 0.0, false);
+        let largest = match *part {
+            Part::Linear {
+                length, pitch, slope, ..
+            } => pitch.abs().max(slope.mul_add(length, pitch).abs()),
+            Part::Rule { pitches, .. } => pitches.into_iter().fold(0.0_f64, |most, pitch| most.max(pitch.abs())),
+        };
+        sum += value;
+        bound += value.abs() * (12.0 * U + TRUNCATION + 0.35 * U * largest) + U * sum.abs();
+    }
+    (sum, bound)
+}
+
+#[test]
+fn spans_follow_their_signals() {
+    // A span of a sample, up to an instant within it, is walked as the sample
+    // is: its parts follow the signals' laws and tile it. A sample walked in
+    // two spans, up to an instant and on from there, the signals taken there,
+    // integrates as the sample walked whole, within the three walks' bounds,
+    // where none of them is past the budget and the LFO's wave has no jumps,
+    // whose instants each walk finds within its phase's error over its step,
+    // which its jump would then carry.
+    let mut random = Random(0x7370_616e);
+    let (mut spans, mut compared, mut worst) = (0, 0, 0.0_f64);
+    for _ in 0..120 {
+        let rate = random.pick(&[8_000.0, 44_100.0, 48_000.0, 192_000.0]);
+        let mut voice = voice(&mut random, rate);
+        let smooth = matches!(voice.wave, Wave::Triangle | Wave::Sine);
+        let (mut whole, mut first, mut second) = (
+            Parts::new(256).expect("memory"),
+            Parts::new(256).expect("memory"),
+            Parts::new(256).expect("memory"),
+        );
+        for n in 1..=60 {
+            let from = Instant::at(n - 1);
+            let length = random.pick(&[0.5, 0.25, 1e-9, 1.0 - 1e-12, 0.0]) + random.uniform(0.0, 0.1);
+            let length = length.clamp(1e-12, 1.0 - 1e-12);
+            sample(&mut whole, from, &voice.signals());
+            span(&mut first, from, length, &voice.signals());
+            checked_over(&first, from, length, &voice);
+            let at = from.after(length).expect("within the sample");
+            let rest = voice.clone_at(at);
+            span(&mut second, at, 1.0 - length, &rest.signals());
+            let limits = [&whole, &first, &second].map(|parts| parts.as_slice().len() >= 256);
+            if smooth && !limits.contains(&true) {
+                let ((a, a_bound), (b, b_bound), (c, c_bound)) =
+                    (increment_of(&first), increment_of(&second), increment_of(&whole));
+                // Each walk's λ lies within the voice's tolerance of the
+                // signals' laws, which moves an increment by ln 2 times it
+                // relatively; a glissando's steps, at instants that each walk
+                // finds within u of a sample, carry a twelfth of an octave
+                // over that; and τ and 1 − τ round within u each, moving the
+                // two spans' sum by the integrand's largest value times 2u.
+                let tolerance = [0.0, 0.5, 1.0 - 1e-9]
+                    .map(|x| voice.at(from.after(x).expect("within the sample")).2)
+                    .into_iter()
+                    .fold(0.0, f64::max);
+                let largest = [&whole, &first, &second]
+                    .iter()
+                    .flat_map(|parts| {
+                        parts
+                            .as_slice()
+                            .iter()
+                            .map(|part| part.increment(1.0, 0.0, false) / part.length())
+                    })
+                    .fold(0.0, f64::max);
+                let bound = a_bound
+                    + b_bound
+                    + c_bound
+                    + U * (a + b).abs()
+                    + 2.0 * core::f64::consts::LN_2 * tolerance * (a.abs() + b.abs() + c.abs())
+                    + 8.0 * U * largest;
+                let error = ((a + b) - c).abs();
+                assert!(
+                    error <= bound,
+                    "sample {n}, span {length}: {a} + {b} against {c}, error {error:e} > {bound:e}"
+                );
+                worst = worst.max(error / bound);
+                compared += 1;
+            }
+            spans += 1;
+            advance(
+                &mut voice.envelope,
+                &voice.parameters,
+                &mut voice.portamento,
+                Instant::at(n),
+                voice.sample_rate,
+            );
+        }
+    }
+    println!("spans: {spans} spans, {compared} compared with their samples, the worst {worst:.3} of its bound");
+    assert!(compared > 1500, "{compared} samples compared");
+}
+
+#[test]
+fn a_span_walks_the_lfo_cells_within_it() {
+    // A triangle whose sample holds some 300 cells, past a budget of 256, and
+    // a span of half the sample, which holds some 150: the sample takes the
+    // rule on equal parts, and the span is walked, each of its cells a part.
+    let rate = 48_000.0;
+    let start = Instant::at(0);
+    let parameters = peg::Parameters {
+        rates: [99.0; 4],
+        levels: [50.0; 4],
+    };
+    let at_speed = |speed: f64| {
+        let mut lfo = Lfo::new(start, speed, rate, 7, 0);
+        lfo.key_on(start, true, 0.0, rate);
+        lfo
+    };
+    // The speed at which a sample holds 300 half-turn cells, 150 turns, found
+    // by bisection, the step rising with the speed.
+    let (mut low, mut high) = (0.0, 1e30);
+    for _ in 0..200 {
+        let middle = f64::midpoint(low, high);
+        if at_speed(middle).step() < 150.0 {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    let voice = Voice {
+        envelope: PitchEnvelope::new(&parameters, start),
+        parameters,
+        portamento: Portamento::Still,
+        lfo: at_speed(high),
+        wave: Wave::Triangle,
+        sensitivity: pitch_sensitivity(7.0),
+        depth: 99.0,
+        controllers: controllers(&[]),
+        sample_rate: rate,
+    };
+    let mut parts = Parts::new(256).expect("memory");
+    sample(&mut parts, start, &voice.signals());
+    assert_eq!(parts.as_slice().len(), 256, "the sample past the budget");
+    span(&mut parts, start, 0.5, &voice.signals());
+    let count = checked_over(&parts, start, 0.5, &voice);
+    assert!((140..256).contains(&count), "{count} parts in the span");
 }
 
 #[test]

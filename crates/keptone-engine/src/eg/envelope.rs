@@ -401,7 +401,9 @@ impl Envelope {
     /// (MATH §4.7), at the rates' key over that sample, `keys`, and the offset
     /// O that a segment starting at an instant within it takes, calling `ends`
     /// with the instant of each segment that ends within the sample, in their
-    /// order, once the sample is done.
+    /// order, once the sample is done. Over keys walked for a span of a sample,
+    /// shorter than 1 ([`Keys::span`]), it runs over that span alone, as the
+    /// relaxation takes g within a sample (MATH §9.6).
     ///
     /// Where the key holds still over the sample at the key that its piece's
     /// speed was taken at, its closed form goes on, each segment ending at
@@ -423,7 +425,7 @@ impl Envelope {
         offset: impl Fn(Instant) -> f64,
         mut ends: impl FnMut(Instant),
     ) {
-        let to = instant_after(from, 1.0);
+        let to = instant_after(from, keys.length());
         if let Some(key) = keys.still()
             && finite(key - self.piece.key) == 0.0
         {
@@ -438,9 +440,18 @@ impl Envelope {
         }
         let saved = *self;
         let mut found = [None; ENDS];
-        let walked = keys
-            .pieces()
-            .is_some_and(|pieces| self.drive(from, pieces, keys.limit(), parameters, settings, &offset, &mut found));
+        let walked = keys.pieces().is_some_and(|pieces| {
+            self.drive(
+                from,
+                keys.length(),
+                pieces,
+                keys.limit(),
+                parameters,
+                settings,
+                &offset,
+                &mut found,
+            )
+        });
         if !walked {
             *self = saved;
             found = [None; ENDS];
@@ -457,6 +468,7 @@ impl Envelope {
     fn drive(
         &mut self,
         from: Instant,
+        span: f64,
         pieces: &[crate::pieces::KeyPiece],
         limit: u32,
         parameters: &Parameters,
@@ -500,7 +512,7 @@ impl Envelope {
                 }
             }
         }
-        self.settle(instant_after(from, 1.0), last, parameters, settings);
+        self.settle(instant_after(from, span), last, parameters, settings);
         true
     }
 
@@ -517,12 +529,12 @@ impl Envelope {
         found: &mut [Option<Instant>; ENDS],
     ) {
         self.freeze(from);
-        let count = keys.limit();
+        let (count, span) = (keys.limit(), keys.length());
         let boundary = |index: u32| {
             if index >= count {
-                1.0
+                span
             } else {
-                f64::from(index) / f64::from(count)
+                span * f64::from(index) / f64::from(count)
             }
         };
         let held = self.piece.key;
@@ -568,7 +580,7 @@ impl Envelope {
             }
             last = at_nodes[2];
         }
-        self.settle(instant_after(from, 1.0), last, parameters, settings);
+        self.settle(instant_after(from, span), last, parameters, settings);
     }
 
     /// Starts a segment at an instant from a level, at an offset.

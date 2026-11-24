@@ -259,6 +259,53 @@ fn a_still_key_keeps_the_closed_form() {
 }
 
 #[test]
+fn a_still_key_over_spans_keeps_the_closed_form() {
+    // A key that holds still at the key of the envelope's speed over two
+    // spans of each sample, up to an instant and on from there: each span
+    // keeps the closed form, its segments ending at their own ends, so that
+    // the levels and the ends are the whole sample's bit for bit.
+    let (fast, settings) = fast();
+    let beyond = Parameters {
+        rates: [300.0, 300.0, 300.0, 150.0],
+        levels: [99.0, 98.0, 97.0, 0.0],
+        rate_scaling: 7.0,
+    };
+    for parameters in [fast, beyond] {
+        let (key, offset) = (60.0, 4064.0);
+        let start = Instant::at(0);
+        let mut run = Envelope::new(&parameters, offset, start);
+        run.key_on(start, &parameters, &settings, key, offset);
+        let mut closed = run;
+        let mut keys = Keys::new(16).expect("memory");
+        let mut ended = 0;
+        for n in 1..=20_000_u64 {
+            let from = Instant::at(n - 1);
+            let to = Instant::at(n);
+            let length = [0.5, 1e-9, 0.999][usize::try_from(n % 3).expect("small")];
+            let at = from.after(length).expect("within the sample");
+            let mut found = Vec::new();
+            keys.hold_over(key, length);
+            run.run(from, &keys, &parameters, &settings, |_| offset, |end| found.push(end));
+            keys.hold_over(key, 1.0 - length);
+            run.run(at, &keys, &parameters, &settings, |_| offset, |end| found.push(end));
+            let mut expected = Vec::new();
+            while let Some(end) = closed.end().filter(|end| *end <= to) {
+                closed.next(&parameters, &settings, key, offset);
+                expected.push(end);
+            }
+            assert_eq!(found, expected, "at sample {n}");
+            assert_eq!(run.level(to, offset), closed.level(to, offset), "at sample {n}");
+            ended += found.len();
+            if n == 10_000 {
+                run.key_off(to, &parameters, &settings, key, offset);
+                closed.key_off(to, &parameters, &settings, key, offset);
+            }
+        }
+        assert!(ended >= 4 && run.stage() == Stage::Resting, "{ended} ends");
+    }
+}
+
+#[test]
 fn a_still_key_elsewhere_drives_at_its_speed() {
     // A key that holds still at another key than the one that the envelope's
     // speed was taken at: the sample drives the envelope at the speed of the
@@ -456,9 +503,15 @@ fn keys_follow_their_signals() {
         pitch.key_on(start, &pitch_parameters, rate);
         let mut portamento = portamento;
         let mut keys = Keys::new(64).expect("memory");
+        let mut spans = Keys::new(64).expect("memory");
         let (mut pieces, mut rules) = (0, 0);
         for n in 1..=400_u64 {
             let from = Instant::at(n - 1);
+            // A span of the sample, up to an instant within it, takes its key
+            // as the sample does, its pieces covering it.
+            let length = [0.3, 0.75, 1e-6][usize::try_from(n % 3).expect("small")];
+            spans.span(from, length, 61.5, pitch, &pitch_parameters, portamento, rate);
+            span_follows(&spans, from, length, (pitch, portamento, &pitch_parameters), rate);
             keys.walk(from, 61.5, pitch, &pitch_parameters, portamento, rate);
             if let Some(walked) = keys.pieces() {
                 let mut covered = 0.0;
@@ -520,6 +573,58 @@ fn keys_follow_their_signals() {
     }
 }
 
+/// Checks the rates' key over a span of a sample, so many samples from an
+/// instant, against the pitch envelope's and the portamento's laws: its
+/// pieces, covering the span, or the rule's nodes of its equal parts, within
+/// the bounds of the sample's below.
+fn span_follows(
+    spans: &Keys,
+    from: Instant,
+    length: f64,
+    (pitch, portamento, pitch_parameters): (PitchEnvelope, Portamento, &peg::Parameters),
+    rate: f64,
+) {
+    assert_eq!(spans.length().to_bits(), length.to_bits());
+    if let Some(walked) = spans.pieces() {
+        let mut covered = 0.0;
+        for piece in walked {
+            let x = 0.5 * piece.length;
+            let at = from.after(piece.start + x).expect("within the sample");
+            let expected = expected_key(pitch, portamento, pitch_parameters, at, rate);
+            let got = piece.key.at(x);
+            let bound = 256.0 * U * expected.abs().max(64.0) + 4.0 * U * piece.key.slope.abs();
+            assert!(
+                (got - expected).abs() <= bound,
+                "from {from:?}, a span of {length}: {got} against {expected}"
+            );
+            covered += piece.length;
+        }
+        let count = f64::from(u32::try_from(walked.len()).expect("few"));
+        assert!((covered - length).abs() <= 8.0 * U * count, "{covered} of {length}");
+    } else {
+        let nodes = spans.nodes();
+        assert_eq!(nodes.len(), 64, "the rule's parts of a span");
+        let boundary = |index: u32| {
+            if index >= 64 {
+                length
+            } else {
+                length * f64::from(index) / 64.0
+            }
+        };
+        for (index, nodes) in (0_u32..).zip(nodes) {
+            let part = boundary(index + 1) - boundary(index);
+            for (node, instant) in nodes.iter().zip(gauss_instants(part)) {
+                let at = from.after(boundary(index) + instant).expect("within the sample");
+                let expected = expected_key(pitch, portamento, pitch_parameters, at, rate);
+                assert!(
+                    (node - expected).abs() <= 256.0 * U * expected.abs().max(64.0),
+                    "from {from:?}: a node of a span {node} against {expected}"
+                );
+            }
+        }
+    }
+}
+
 /// kᴿ at an instant by the pitch envelope's and the portamento's own laws,
 /// taken there as the walk takes them: 61.5 plus twelve times the pitch
 /// envelope's level, and the portamento's offset in keys.
@@ -539,6 +644,222 @@ fn expected_key(
         Portamento::Glissando(glissando) => glissando.offset(),
     };
     12.0_f64.mul_add(p.level(at), 61.5) + offset
+}
+
+/// Runs an envelope over a sample in two spans, up to an instant within it
+/// and on from there, the pitch envelope and the portamento taken there, the
+/// rates' key walked for each: the instants of the segments that end within
+/// the sample.
+fn in_two_spans(
+    envelope: &mut Envelope,
+    (first, second): (&mut Keys, &mut Keys),
+    (from, length): (Instant, f64),
+    scenario: &Scenario,
+    (pitch, portamento): (PitchEnvelope, Portamento),
+) -> Vec<Instant> {
+    let (settings, rate) = (scenario.settings, scenario.settings.sample_rate);
+    let mut ends = Vec::new();
+    first.span(from, length, scenario.key, pitch, &scenario.pitch, portamento, rate);
+    envelope.run(
+        from,
+        first,
+        &scenario.envelope,
+        &settings,
+        |_| scenario.offset,
+        |at| ends.push(at),
+    );
+    let at = from.after(length).expect("within the sample");
+    let (mut pitch, mut portamento) = (pitch, portamento);
+    advance(&mut pitch, &scenario.pitch, &mut portamento, at, rate);
+    second.span(at, 1.0 - length, scenario.key, pitch, &scenario.pitch, portamento, rate);
+    envelope.run(
+        at,
+        second,
+        &scenario.envelope,
+        &settings,
+        |_| scenario.offset,
+        |end| ends.push(end),
+    );
+    ends
+}
+
+#[test]
+fn an_envelope_runs_over_two_spans_as_over_one() {
+    // The scenarios of the references, each sample run whole and run in two
+    // spans, up to an instant within it and on from there, the pitch envelope
+    // taken there: the two runs' levels and ends agree within the bounds of
+    // their progresses, the budget large enough that no sample takes the rule.
+    let lines = references();
+    let mut index = 0;
+    let (mut count, mut ends) = (0, 0);
+    let (mut whole_keys, mut first, mut second) = (
+        Keys::new(4096).expect("memory"),
+        Keys::new(4096).expect("memory"),
+        Keys::new(4096).expect("memory"),
+    );
+    while index < lines.len() {
+        let (kind, head) = &lines[index];
+        assert_eq!(kind, "scenario");
+        index += 1;
+        while index < lines.len() && lines[index].0 != "scenario" {
+            index += 1;
+        }
+        let scenario = Scenario::of(head);
+        let (settings, rate) = (scenario.settings, scenario.settings.sample_rate);
+        let start = Instant::at(0);
+        let mut pitch = PitchEnvelope::new(&scenario.pitch, start);
+        pitch.key_on(start, &scenario.pitch, rate);
+        let key_now = |pitch: &PitchEnvelope, at: Instant| 12.0_f64.mul_add(pitch.level(at), scenario.key);
+        let mut whole = Envelope::new(&scenario.envelope, scenario.offset, start);
+        whole.key_on(
+            start,
+            &scenario.envelope,
+            &settings,
+            key_now(&pitch, start),
+            scenario.offset,
+        );
+        let mut split = whole;
+        let fastest = fastest(&scenario.envelope, &settings, 127.0)
+            .max(fastest(&scenario.envelope, &settings, 0.0))
+            .max(fastest(&scenario.envelope, &settings, 60.0));
+        let (mut drift, mut last) = (0.0, 0.0);
+        let mut still = Portamento::Still;
+        for n in 1..=scenario.samples {
+            let from = Instant::at(n - 1);
+            let length = [0.5, 0.125, 0.875, 1e-7][usize::try_from(n % 4).expect("small")];
+            let mut a = Vec::new();
+            whole_keys.walk(from, scenario.key, pitch, &scenario.pitch, still, rate);
+            whole.run(
+                from,
+                &whole_keys,
+                &scenario.envelope,
+                &settings,
+                |_| scenario.offset,
+                |at| a.push(at),
+            );
+            let b = in_two_spans(
+                &mut split,
+                (&mut first, &mut second),
+                (from, length),
+                &scenario,
+                (pitch, still),
+            );
+            assert_eq!(a.len(), b.len(), "ends at sample {n}: {a:?} against {b:?}");
+            for (x, y) in a.iter().zip(&b) {
+                // Each stretch's progress lies within some 50u of itself
+                // (`keptone_engine::eg::progress::advance`), mostly alike in the
+                // two runs, which take ρ at the same keys but where the span
+                // ends: their progresses differ by 70u of a segment's at most,
+                // which the speed turns into its samples, D since the segment's
+                // start, and the instants' sums add a few u: 128u(D + 1) an end.
+                drift += 128.0 * U * (samples(*x) - last + 1.0);
+                last = samples(*x);
+                assert!(
+                    (samples(*x) - samples(*y)).abs() <= drift,
+                    "an end at sample {n}: {a:?} against {b:?}"
+                );
+            }
+            ends += a.len();
+            let to = Instant::at(n);
+            advance(&mut pitch, &scenario.pitch, &mut still, to, rate);
+            match (whole.level(to, scenario.offset), split.level(to, scenario.offset)) {
+                (Some(x), Some(y)) => {
+                    // 70u of a progress below 4352 + |T|, and below 420 in an
+                    // attack of a slope of 10.3 at most (see `agreement`):
+                    // below 6.4·10⁵u + 74u|T| with the laws' roundings.
+                    let bound = 256.0 * U * x.abs().max(4096.0) + 11.0 * fastest * drift;
+                    assert!((x - y).abs() <= bound, "at sample {n}: {x} against {y}");
+                }
+                (x, y) => assert_eq!(x, y, "at sample {n}"),
+            }
+            if n == scenario.release {
+                pitch.key_off(to, &scenario.pitch, rate);
+                let key = key_now(&pitch, to);
+                whole.key_off(to, &scenario.envelope, &settings, key, scenario.offset);
+                split.key_off(to, &scenario.envelope, &settings, key, scenario.offset);
+            }
+            count += 1;
+        }
+    }
+    println!("two spans: {count} samples, {ends} ends");
+    assert!(count > 40_000 && ends > 150, "{count} samples, {ends} ends");
+}
+
+#[test]
+fn a_span_whose_progress_outruns_the_budget_takes_the_rule_on_its_parts() {
+    // The sample of the test above, a span of three quarters of it: the rule
+    // on 8 equal parts of the span.
+    let settings = Settings {
+        sample_rate: 48_000.0,
+        clock_hz: 49_096.0,
+        rate_law: RateLaw::Dx7,
+        attack_jump: true,
+        waits: true,
+    };
+    let parameters = Parameters {
+        rates: [300.0, 300.0, 60.0, 150.0],
+        levels: [99.0, 98.0, 50.0, 0.0],
+        rate_scaling: 7.0,
+    };
+    let (rate, offset) = (settings.sample_rate, 4064.0);
+    let start = Instant::at(0);
+    let pitch_parameters = peg::Parameters {
+        rates: [99.0; 4],
+        levels: [50.0; 4],
+    };
+    let pitch = PitchEnvelope::new(&pitch_parameters, start);
+    // 4κ/fₑ = 1 a sample: the glide arrives after ln(83/3) = 3.3 samples.
+    let glide = Portamento::Glide(Glide::new(start, -80.0, 12_000.0, Unit::Keys, rate));
+    let rates = |rate: f64| rates(rate, 7.0, &settings);
+    let step = |rate: f64, key: f64| rates(rate).step(key);
+    let target =
+        |level: f64| keptone_engine::level::total(keptone_engine::level::envelope(level).expect("a level"), offset);
+    let first = keptone_engine::eg::attack_progress(keptone_engine::eg::jump(16.0, target(99.0)), target(99.0));
+    let moved = target(99.0) - target(98.0);
+    let second = moved.max(keptone_engine::eg::wait(false, moved));
+    // Segments 0 and 1 end within its first part; segment 2 falls on from the
+    // span's end, where the closed form takes over at the speed of the key at
+    // the last part's last node: its end lies the progress left over that
+    // speed after it.
+    let mut spans = Keys::new(8).expect("memory");
+    spans.span(start, 0.75, 100.0, pitch, &pitch_parameters, glide, rate);
+    let [piece] = spans.pieces().expect("the span's pieces") else {
+        panic!("one piece")
+    };
+    let boundary = |index: u32| 0.75 * f64::from(index) / 8.0;
+    let within = |rate: f64, index: u32| {
+        let (start, length) = (boundary(index), boundary(index + 1) - boundary(index));
+        let [first, middle, end] = gauss_instants(length).map(|instant| step(rate, piece.key.at(start + instant)));
+        length * 5.0_f64.mul_add(first + end, 8.0 * middle) / 18.0
+    };
+    let part = within(300.0, 0);
+    let taken = [first / part, (first + second) / part];
+    let rest = (1.0 - taken[1]).mul_add(within(60.0, 0), (1..8).map(|index| within(60.0, index)).sum::<f64>());
+    let mut envelope = Envelope::new(&parameters, offset, start);
+    envelope.key_on(start, &parameters, &settings, 100.0, offset);
+    let mut found = Vec::new();
+    envelope.run(start, &spans, &parameters, &settings, |_| offset, |at| found.push(at));
+    assert_eq!(found.len(), 2, "{found:?}");
+    for (at, share) in found.iter().zip(taken) {
+        // As in the whole sample, the part's length 3/32 exact.
+        let expected = share * boundary(1);
+        assert!(
+            (samples(*at) - expected).abs() <= 8.0 * U * expected,
+            "{at:?} against {expected}"
+        );
+    }
+    assert_eq!(envelope.stage(), Stage::Segment(2));
+    let last = step(
+        60.0,
+        piece.key.at(boundary(7) + gauss_instants(boundary(8) - boundary(7))[2]),
+    );
+    let fall = target(98.0) - target(50.0);
+    let expected = 0.75 + (fall - rest) / last;
+    let end = samples(envelope.end().expect("segment 2's end"));
+    // The progress left, the fall less the span's, lies within 16u of the two
+    // as above, which the speed divides, and the instant within 4u of itself.
+    let bound = 16.0 * U * (rest + fall) / last + 4.0 * U * expected;
+    assert!((end - expected).abs() <= bound, "{end} against {expected}");
 }
 
 #[test]
