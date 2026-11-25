@@ -12,10 +12,11 @@
 //! voice that another part takes, which fades out (§13.2); the notes that
 //! parts take by their channels, keys, key filters and note shifts (§13.5);
 //! the controllers, the bend, the per-note pitch, the master tune and the
-//! LFO's restart as the voices take them (§2.4, §6.5, §7.1); the output, the
-//! parts added in their order under each `output.channels` (§14); events
-//! beyond their block; the refusals; and renders of random input that are the
-//! same, bit for bit, however their samples are split into blocks (§0.3).
+//! LFO's restart as the voices take them (§2.4, §6.5, §7.1); the portamento's
+//! glides and the mono parts (§7.3); the output, the parts added in their
+//! order under each `output.channels` (§14); events beyond their block; the
+//! refusals; and renders of random input that are the same, bit for bit,
+//! however their samples are split into blocks (§0.3).
 
 use core::num::NonZeroU32;
 
@@ -24,13 +25,16 @@ use keptone_engine::configuration::Refusal;
 use keptone_engine::control::{self, Source};
 use keptone_engine::eg::envelope::Stage;
 use keptone_engine::engine::{Controller, Engine, Event, Key, Kind};
+use keptone_engine::level;
 use keptone_engine::lfo::Lfo;
 use keptone_engine::pieces::Portamento;
 use keptone_engine::pitch::TwelveTet;
+use keptone_engine::portamento::{self, Glide, Glissando, Unit};
 use keptone_engine::random::{self, Streams};
 use keptone_engine::time::Instant;
 use keptone_engine::voice::{Context, Note, Voice};
 use keptone_model::dx7ii::Index;
+use keptone_model::function::{Polyphony, PortamentoMode};
 use keptone_model::part::{KeyFilter, NoteShift, Part};
 use keptone_model::settings::{self, Settings, Value};
 use keptone_model::voice::{Algorithm, Value as Parameter, Wave};
@@ -839,8 +843,9 @@ impl Random {
 }
 
 /// Random input over so many samples: notes on two channels, their releases,
-/// the four controllers, the bend, the sustain pedal, per-note pitches and
-/// the master tune, about one event every 40 samples.
+/// the four controllers, the bend, the sustain pedal, the portamento's foot
+/// switch, per-note pitches and the master tune, about one event every 40
+/// samples.
 fn random_events(random: &mut Random, samples: u64) -> Vec<(u64, Kind)> {
     let mut events = Vec::new();
     let mut held: Vec<(u8, u8)> = Vec::new();
@@ -855,7 +860,7 @@ fn random_events(random: &mut Random, samples: u64) -> Vec<(u64, Kind)> {
             continue;
         }
         let channel = u8::try_from(random.below(2)).expect("a channel");
-        let kind = match random.below(10) {
+        let kind = match random.below(11) {
             0..=2 => {
                 let number = u8::try_from(36 + random.below(48)).expect("a key");
                 held.push((channel, number));
@@ -888,6 +893,7 @@ fn random_events(random: &mut Random, samples: u64) -> Vec<(u64, Kind)> {
                     keys: 4.0 * random.unit() - 2.0,
                 }
             }
+            9 => foot(channel, random.below(3) != 0),
             _ => Kind::MasterTune {
                 cents: 100.0 * random.unit() - 50.0,
             },
@@ -898,8 +904,11 @@ fn random_events(random: &mut Random, samples: u64) -> Vec<(u64, Kind)> {
 }
 
 /// Parts for the random renders: the first, omni, plays an LFO that modulates
-/// its pitch and its amplitude and a feedback at FB 7 on algorithm 32; the
-/// second, on channel 1 from key 48 up, a note shift and a note limit of 2.
+/// its pitch and its amplitude and a feedback at FB 7 on algorithm 32, its
+/// portamento following at TIME 30; the second, on channel 1 from key 48 up,
+/// mono with a note shift and a note limit of 2, its portamento fingered at
+/// TIME 40 with glissando; both with their operators' rate scaling at 7 and
+/// their rates below 99, so that the rates' key moves their envelopes.
 fn random_parts() -> [Part; 2] {
     let mut first = Part::initial(true);
     let voice = &mut first.patch.voice;
@@ -913,17 +922,27 @@ fn random_parts() -> [Part; 2] {
         operator.output_level = value(90.0);
         operator.amplitude_sensitivity = value(2.0);
         operator.envelope.rates = [value(90.0), value(60.0), value(50.0), value(70.0)];
+        operator.rate_scaling = value(7.0);
     }
     first.function.foot_controller.range = value(70.0);
     first.function.foot_controller.assign.eg_bias = true;
     first.function.breath_controller.range = value(99.0);
     first.function.breath_controller.assign.amplitude = true;
+    first.function.portamento_mode = PortamentoMode::Follow;
+    first.function.portamento_time = value(30.0);
     let mut second = Part::initial(true);
     second.omni = false;
     second.channel = Index::new(1).expect("a channel");
     second.lowest_key = Index::new(48).expect("a key");
     second.note_shift = NoteShift::new(-5.0).expect("a shift");
     second.note_limit = NonZeroU32::new(2);
+    second.function.polyphony = Polyphony::Mono;
+    second.function.portamento_time = value(40.0);
+    second.function.glissando = true;
+    for operator in &mut second.patch.voice.operators {
+        operator.envelope.rates = [value(80.0), value(70.0), value(60.0), value(75.0)];
+        operator.rate_scaling = value(7.0);
+    }
     [first, second]
 }
 
@@ -960,4 +979,756 @@ fn a_render_is_the_same_however_its_samples_are_split_into_blocks() {
         }
         assert!(whole[0].iter().any(|value| value.abs() > 0.1), "configuration {seed}");
     }
+}
+
+/// A part whose portamento glides at TIME 50, retaining or following, with
+/// glissando or without, poly or mono.
+fn gliding(follow: bool, glissando: bool, mono: bool) -> Part {
+    let mut part = Part::initial(true);
+    let function = &mut part.function;
+    function.portamento_time = value(50.0);
+    function.portamento_mode = if follow {
+        PortamentoMode::Follow
+    } else {
+        PortamentoMode::Retain
+    };
+    function.glissando = glissando;
+    function.polyphony = if mono { Polyphony::Mono } else { Polyphony::Poly };
+    part
+}
+
+/// The key at which the pitch of the voice in a part's slot lies at a sample
+/// at or after the engine's last.
+fn heard(engine: &Engine, part: usize, slot: usize, at: u64) -> Option<f64> {
+    let context = engine.context(part)?;
+    engine.voice(part, slot)?.heard(Instant::at(at), &context)
+}
+
+/// The key that a glide of TIME 50 from one key to another reaches so many
+/// samples after it starts at a sample, by MATH §7.3's law: in octaves under
+/// `tuning.modulation = pitch`, in keys under `keys`, or a glissando's key
+/// heard.
+fn glided(from: f64, to: f64, start: u64, samples: u64, unit: Option<Unit>) -> f64 {
+    let speed = portamento::speed(50.0).expect("a speed");
+    let (at, then) = (Instant::at(start), Instant::at(start + samples));
+    match unit {
+        Some(Unit::Octaves) => {
+            let glide = Glide::new(at, (from - to) / 12.0, speed, Unit::Octaves, RATE);
+            12.0_f64.mul_add(glide.offset(then), to)
+        }
+        Some(Unit::Keys) => {
+            let glide = Glide::new(at, from - to, speed, Unit::Keys, RATE);
+            12.0_f64.mul_add(glide.offset(then) / 12.0, to)
+        }
+        None => {
+            let mut glissando = Glissando::new(at, from - to, speed, RATE);
+            glissando.advance(then);
+            12.0_f64.mul_add(glissando.offset() / 12.0, to)
+        }
+    }
+}
+
+/// Renders up to each sample of a list and asserts that the voice in a part's
+/// slot glides there from one key to another as `glided` says, the samples
+/// before the engine's last left out.
+fn glides(engine: &mut Engine, slot: usize, (from, to): (f64, f64), start: u64, unit: Option<Unit>) {
+    for samples in [0, 1, 50, 1000, 5000, 30_000] {
+        let at = start + samples;
+        if at + 1 < engine.sample() {
+            continue;
+        }
+        if engine.sample() <= at {
+            let count = at + 1 - engine.sample();
+            render(engine, &[], count);
+        }
+        let expected = glided(from, to, start, samples, unit);
+        let actual = heard(engine, 0, slot, at).expect("a voice");
+        assert_eq!(
+            actual.to_bits(),
+            expected.to_bits(),
+            "{samples} samples: {actual} against {expected}"
+        );
+    }
+}
+
+/// The portamento's foot switch on a channel.
+const fn foot(channel: u8, on: bool) -> Kind {
+    Kind::Portamento { channel, on }
+}
+
+#[test]
+fn a_poly_note_glides_from_the_previous_key_on_while_the_foot_switch_is_on() {
+    // Off, nothing glides; on, a part's first note has nothing to glide from,
+    // and the next glides from the key of the previous key-on, by the law in
+    // octaves, in keys under tuning.modulation = keys, and as a glissando.
+    let mut engine = prepared(&[], &[gliding(false, false, false)]);
+    render(&mut engine, &[(0, on(0, 60, 100.0)), (100, on(0, 67, 100.0))], 101);
+    assert_eq!(heard(&engine, 0, 1, 100), Some(67.0));
+    for (changes, glissando, unit) in [
+        (vec![], false, Some(Unit::Octaves)),
+        (vec![("tuning.modulation", Value::Choice(1))], false, Some(Unit::Keys)),
+        (vec![], true, None),
+    ] {
+        let mut engine = prepared(&changes, &[gliding(false, glissando, false)]);
+        render(
+            &mut engine,
+            &[(0, foot(0, true)), (10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))],
+            101,
+        );
+        assert_eq!(heard(&engine, 0, 0, 100), Some(60.0));
+        glides(&mut engine, 1, (60.0, 67.0), 100, unit);
+    }
+    // At TIME 0 nothing glides.
+    let mut part = gliding(false, false, false);
+    part.function.portamento_time = value(0.0);
+    let mut engine = prepared(&[], &[part]);
+    render(
+        &mut engine,
+        &[(0, foot(0, true)), (10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))],
+        101,
+    );
+    assert_eq!(heard(&engine, 0, 1, 100), Some(67.0));
+}
+
+#[test]
+fn under_follow_the_voices_whose_keys_are_up_glide_to_each_new_note() {
+    // A released and silent when B starts, so that A's voice glides from 55 to
+    // B's pitch; B held: C, which takes a slot that has played nothing, starts
+    // at its own pitch, A's voice gliding from where it is to C's pitch and
+    // B's left; D then takes A's slot, the first free after C's among three,
+    // and glides from where A's glide has left it.
+    let three = [("voice.count", Value::Integer(3))];
+    let mut engine = prepared(&three, &[gliding(true, false, false)]);
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 55, 100.0)),
+        (20, off(0, 55)),
+        (30, on(0, 60, 100.0)),
+        (5000, on(0, 67, 100.0)),
+    ];
+    render(&mut engine, &events, 5001);
+    assert!(!sounds(&engine, 0, 0));
+    assert_eq!(heard(&engine, 0, 2, 5000), Some(67.0));
+    assert_eq!(heard(&engine, 0, 1, 5000), Some(60.0));
+    assert_eq!(engine.voice(0, 0).map(Voice::transposed), Some(67.0));
+    let there = glided(55.0, 60.0, 30, 4970, Some(Unit::Octaves));
+    glides(&mut engine, 0, (there, 67.0), 5000, Some(Unit::Octaves));
+    let mut engine = prepared(&three, &[gliding(true, false, false)]);
+    let mut events = events.to_vec();
+    events.push((6000, on(0, 72, 100.0)));
+    render(&mut engine, &events, 6001);
+    assert_eq!(keyed(&engine, 0, 0), Some(72.0));
+    assert!(sounds(&engine, 0, 0) && sounds(&engine, 0, 1) && sounds(&engine, 0, 2));
+    let left = glided(there, 67.0, 5000, 1000, Some(Unit::Octaves));
+    glides(&mut engine, 0, (left, 72.0), 6000, Some(Unit::Octaves));
+    // A voice that the sustain pedal holds glides as well, keeping its own
+    // per-note pitch.
+    let mut engine = prepared(&[], &[gliding(true, false, false)]);
+    let pitch = Kind::PerNote {
+        channel: 0,
+        key: key(55),
+        id: None,
+        keys: 0.5,
+    };
+    let events = [
+        (0, foot(0, true)),
+        (1, Kind::Sustain { channel: 0, on: true }),
+        (10, on(0, 55, 100.0)),
+        (15, pitch),
+        (20, off(0, 55)),
+        (30, on(0, 60, 100.0)),
+    ];
+    render(&mut engine, &events, 31);
+    assert!(sounds(&engine, 0, 0));
+    assert_eq!(
+        engine.voice(0, 0).and_then(Voice::note).map(|note| note.per_note),
+        Some(0.5)
+    );
+    glides(&mut engine, 0, (55.0, 60.0), 30, Some(Unit::Octaves));
+}
+
+#[test]
+fn a_mono_part_plays_its_keys_in_its_first_slot_by_the_legato_s_direction() {
+    // Up: 60, then 64 sets the direction and sounds without a key event, 62
+    // does not lie beyond it, 67 does; their releases return to the highest
+    // held; the last release releases the voice. Down: 60, 55, 57, 50, and the
+    // release of 50 returns to the lowest held.
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    let sounding = |engine: &Engine| engine.voice(0, 0).map(Voice::transposed);
+    let stage = |engine: &Engine| engine.voice(0, 0).and_then(|voice| voice.stage(0));
+    let steps = [
+        (on(0, 60, 100.0), 60.0),
+        (on(0, 64, 90.0), 64.0),
+        (on(0, 62, 90.0), 64.0),
+        (on(0, 67, 90.0), 67.0),
+        (off(0, 67), 64.0),
+        (off(0, 64), 62.0),
+        (off(0, 62), 60.0),
+    ];
+    for (step, &(kind, expected)) in (0_u64..).zip(&steps) {
+        render(&mut engine, &[(100 * step, kind)], 100);
+        assert_eq!(sounding(&engine), Some(expected), "step {step}");
+        if step > 0 {
+            // No key event: the envelope holds, and the first key's velocity stays.
+            assert_eq!(stage(&engine), Some(Stage::Held), "step {step}");
+            assert_eq!(
+                engine.voice(0, 0).and_then(Voice::note).map(|note| note.velocity),
+                Some(100.0)
+            );
+        }
+    }
+    render(&mut engine, &[(700, off(0, 60))], 1);
+    assert_eq!(stage(&engine), Some(Stage::Segment(3)));
+    assert!(engine.voice(0, 1).and_then(Voice::note).is_none());
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    let events = [
+        (0, on(0, 60, 100.0)),
+        (10, on(0, 55, 100.0)),
+        (20, on(0, 57, 100.0)),
+        (30, on(0, 50, 100.0)),
+    ];
+    render(&mut engine, &events, 31);
+    assert_eq!(sounding(&engine), Some(50.0));
+    render(&mut engine, &[(31, off(0, 50))], 1);
+    assert_eq!(sounding(&engine), Some(55.0));
+    // A key pressed with none held starts the envelopes again.
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    render(
+        &mut engine,
+        &[(0, on(0, 60, 100.0)), (100, off(0, 60)), (200, on(0, 64, 100.0))],
+        201,
+    );
+    assert_eq!(stage(&engine), Some(Stage::Segment(0)));
+    assert_eq!(engine.sounding(), 1);
+    // So does one pressed while the sustain pedal holds the released voice,
+    // in the same slot.
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    let events = [
+        (0, Kind::Sustain { channel: 0, on: true }),
+        (10, on(0, 60, 100.0)),
+        (100, off(0, 60)),
+        (5000, on(0, 64, 100.0)),
+    ];
+    render(&mut engine, &events, 4999);
+    assert_eq!(stage(&engine), Some(Stage::Held));
+    render(&mut engine, &events, 2);
+    assert_eq!(stage(&engine), Some(Stage::Segment(0)));
+    assert_eq!(engine.sounding(), 1);
+    assert_eq!(keyed(&engine, 0, 0), Some(64.0));
+}
+
+#[test]
+fn a_mono_part_glides_fingered_on_legato_and_full_time_on_every_change() {
+    // Fingered: a key with none held glides not, even with the foot switch
+    // on; a legato glides whatever the switch.
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    render(
+        &mut engine,
+        &[(0, foot(0, true)), (10, on(0, 55, 100.0)), (5000, off(0, 55))],
+        5001,
+    );
+    render(&mut engine, &[(6000, on(0, 60, 100.0))], 1000);
+    assert_eq!(heard(&engine, 0, 0, 6000), Some(60.0));
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    render(&mut engine, &[(10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))], 101);
+    glides(&mut engine, 0, (60.0, 67.0), 100, Some(Unit::Octaves));
+    // Full time: with the switch off nothing glides; on, a legato glides, and
+    // a key with none held glides from the voice's last pitch.
+    let mut engine = prepared(&[], &[gliding(true, false, true)]);
+    render(&mut engine, &[(10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))], 101);
+    assert_eq!(heard(&engine, 0, 0, 100), Some(67.0));
+    let mut engine = prepared(&[], &[gliding(true, false, true)]);
+    render(
+        &mut engine,
+        &[(0, foot(0, true)), (10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))],
+        101,
+    );
+    glides(&mut engine, 0, (60.0, 67.0), 100, Some(Unit::Octaves));
+    let mut engine = prepared(&[], &[gliding(true, false, true)]);
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 55, 100.0)),
+        (50_000, off(0, 55)),
+        (50_100, on(0, 62, 100.0)),
+    ];
+    render(&mut engine, &events, 50_101);
+    glides(&mut engine, 0, (55.0, 62.0), 50_100, Some(Unit::Octaves));
+    // A glide that has begun goes on once the switch is released, through the
+    // release of a key that does not sound.
+    let mut engine = prepared(&[], &[gliding(true, false, true)]);
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 60, 100.0)),
+        (100, on(0, 64, 100.0)),
+        (150, on(0, 62, 100.0)),
+        (200, foot(0, false)),
+        (300, off(0, 62)),
+    ];
+    render(&mut engine, &events, 301);
+    glides(&mut engine, 0, (60.0, 64.0), 100, Some(Unit::Octaves));
+}
+
+#[test]
+fn a_mono_part_keeps_its_lfo_its_pedal_and_its_per_note_pitches() {
+    // A key with none held restarts the part's LFO, its phase at 0 with LFO
+    // SYNC, and a legato does not; the pedal holds the voice past the last
+    // key's release; a held key's per-note pitch comes with it when it sounds.
+    let mut part = gliding(false, false, true);
+    part.patch.voice.lfo.wave = Wave::Sine;
+    let mut engine = prepared(&[], &[part]);
+    let turns = |engine: &Engine, at| engine.context(0).expect("a part").lfo.turns(Instant::at(at));
+    render(&mut engine, &[(1234, on(0, 60, 100.0)), (2345, on(0, 64, 100.0))], 2346);
+    assert_eq!(turns(&engine, 1234), 0.0);
+    assert!(turns(&engine, 2345) != 0.0);
+    let pitch = Kind::PerNote {
+        channel: 0,
+        key: key(60),
+        id: None,
+        keys: 0.5,
+    };
+    let sustain = |on| Kind::Sustain { channel: 0, on };
+    let events = [
+        (2400, pitch),
+        (2500, sustain(true)),
+        (2600, off(0, 64)),
+        (2700, off(0, 60)),
+        (2800, sustain(false)),
+    ];
+    render(&mut engine, &events, 255);
+    let voice = engine.voice(0, 0).expect("a voice");
+    assert_eq!(voice.transposed(), 60.0);
+    assert_eq!(voice.note().map(|note| note.per_note), Some(0.5));
+    render(&mut engine, &events, 100);
+    assert!(engine.voice(0, 0).expect("a voice").held());
+    render(&mut engine, &events, 100);
+    assert!(!engine.voice(0, 0).expect("a voice").held());
+}
+
+#[test]
+fn the_glides_keep_to_their_conditions() {
+    // A foot switch pressed and released leaves the notes to start at their
+    // own pitches.
+    let mut engine = prepared(&[], &[gliding(false, false, false)]);
+    let events = [
+        (0, foot(0, true)),
+        (5, foot(0, false)),
+        (10, on(0, 60, 100.0)),
+        (100, on(0, 67, 100.0)),
+    ];
+    render(&mut engine, &events, 101);
+    assert_eq!(heard(&engine, 0, 1, 100), Some(67.0));
+    // A foot switch on a channel that the part does not receive leaves it
+    // off; under follow at TIME 0 nothing glides, and a released voice keeps
+    // its pitch at another note's key-on.
+    let mut part = gliding(false, false, false);
+    part.omni = false;
+    let mut engine = prepared(&[], &[part]);
+    render(
+        &mut engine,
+        &[(0, foot(1, true)), (10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))],
+        101,
+    );
+    assert_eq!(heard(&engine, 0, 1, 100), Some(67.0));
+    let mut part = gliding(true, false, false);
+    part.function.portamento_time = value(0.0);
+    let mut engine = prepared(&[], &[part]);
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 55, 100.0)),
+        (20, off(0, 55)),
+        (100, on(0, 67, 100.0)),
+    ];
+    render(&mut engine, &events, 101);
+    assert_eq!(engine.voice(0, 0).map(Voice::transposed), Some(55.0));
+    // A voice that another part has taken fades out and is no longer its
+    // part's: a later note of that part, under follow, leaves it, though its
+    // key is up.
+    let changes = [("voice.count", Value::Integer(2)), ("voice.steal", Value::Choice(1))];
+    let [mut first, second] = two_parts();
+    first.function.portamento_time = value(50.0);
+    first.function.portamento_mode = PortamentoMode::Follow;
+    let mut engine = prepared(&changes, &[first, second]);
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 55, 100.0)),
+        (20, on(0, 57, 100.0)),
+        (30, off(0, 55)),
+        (100, on(1, 64, 100.0)),
+        (120, on(0, 60, 100.0)),
+    ];
+    render(&mut engine, &events, 121);
+    assert!(engine.fading(0, 0));
+    assert_eq!(keyed(&engine, 0, 1), Some(60.0));
+    assert_eq!(engine.voice(0, 0).map(Voice::transposed), Some(55.0));
+}
+
+#[test]
+fn a_mono_part_s_legato_takes_the_new_key_s_note() {
+    // After a legato the voice's note is the new key's, a per-note pitch of
+    // that key reaches it, and under scaling.key = pitch its level moves by
+    // the offset's change between the two keys, the other forms keeping the
+    // first key's (MATH §2.6).
+    let mut part = gliding(false, false, true);
+    part.function.portamento_time = value(0.0);
+    let pitch = Kind::PerNote {
+        channel: 0,
+        key: key(72),
+        id: None,
+        keys: 0.25,
+    };
+    let mut engine = prepared(&[], &[part.clone()]);
+    render(
+        &mut engine,
+        &[(0, on(0, 60, 100.0)), (100, on(0, 72, 100.0)), (200, pitch)],
+        201,
+    );
+    assert_eq!(keyed(&engine, 0, 0), Some(72.0));
+    assert_eq!(
+        engine.voice(0, 0).and_then(Voice::note).map(|note| note.per_note),
+        Some(0.25)
+    );
+    let operator = &mut part.patch.voice.operators[0];
+    operator.output_level = value(60.0);
+    operator.break_point = value(40.0);
+    operator.right_depth = value(80.0);
+    operator.right_curve = keptone_model::voice::Curve::PositiveLinear;
+    for choice in 0..3 {
+        let mut engine = prepared(&[("scaling.key", Value::Choice(choice))], &[part.clone()]);
+        render(&mut engine, &[(0, on(0, 60, 100.0))], 3000);
+        let level = |engine: &Engine| {
+            let context = engine.context(0).expect("a part");
+            let voice = engine.voice(0, 0).expect("a voice");
+            voice
+                .probe(0, Instant::at(3000), &context)
+                .and_then(|probe| probe.level)
+                .expect("a level")
+        };
+        // The legato at the next sample moves the level there by the offset's
+        // change alone, against the same sample without it.
+        let mut after = engine.clone();
+        render(&mut after, &[(3000, on(0, 72, 100.0))], 1);
+        let mut still = engine.clone();
+        render(&mut still, &[], 1);
+        let (moved, kept) = (level(&after), level(&still));
+        if choice == 2 {
+            let compiled = CompiledPart::new(&part, engine.configuration());
+            let operator = &compiled.patch.operators[0];
+            let offset = |key: f64| {
+                let scaling = level::keyboard_scaling(
+                    level::distance(key, operator.break_point),
+                    operator.left,
+                    operator.right,
+                );
+                level::offset(operator.output_level, scaling, operator.velocity_sensitivity, 100.0).expect("an offset")
+            };
+            let change = offset(72.0) - offset(60.0);
+            assert!(change > 0.0);
+            assert!(
+                (moved - kept - change).abs() <= 8.0 * f64::EPSILON * moved.abs().max(kept.abs()),
+                "{choice}"
+            );
+        } else {
+            assert_eq!(moved.to_bits(), kept.to_bits(), "{choice}");
+        }
+    }
+}
+
+#[test]
+fn a_mono_part_holds_each_key_once_and_takes_a_voice_when_none_is_spare() {
+    // A key pressed again with another identifier is held once, as the last
+    // pressed, so that its release releases the voice.
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    let note = |id, at| {
+        (
+            at,
+            Kind::NoteOn {
+                channel: 0,
+                key: key(60),
+                velocity: 100.0,
+                id: Some(id),
+            },
+        )
+    };
+    let release = Kind::NoteOff {
+        channel: 0,
+        key: key(60),
+        id: Some(2),
+    };
+    render(&mut engine, &[note(1, 0), note(2, 10), (20, release)], 21);
+    assert!(!engine.voice(0, 0).expect("a voice").held());
+    // With one voice held by the first part, a mono part's key takes it, the
+    // first part's voice fading out.
+    let [first, mut second] = two_parts();
+    second.function.polyphony = Polyphony::Mono;
+    let changes = [("voice.count", Value::Integer(1)), ("voice.steal", Value::Choice(1))];
+    let mut engine = prepared(&changes, &[first, second]);
+    render(&mut engine, &[(0, on(0, 60, 100.0)), (100, on(1, 64, 100.0))], 101);
+    assert!(engine.fading(0, 0) && sounds(&engine, 1, 0) && engine.sounding() == 1);
+    assert_eq!(keyed(&engine, 1, 0), Some(64.0));
+}
+
+#[test]
+fn a_copy_of_an_engine_renders_as_the_engine_does() {
+    // A copy keeps the room that the engine took when it was prepared, for the
+    // parts of each sample, the rates' key's pieces and nodes and a mono part's
+    // keys, so that the copy and the engine render the same, bit for bit, from
+    // a copy made before any note, with osc.max_pieces at 1 too, so that the
+    // samples whose pieces outnumber it take the rule's nodes, and from one
+    // made in the middle of a render.
+    let changes = [("voice.count", Value::Integer(3))];
+    let events = random_events(&mut Random(99), 8000);
+    let few = [
+        ("voice.count", Value::Integer(3)),
+        ("osc.max_pieces", Value::Integer(1)),
+    ];
+    for changes in [&changes[..], &few[..]] {
+        let mut engine = prepared(changes, &random_parts());
+        let mut copy = engine.clone();
+        let whole = render(&mut engine, &events, 8000);
+        assert_eq!(render(&mut copy, &events, 8000), whole);
+    }
+    // A glissando's steps within samples whose pieces outnumber osc.max_pieces,
+    // while the envelopes decay at the rates' key, which their nodes give.
+    let mut part = gliding(false, true, true);
+    for operator in &mut part.patch.voice.operators {
+        operator.envelope.rates = [value(99.0), value(30.0), value(30.0), value(30.0)];
+        operator.envelope.levels = [value(99.0), value(50.0), value(50.0), value(0.0)];
+        operator.rate_scaling = value(7.0);
+    }
+    let mut engine = prepared(&[("osc.max_pieces", Value::Integer(1))], &[part]);
+    let mut copy = engine.clone();
+    let steps = [(0, on(0, 60, 100.0)), (100, on(0, 72, 100.0))];
+    let whole = render(&mut engine, &steps, 8000);
+    assert_eq!(render(&mut copy, &steps, 8000), whole);
+    let mut engine = prepared(&changes, &random_parts());
+    let whole = render(&mut engine, &events, 8000);
+    let mut engine = prepared(&changes, &random_parts());
+    let first = render(&mut engine, &events, 4000);
+    let mut copy = engine.clone();
+    let rest = render(&mut engine, &events, 4000);
+    assert_eq!(render(&mut copy, &events, 4000), rest);
+    assert_eq!([&first[0][..], &rest[0][..]].concat(), whole[0]);
+}
+
+/// A glissando's key heard at a sample, taken there from where it is, toward
+/// a target.
+fn stepped(glissando: &Glissando, at: u64, to: f64) -> f64 {
+    let mut glissando = *glissando;
+    glissando.advance(Instant::at(at));
+    12.0_f64.mul_add(glissando.offset() / 12.0, to)
+}
+
+/// A glissando from one key to another, as a part at TIME 50 starts it at a
+/// sample.
+fn glissando(from: f64, to: f64, start: u64) -> Glissando {
+    let speed = portamento::speed(50.0).expect("a speed");
+    Glissando::new(Instant::at(start), from - to, speed, RATE)
+}
+
+/// A glissando taken to a sample and moved there from one target to
+/// another, its progress kept.
+fn retargeted(glissando: &Glissando, at: u64, from: f64, to: f64) -> Glissando {
+    let mut glissando = *glissando;
+    glissando.advance(Instant::at(at));
+    glissando.retarget(Instant::at(at), from - to);
+    glissando
+}
+
+/// The sample midway between a glissando's k-th change of its key heard and
+/// its next, where its glide lies half a key beyond its key heard.
+fn between(glissando: &Glissando, k: usize) -> u64 {
+    let mut glissando = *glissando;
+    for _ in 1..k {
+        glissando.next();
+    }
+    let before = glissando.end().expect("a step").sample();
+    glissando.next();
+    let after = glissando.end().expect("a step").sample();
+    before.midpoint(after)
+}
+
+/// Renders with events up to every 97th sample of a range and asserts that
+/// the voice in a part's slot sounds there the key heard of a glissando
+/// toward a target, and that one started afresh from the key heard at the
+/// range's start would differ at some of them.
+fn steps(
+    engine: &mut Engine,
+    events: &[(u64, Kind)],
+    (from, to): (u64, u64),
+    (expected, target): (&Glissando, f64),
+    afresh: &Glissando,
+) {
+    let mut differs = false;
+    for at in (from..to).step_by(97) {
+        if engine.sample() <= at {
+            let count = at + 1 - engine.sample();
+            render(engine, events, count);
+        }
+        let key = stepped(expected, at, target);
+        let actual = heard(engine, 0, 0, at).expect("a voice");
+        assert_eq!(actual.to_bits(), key.to_bits(), "sample {at}: {actual} against {key}");
+        differs |= stepped(afresh, at, target).to_bits() != key.to_bits();
+    }
+    assert!(differs, "a glissando afresh would sound the same");
+}
+
+#[test]
+fn a_glissando_keeps_its_progress_toward_a_new_target() {
+    // Under follow, A's voice, released, starts a glissando from 55 toward
+    // B's 60; C's key-on in the middle of it moves its target to 67, its
+    // glide between keys and its key heard kept; and D, which takes A's slot
+    // among three, goes on from that glissando toward 72 (MATH §7.3).
+    let three = [("voice.count", Value::Integer(3))];
+    let mut engine = prepared(&three, &[gliding(true, true, false)]);
+    let first = glissando(55.0, 60.0, 30);
+    let c = between(&first, 2);
+    let second = retargeted(&first, c, 60.0, 67.0);
+    let d = between(&second, 3);
+    let third = retargeted(&second, d, 67.0, 72.0);
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 55, 100.0)),
+        (20, off(0, 55)),
+        (30, on(0, 60, 100.0)),
+        (c, on(0, 67, 100.0)),
+        (d, on(0, 72, 100.0)),
+    ];
+    let afresh = glissando(stepped(&first, c, 60.0), 67.0, c);
+    steps(&mut engine, &events, (c, d), (&second, 67.0), &afresh);
+    assert!(!sounds(&engine, 0, 0));
+    let afresh = glissando(stepped(&second, d, 67.0), 72.0, d);
+    steps(&mut engine, &events, (d, d + 4000), (&third, 72.0), &afresh);
+    assert_eq!(keyed(&engine, 0, 0), Some(72.0));
+    assert!(sounds(&engine, 0, 0) && sounds(&engine, 0, 1) && sounds(&engine, 0, 2));
+    // A mono part's legato in the middle of a glissando keeps it as well.
+    let mut engine = prepared(&[], &[gliding(false, true, true)]);
+    let first = glissando(60.0, 67.0, 100);
+    let c = between(&first, 3);
+    let second = retargeted(&first, c, 67.0, 72.0);
+    let events = [(0, on(0, 60, 100.0)), (100, on(0, 67, 100.0)), (c, on(0, 72, 100.0))];
+    let afresh = glissando(stepped(&first, c, 67.0), 72.0, c);
+    steps(&mut engine, &events, (c, c + 4000), (&second, 72.0), &afresh);
+}
+
+#[test]
+fn a_mono_part_s_equal_keys_follow_the_dx7_s_comparisons() {
+    // Equal keys come from different channels. A second key at the first's
+    // sets the direction up, so that 59 does not sound, 61 does and another
+    // channel's 61 does too; when that 61 is released the first sounds again,
+    // and when it is released the later of the two 60s, as their per-note
+    // pitches show. Down, a key at the sounding one does not sound, and when
+    // 55 is released the earlier of the two 60s sounds (MATH §7.3).
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    let per_note = |channel, number, keys| Kind::PerNote {
+        channel,
+        key: key(number),
+        id: None,
+        keys,
+    };
+    let note = |engine: &Engine| {
+        let voice = engine.voice(0, 0).expect("a voice");
+        (voice.transposed(), voice.note().map(|note| note.per_note))
+    };
+    let steps = [
+        (on(0, 60, 100.0), (60.0, Some(0.0))),
+        (per_note(0, 60, 0.25), (60.0, Some(0.25))),
+        (on(1, 60, 100.0), (60.0, Some(0.0))),
+        (per_note(1, 60, 0.5), (60.0, Some(0.5))),
+        (on(0, 59, 100.0), (60.0, Some(0.5))),
+        (on(1, 61, 100.0), (61.0, Some(0.0))),
+        (per_note(1, 61, 0.75), (61.0, Some(0.75))),
+        (on(0, 61, 100.0), (61.0, Some(0.0))),
+        (off(0, 61), (61.0, Some(0.75))),
+        (off(1, 61), (60.0, Some(0.5))),
+    ];
+    for (step, &(kind, expected)) in (0_u64..).zip(&steps) {
+        render(&mut engine, &[(10 * step, kind)], 10);
+        assert_eq!(note(&engine), expected, "step {step}");
+    }
+    let mut engine = prepared(&[], &[gliding(false, false, true)]);
+    let steps = [
+        (on(0, 64, 100.0), (64.0, Some(0.0))),
+        (on(0, 60, 100.0), (60.0, Some(0.0))),
+        (on(1, 60, 100.0), (60.0, Some(0.0))),
+        (per_note(0, 60, 0.25), (60.0, Some(0.25))),
+        (per_note(1, 60, 0.5), (60.0, Some(0.25))),
+        (on(0, 55, 100.0), (55.0, Some(0.0))),
+        (off(0, 55), (60.0, Some(0.25))),
+        (off(0, 60), (60.0, Some(0.5))),
+    ];
+    for (step, &(kind, expected)) in (0_u64..).zip(&steps) {
+        render(&mut engine, &[(10 * step, kind)], 10);
+        assert_eq!(note(&engine), expected, "step {step}");
+    }
+}
+
+#[test]
+fn a_mono_part_whose_voice_another_part_takes_has_no_key_sounding() {
+    // A mono part holds 60 and 64, which sounds; the other part takes its
+    // voice. A key pressed while it fades does not sound, a release of a key
+    // that the part does not hold does nothing, and 62, pressed once the fade
+    // is over, sounds, though it lies below 64, taking the other part's voice
+    // in turn. Or, instead, the release of 67 makes 64 sound again, with the
+    // per-note pitch that it was given while it did not sound.
+    let [first, mut second] = two_parts();
+    second.function.polyphony = Polyphony::Mono;
+    let changes = [("voice.count", Value::Integer(1)), ("voice.steal", Value::Choice(1))];
+    let pitch = Kind::PerNote {
+        channel: 1,
+        key: key(64),
+        id: None,
+        keys: 0.5,
+    };
+    let events = [
+        (0, on(1, 60, 100.0)),
+        (10, on(1, 64, 100.0)),
+        (100, on(0, 50, 100.0)),
+        (120, on(1, 67, 100.0)),
+        (150, pitch),
+        (300, off(1, 72)),
+    ];
+    let mut engine = prepared(&changes, &[first.clone(), second.clone()]);
+    render(&mut engine, &events, 301);
+    assert!(sounds(&engine, 0, 0) && !engine.fading(0, 0));
+    assert!(!sounds(&engine, 1, 0) && engine.sounding() == 1);
+    let mut again = engine.clone();
+    render(&mut engine, &[(301, on(1, 62, 100.0))], 1);
+    assert_eq!(keyed(&engine, 1, 0), Some(62.0));
+    assert!(sounds(&engine, 1, 0) && engine.fading(0, 0) && engine.sounding() == 1);
+    render(&mut again, &[(301, off(1, 67))], 1);
+    let voice = again.voice(1, 0).expect("a voice");
+    assert_eq!(voice.note().map(|note| (note.key, note.per_note)), Some((64.0, 0.5)));
+    assert!(sounds(&again, 1, 0) && again.fading(0, 0));
+}
+
+#[test]
+fn glides_run_between_keys_after_transposition() {
+    // Under a note shift of 12, retain glides from the previous key-on's key
+    // after transposition, follow from where a voice's glide has left it, and
+    // a mono legato from the sounding key's (MATH §2.2, §7.3).
+    let shifted = |follow, mono| {
+        let mut part = gliding(follow, false, mono);
+        part.note_shift = NoteShift::new(12.0).expect("a shift");
+        part
+    };
+    let mut engine = prepared(&[], &[shifted(false, false)]);
+    render(
+        &mut engine,
+        &[(0, foot(0, true)), (10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))],
+        101,
+    );
+    glides(&mut engine, 1, (72.0, 79.0), 100, Some(Unit::Octaves));
+    let mut engine = prepared(&[], &[shifted(true, false)]);
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 55, 100.0)),
+        (20, off(0, 55)),
+        (100, on(0, 60, 100.0)),
+    ];
+    render(&mut engine, &events, 101);
+    assert_eq!(engine.voice(0, 0).map(Voice::transposed), Some(72.0));
+    glides(&mut engine, 0, (67.0, 72.0), 100, Some(Unit::Octaves));
+    let mut engine = prepared(&[], &[shifted(false, true)]);
+    render(&mut engine, &[(10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))], 101);
+    glides(&mut engine, 0, (72.0, 79.0), 100, Some(Unit::Octaves));
 }

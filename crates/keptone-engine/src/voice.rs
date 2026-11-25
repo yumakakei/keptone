@@ -785,6 +785,70 @@ impl Voice {
         }
     }
 
+    /// The key at which its pitch lies at an instant, from which a glide of the
+    /// part's portamento starts (MATH §7.3): its key after transposition and
+    /// its portamento's offset there in keys, twelve to an octave under 12-TET,
+    /// its glide taken to the instant from where it is, as the walk takes it;
+    /// none before its first note. The fused step rounds within u of itself,
+    /// beside the offset's error (`crate::portamento`).
+    #[must_use]
+    pub fn heard(&self, at: Instant, context: &Context<'_>) -> Option<f64> {
+        let portamento = self.portamento(at, context)?;
+        Some(finite(12.0_f64.mul_add(portamento.octaves(at), self.state.transposed)))
+    }
+
+    /// Its portamento at an instant (MATH §7.3), taken there from where it is,
+    /// as the walk takes it, so that a glissando that goes on toward another
+    /// target keeps its progress; none before its first note.
+    #[must_use]
+    pub fn portamento(&self, at: Instant, context: &Context<'_>) -> Option<Portamento> {
+        let state = &self.state;
+        state.note?;
+        Some(state.motion.at(at, context).portamento)
+    }
+
+    /// A change of its note's key at an instant without a key event (MATH
+    /// §7.3): a poly part's follow, which takes a voice whose key is up toward
+    /// another note's pitch, its own per-note pitch kept, and a mono part's
+    /// change of its sounding key, which gives the per-note pitch of the key
+    /// that sounds now. Its key after transposition becomes the new key's, its
+    /// portamento from there on the one given, and its envelopes, its pitch
+    /// envelope and its phases go on; under `scaling.key = pitch` its scaling
+    /// key moves with its pitch, the other two keeping the onset's (§2.6).
+    /// Nothing before its first note.
+    pub fn retarget(
+        &mut self,
+        at: Instant,
+        key: f64,
+        per_note: Option<f64>,
+        portamento: Portamento,
+        context: &Context<'_>,
+    ) {
+        let state = &mut self.state;
+        let Some(note) = state.note.as_mut() else {
+            return;
+        };
+        note.key = key;
+        if let Some(per_note) = per_note {
+            note.per_note = per_note;
+        }
+        let per_note = note.per_note;
+        let (patch, configuration) = (context.patch, context.configuration);
+        state.transposed = transposed_key(
+            key,
+            patch.transpose,
+            context.note_shift,
+            configuration.transpose_octave,
+            TwelveTet::PERIOD,
+        );
+        if configuration.scaling_key == ScalingKey::Pitch {
+            state.scaling = finite(state.transposed + per_note);
+        }
+        let mut motion = state.motion.at(at, context);
+        motion.portamento = portamento;
+        state.motion = motion;
+    }
+
     /// The level T at an instant of its loudest carrier, its offset O included
     /// and the amplitude modulation not, as `voice.steal = quietest` compares
     /// voices (MATH §13.2); −∞ where every carrier is silent, or for a voice

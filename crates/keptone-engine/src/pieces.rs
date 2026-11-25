@@ -424,12 +424,31 @@ impl Piece {
 /// The parts of a sample, at most `osc.max_pieces` of them, held in memory
 /// that the engine takes when it is prepared, so that the audio thread never
 /// allocates (DESIGN §5).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Parts {
     /// The parts.
     parts: Vec<Part>,
     /// The most that it holds, `osc.max_pieces`.
     limit: u32,
+}
+
+/// A copy of a vector's values with room for as many as the vector has room
+/// for, taken now, so that the copy holds what the original would without
+/// allocating later: a derived clone takes only the room that the values
+/// fill, and the pushes that keep within their room would then drop values.
+pub(crate) fn copied<T: Clone>(values: &[T], room: usize) -> Vec<T> {
+    let mut copy = Vec::with_capacity(room.max(values.len()));
+    copy.extend_from_slice(values);
+    copy
+}
+
+impl Clone for Parts {
+    fn clone(&self) -> Self {
+        Self {
+            parts: copied(&self.parts, self.parts.capacity()),
+            limit: self.limit,
+        }
+    }
 }
 
 impl Parts {
@@ -971,7 +990,7 @@ pub struct KeyPiece {
 /// jump, or, past the budget of `osc.max_pieces`, the key at the rule's three
 /// instants of that many equal parts of the sample (MATH §2.5), held in
 /// memory that the engine takes when it is prepared.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Keys {
     /// The pieces, where the walk takes them.
     pieces: Vec<KeyPiece>,
@@ -983,6 +1002,18 @@ pub struct Keys {
     walked: bool,
     /// The length of the span that they cover, 1 for a sample.
     length: f64,
+}
+
+impl Clone for Keys {
+    fn clone(&self) -> Self {
+        Self {
+            pieces: copied(&self.pieces, self.pieces.capacity()),
+            nodes: copied(&self.nodes, self.nodes.capacity()),
+            limit: self.limit,
+            walked: self.walked,
+            length: self.length,
+        }
+    }
 }
 
 impl Keys {

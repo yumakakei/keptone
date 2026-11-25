@@ -24,22 +24,24 @@
 //! under `voice.steal` and `voice.retrigger`, within its note limit and the
 //! pool of `voice.count` voices that sound; its controllers, its bend and its
 //! sustain pedal act on its voices (§2.4, §7.1, §4.5), and its LFO, under
-//! `lfo.scope = part`, restarts at each key-on (§6.5). Milestone M3 renders at
-//! the host's rate, `engine.oversampling` at 1. Until the next commit gives
-//! them their laws (§7.3), the portamento's foot switch stays off, as it
-//! starts, so that no note glides, and a mono part plays as a poly one.
+//! `lfo.scope = part`, restarts at each key-on (§6.5). A poly part's notes
+//! glide as its portamento says, retaining or following, while its foot switch
+//! is on, and a mono part plays its keys in its first slot, legato as §7.3
+//! says, fingered or full time. Milestone M3 renders at the host's rate,
+//! `engine.oversampling` at 1.
 
 use keptone_model::dx7ii::Index;
 use keptone_model::part;
 use keptone_model::settings::Settings;
 
 use crate::binary64::finite;
-use crate::compile::CompiledPart;
-use crate::configuration::{Channels, Configuration, LfoScope, Refusal, Retrigger, Steal};
+use crate::compile::{CompiledFunction, CompiledPart};
+use crate::configuration::{Channels, Configuration, LfoScope, Modulation, Refusal, Retrigger, Steal};
 use crate::control::{self, Limited, Source};
 use crate::lfo::Lfo;
-use crate::pieces::Portamento;
-use crate::pitch::TwelveTet;
+use crate::pieces::{Portamento, copied};
+use crate::pitch::{TwelveTet, transposed_key};
+use crate::portamento::{Glide, Glissando, Unit};
 use crate::random::Streams;
 use crate::time::Instant;
 use crate::voice::{Context, Note, Voice};
@@ -115,6 +117,14 @@ pub enum Kind {
         channel: u8,
         /// Its position.
         position: f64,
+    },
+    /// The portamento's foot switch pressed or released, MIDI's controller 65
+    /// (§7.3), which acts at the key events that come after it.
+    Portamento {
+        /// Its channel.
+        channel: u8,
+        /// Whether it is pressed.
+        on: bool,
     },
     /// The sustain pedal pressed or released (§4.5).
     Sustain {
@@ -241,9 +251,26 @@ struct Controls {
     last: Option<usize>,
     /// How many notes it has started, the m of MATH §6.3.
     notes: u64,
+    /// Whether its portamento's foot switch is pressed (MATH §7.3).
+    foot: bool,
+    /// The key after transposition of its previous key-on, from which a note
+    /// glides under retain, none before its first.
+    previous: Option<f64>,
 }
 
 impl Controls {
+    /// A key after the patch's transposition and the part's note shift (MATH
+    /// §2.1), as its voices take it.
+    fn transposed(&self, key: u8, configuration: &Configuration) -> f64 {
+        transposed_key(
+            f64::from(key),
+            self.compiled.patch.transpose,
+            self.compiled.note_shift,
+            configuration.transpose_octave,
+            TwelveTet::PERIOD,
+        )
+    }
+
     /// What its voices take from it.
     fn context<'a>(&'a self, configuration: &'a Configuration, tuning: &'a TwelveTet, master_tune: f64) -> Context<'a> {
         Context {
@@ -295,6 +322,57 @@ impl Controls {
     }
 }
 
+/// A key that a mono part holds (MATH §7.3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HeldKey {
+    /// What its note is known by.
+    identity: Identity,
+    /// Its velocity.
+    velocity: f64,
+    /// Its per-note pitch in keys.
+    per_note: f64,
+}
+
+/// What a mono part keeps of the keys that it holds (MATH §7.3).
+#[derive(Debug)]
+struct Mono {
+    /// The keys it holds, in the order in which they were pressed, every one
+    /// of each channel and key at most once, its memory taken when the engine
+    /// is prepared.
+    keys: Vec<HeldKey>,
+    /// The legato's direction, up or down, once a second key has set it.
+    up: Option<bool>,
+    /// The key that sounds, while one does: its voice then plays in the
+    /// part's first slot with its key down.
+    sounding: Option<Identity>,
+}
+
+impl Clone for Mono {
+    fn clone(&self) -> Self {
+        Self {
+            keys: copied(&self.keys, self.keys.capacity()),
+            up: self.up,
+            sounding: self.sounding,
+        }
+    }
+}
+
+impl Mono {
+    /// The key that sounds after a release while keys are held (MATH §7.3):
+    /// the highest of them where the legato goes up, the last pressed of equal
+    /// keys, and the lowest where it goes down, the first pressed of equal
+    /// keys, as the firmware's comparisons, at or above and below, take its
+    /// keys in order; the last pressed where no direction is set.
+    fn after_release(&self) -> Option<HeldKey> {
+        let key = |held: &&HeldKey| held.identity.key;
+        match self.up {
+            Some(true) => self.keys.iter().max_by_key(key).copied(),
+            Some(false) => self.keys.iter().min_by_key(key).copied(),
+            None => self.keys.last().copied(),
+        }
+    }
+}
+
 /// A part of the engine (MATH §13.5).
 #[derive(Debug, Clone)]
 struct PartState {
@@ -302,6 +380,8 @@ struct PartState {
     controls: Controls,
     /// Its slots, `voice.count` of them.
     slots: Vec<Slot>,
+    /// The keys that it holds while it plays mono.
+    mono: Mono,
 }
 
 impl PartState {
@@ -330,6 +410,55 @@ fn faded(start: Instant, at: Instant, glide: f64) -> f64 {
         return 0.0;
     }
     (1.0 - at.samples_since(start).max(0.0) / glide).max(0.0)
+}
+
+/// The glide of a part's portamento from a key to a note's key after
+/// transposition, both in keys, at an instant (MATH §7.3): with glissando in
+/// keys; otherwise in octaves under `tuning.modulation = pitch`, twelve keys to
+/// an octave under 12-TET, and in keys under `keys`; at the speed of the
+/// function data's TIME, and none at TIME 0 or below.
+fn glide(function: &CompiledFunction, configuration: &Configuration, at: Instant, from: f64, to: f64) -> Portamento {
+    let Some(speed) = function.portamento_speed else {
+        return Portamento::Still;
+    };
+    let rate = configuration.sample_rate;
+    let keys = finite(from - to);
+    if function.glissando {
+        return Portamento::Glissando(Glissando::new(at, keys, speed, rate));
+    }
+    Portamento::Glide(match configuration.modulation {
+        Modulation::Pitch => Glide::new(at, keys / 12.0, speed, Unit::Octaves, rate),
+        Modulation::Keys => Glide::new(at, keys, speed, Unit::Keys, rate),
+    })
+}
+
+/// The glide with which a voice's pitch goes on at an instant from where its
+/// portamento has left it toward another target, a key after transposition
+/// (MATH §7.3): a glissando keeps its progress, its glide and its key heard
+/// moved by the change of target; otherwise the glide starts from the pitch
+/// there, the key heard where a glissando was turned off, as `glide` gives it.
+/// None at TIME 0 or below, nor for a voice that has had no note.
+fn moved(
+    function: &CompiledFunction,
+    configuration: &Configuration,
+    at: Instant,
+    voice: &Voice,
+    context: &Context<'_>,
+    to: f64,
+) -> Portamento {
+    if function.portamento_speed.is_none() {
+        return Portamento::Still;
+    }
+    match voice.portamento(at, context) {
+        None => Portamento::Still,
+        Some(Portamento::Glissando(mut glissando)) if function.glissando => {
+            glissando.retarget(at, finite(voice.transposed() - to));
+            Portamento::Glissando(glissando)
+        }
+        Some(_) => voice
+            .heard(at, context)
+            .map_or(Portamento::Still, |from| glide(function, configuration, at, from, to)),
+    }
 }
 
 /// The engine (MATH §0.3, §13, §14): the configuration that it was prepared
@@ -417,9 +546,18 @@ impl Engine {
                 sustain: false,
                 last: None,
                 notes: 0,
+                foot: false,
+                previous: None,
             };
             controls.settle();
-            built.push(PartState { controls, slots });
+            let mut keys = Vec::new();
+            keys.try_reserve_exact(256 * 128).map_err(|_| Refusal::Memory)?;
+            let mono = Mono {
+                keys,
+                up: None,
+                sounding: None,
+            };
+            built.push(PartState { controls, slots, mono });
         }
         Ok(Self {
             tuning: TwelveTet::new(configuration.a4_hz),
@@ -527,7 +665,7 @@ impl Engine {
             ..
         } = self;
         for part in parts.iter_mut() {
-            let PartState { controls, slots } = part;
+            let PartState { controls, slots, .. } = part;
             let context = controls.context(configuration, tuning, *master_tune);
             for slot in slots.iter_mut() {
                 slot.voice.advance(from, &context);
@@ -557,6 +695,10 @@ impl Engine {
             }
             Kind::NoteOff { channel, key, id } => {
                 for part in 0..self.parts.len() {
+                    if self.parts[part].controls.compiled.patch.function.mono {
+                        self.mono_off(part, channel, key.get(), id, at);
+                        continue;
+                    }
                     for slot in 0..self.parts[part].slots.len() {
                         let held = &self.parts[part].slots[slot];
                         if held.playing()
@@ -590,6 +732,13 @@ impl Engine {
                     }
                 }
             }
+            Kind::Portamento { channel, on } => {
+                for part in &mut self.parts {
+                    if part.controls.compiled.receives(channel) {
+                        part.controls.foot = on;
+                    }
+                }
+            }
             Kind::Sustain { channel, on } => {
                 for part in 0..self.parts.len() {
                     if self.parts[part].controls.compiled.receives(channel) {
@@ -606,11 +755,16 @@ impl Engine {
                     ..
                 } = self;
                 for part in parts.iter_mut() {
-                    let PartState { controls, slots } = part;
+                    let PartState { controls, slots, mono } = part;
                     let context = controls.context(configuration, tuning, *master_tune);
                     for slot in slots.iter_mut() {
                         if slot.playing() && slot.identity.is_some_and(|note| note.named(channel, key.get(), id)) {
                             slot.voice.set_per_note(keys, &context);
+                        }
+                    }
+                    for held in &mut mono.keys {
+                        if held.identity.named(channel, key.get(), id) {
+                            held.per_note = keys;
                         }
                     }
                 }
@@ -626,6 +780,10 @@ impl Engine {
     /// under `new-voice` releases it if its key was still down and takes a
     /// voice as any note does.
     fn note_on(&mut self, part: usize, identity: Identity, velocity: f64, at: Instant) {
+        if self.parts[part].controls.compiled.patch.function.mono {
+            self.mono_on(part, identity, velocity, at);
+            return;
+        }
         let again = {
             let slots = &self.parts[part].slots;
             (0..slots.len())
@@ -637,29 +795,229 @@ impl Engine {
                 })
                 .max_by_key(|&k| slots[k].started)
         };
-        if let Some(slot) = again {
-            match self.configuration.retrigger {
-                Retrigger::SameVoice => {
-                    self.start(part, slot, identity, velocity, at);
-                    return;
+        let slot = match again {
+            Some(slot) if self.configuration.retrigger == Retrigger::SameVoice => Some(slot),
+            Some(slot) => {
+                if self.parts[part].slots[slot].down {
+                    self.release(part, slot, at);
                 }
-                Retrigger::NewVoice => {
-                    if self.parts[part].slots[slot].down {
-                        self.release(part, slot, at);
-                    }
-                }
+                self.take(part, at)
+            }
+            None => self.take(part, at),
+        };
+        if let Some(slot) = slot {
+            let portamento = self.poly_glide(part, slot, identity.key, at);
+            self.start(part, slot, identity, velocity, at, portamento);
+        }
+    }
+
+    /// The glide with which a poly part's note starts in a slot at an instant
+    /// (MATH §7.3), where its foot switch is on and its TIME is not 0: under
+    /// retain from the key of the part's previous key-on, the voices that the
+    /// sustain pedal holds keeping their pitches; under follow from where the
+    /// slot's glide has left it, every other voice of the part whose key is up,
+    /// whether the pedal holds it, it releases or it is silent, gliding from
+    /// where it is to the note's pitch. None otherwise, nor from a part or a
+    /// slot that has had no note.
+    fn poly_glide(&mut self, part: usize, slot: usize, key: u8, at: Instant) -> Portamento {
+        let Self {
+            configuration,
+            tuning,
+            parts,
+            master_tune,
+            ..
+        } = self;
+        let PartState { controls, slots, .. } = &mut parts[part];
+        let function = &controls.compiled.patch.function;
+        if !controls.foot || function.portamento_speed.is_none() {
+            return Portamento::Still;
+        }
+        let target = controls.transposed(key, configuration);
+        if !function.follow {
+            return controls.previous.map_or(Portamento::Still, |from| {
+                glide(function, configuration, at, from, target)
+            });
+        }
+        let context = controls.context(configuration, tuning, *master_tune);
+        for (other, held) in slots.iter_mut().enumerate() {
+            let up = held.voice.note().is_some() && held.fading.is_none() && !(held.playing() && held.down);
+            if other != slot && up {
+                let portamento = moved(function, configuration, at, &held.voice, &context, target);
+                held.voice.retarget(at, f64::from(key), None, portamento, &context);
             }
         }
-        if let Some(slot) = self.take(part, at) {
-            self.start(part, slot, identity, velocity, at);
+        moved(function, configuration, at, &slots[slot].voice, &context, target)
+    }
+
+    /// A key pressed in a mono part at an instant (MATH §7.3): held, a key
+    /// pressed again leaving its place first; with none held before it sounds
+    /// with a key event in the part's first slot, gliding under full time from
+    /// the voice's last pitch while the foot switch is on; a second key sets
+    /// the legato's direction, up where it lies at or above the first, and
+    /// sounds; a further key sounds where it lies at or above the sounding one
+    /// while the legato goes up, and below it while it goes down; each change
+    /// of the sounding key while keys are held a legato, without a key event.
+    fn mono_on(&mut self, part: usize, identity: Identity, velocity: f64, at: Instant) {
+        let mono = &mut self.parts[part].mono;
+        mono.keys
+            .retain(|held| !(held.identity.channel == identity.channel && held.identity.key == identity.key));
+        if mono.keys.len() < mono.keys.capacity() {
+            mono.keys.push(HeldKey {
+                identity,
+                velocity,
+                per_note: 0.0,
+            });
         }
+        let sounds = match mono.keys.len() {
+            0 | 1 => {
+                mono.up = None;
+                true
+            }
+            2 => {
+                let first = mono.keys[0].identity.key;
+                mono.up = Some(identity.key >= first);
+                true
+            }
+            _ => mono.sounding.is_none_or(|sounding| match mono.up {
+                Some(true) => identity.key >= sounding.key,
+                Some(false) => identity.key < sounding.key,
+                None => true,
+            }),
+        };
+        if sounds {
+            self.mono_sound(part, identity, at);
+        }
+    }
+
+    /// A key released in a mono part at an instant (MATH §7.3): the keys that
+    /// the release names leave; with none held the voice is released, or held
+    /// by the sustain pedal; with others held the highest of them sounds where
+    /// the legato goes up and the lowest where it goes down.
+    fn mono_off(&mut self, part: usize, channel: u8, key: u8, id: Option<u64>, at: Instant) {
+        let mono = &mut self.parts[part].mono;
+        let before = mono.keys.len();
+        mono.keys.retain(|held| !held.identity.named(channel, key, id));
+        if mono.keys.len() == before {
+            return;
+        }
+        if mono.keys.is_empty() {
+            if mono.sounding.take().is_some() {
+                self.release(part, 0, at);
+            }
+            return;
+        }
+        if let Some(next) = mono.after_release()
+            && mono.sounding != Some(next.identity)
+        {
+            self.mono_sound(part, next.identity, at);
+        }
+    }
+
+    /// A held key of a mono part made the sounding one at an instant (MATH
+    /// §7.3): where its voice sounds, a legato, without a key event, gliding
+    /// under fingered whatever the foot switch and under full time while it is
+    /// on; where it does not, a key-on in the part's first slot, gliding under
+    /// full time from the voice's last pitch while the foot switch is on.
+    fn mono_sound(&mut self, part: usize, identity: Identity, at: Instant) {
+        let Some(held) = self.parts[part]
+            .mono
+            .keys
+            .iter()
+            .find(|held| held.identity == identity)
+            .copied()
+        else {
+            return;
+        };
+        if !self.parts[part].slots[0].playing() || !self.parts[part].slots[0].down {
+            let Some(slot) = self.mono_slot(part, at) else {
+                return;
+            };
+            let portamento = self.mono_glide(part, identity.key, true, at);
+            self.start(part, slot, identity, held.velocity, at, portamento);
+            let state = &mut self.parts[part];
+            let context = state
+                .controls
+                .context(&self.configuration, &self.tuning, self.master_tune);
+            state.slots[slot].voice.set_per_note(held.per_note, &context);
+        } else {
+            let portamento = self.mono_glide(part, identity.key, false, at);
+            let Self {
+                configuration,
+                tuning,
+                parts,
+                master_tune,
+                ..
+            } = self;
+            let PartState { controls, slots, .. } = &mut parts[part];
+            let context = controls.context(configuration, tuning, *master_tune);
+            let first = &mut slots[0];
+            first
+                .voice
+                .retarget(at, f64::from(identity.key), Some(held.per_note), portamento, &context);
+            first.identity = Some(identity);
+        }
+        self.parts[part].mono.sounding = Some(identity);
+    }
+
+    /// The glide with which a mono part's key sounds at an instant (MATH §7.3):
+    /// a key with none sounding glides under full time alone, from the voice's
+    /// last pitch, while the foot switch is on; a legato glides under fingered
+    /// whatever the foot switch, and under full time while it is on. None at
+    /// TIME 0 or below, nor from a voice that has had no note.
+    fn mono_glide(&self, part: usize, key: u8, first: bool, at: Instant) -> Portamento {
+        let state = &self.parts[part];
+        let controls = &state.controls;
+        let function = &controls.compiled.patch.function;
+        let glides = if function.follow { controls.foot } else { !first };
+        if !glides {
+            return Portamento::Still;
+        }
+        let context = controls.context(&self.configuration, &self.tuning, self.master_tune);
+        let target = controls.transposed(key, &self.configuration);
+        moved(
+            function,
+            &self.configuration,
+            at,
+            &state.slots[0].voice,
+            &context,
+            target,
+        )
+    }
+
+    /// The slot in which a mono part's key sounds with a key event at an
+    /// instant: its first, whose voice goes on from where it is while it
+    /// sounds; where it does not, while the pool has a voice to spare, or else
+    /// taking another part's voice by the part's policy, which fades out. None
+    /// where its first slot fades out itself or nothing can be taken.
+    fn mono_slot(&mut self, part: usize, at: Instant) -> Option<usize> {
+        let first = self.parts[part].slots.first()?;
+        if first.playing() {
+            return Some(0);
+        }
+        if !first.free() {
+            return None;
+        }
+        if self.pool < self.configuration.voice_count {
+            return Some(0);
+        }
+        let (other, taken) = self.others(part, at)?;
+        self.fade(other, taken, at);
+        Some(0)
     }
 
     /// Starts a note in a part's slot at an instant (MATH §4.5, §6.5): the
     /// part's LFO restarted under `lfo.scope = part`, and the voice keyed on as
     /// the part's next note, a voice taken while it sounds going on from where
     /// it is.
-    fn start(&mut self, part: usize, slot: usize, identity: Identity, velocity: f64, at: Instant) {
+    fn start(
+        &mut self,
+        part: usize,
+        slot: usize,
+        identity: Identity,
+        velocity: f64,
+        at: Instant,
+        portamento: Portamento,
+    ) {
         let fresh = !self.parts[part].slots[slot].playing();
         let Self {
             configuration,
@@ -670,7 +1028,7 @@ impl Engine {
             pool,
             ..
         } = self;
-        let PartState { controls, slots } = &mut parts[part];
+        let PartState { controls, slots, .. } = &mut parts[part];
         if configuration.lfo_scope == LfoScope::Part {
             let lfo = &controls.compiled.patch.lfo;
             let (sync, delay) = (lfo.sync, lfo.delay);
@@ -684,7 +1042,7 @@ impl Engine {
             velocity,
             per_note: 0.0,
         };
-        held.voice.key_on(at, note, Portamento::Still, nth, &context);
+        held.voice.key_on(at, note, portamento, nth, &context);
         held.identity = Some(identity);
         held.down = true;
         held.sustained = false;
@@ -693,6 +1051,7 @@ impl Engine {
         *order = order.saturating_add(1);
         controls.notes = nth.saturating_add(1);
         controls.last = Some(slot);
+        controls.previous = Some(held.voice.transposed());
         if fresh {
             *pool = pool.saturating_add(1);
         }
@@ -724,9 +1083,20 @@ impl Engine {
         }
         let free = self.parts[part].after_last(Slot::free)?;
         let (other, taken) = self.others(part, at)?;
-        self.parts[other].slots[taken].fading = Some(at);
-        self.pool = self.pool.saturating_sub(1);
+        self.fade(other, taken, at);
         Some(free)
+    }
+
+    /// The voice in a part's slot that another part's note takes at an instant
+    /// (MATH §13.2): it fades out, counted by the pool no longer and no longer
+    /// its note's, so that a mono part has then no key that sounds.
+    fn fade(&mut self, part: usize, slot: usize, at: Instant) {
+        let state = &mut self.parts[part];
+        if let Some(held) = state.slots.get_mut(slot) {
+            held.fading = Some(at);
+        }
+        state.mono.sounding = None;
+        self.pool = self.pool.saturating_sub(1);
     }
 
     /// The loudest carrier's level of the voice in a part's slot at an instant,
@@ -803,7 +1173,7 @@ impl Engine {
             order,
             ..
         } = self;
-        let PartState { controls, slots } = &mut parts[part];
+        let PartState { controls, slots, .. } = &mut parts[part];
         let held = &mut slots[slot];
         held.down = false;
         held.released = *order;
@@ -826,7 +1196,7 @@ impl Engine {
             master_tune,
             ..
         } = self;
-        let PartState { controls, slots } = &mut parts[part];
+        let PartState { controls, slots, .. } = &mut parts[part];
         controls.sustain = on;
         if on {
             return;
@@ -854,7 +1224,7 @@ impl Engine {
         let glide = finite(configuration.level_glide_s * configuration.sample_rate);
         let mut output = 0.0;
         for part in parts.iter_mut() {
-            let PartState { controls, slots } = part;
+            let PartState { controls, slots, .. } = part;
             let context = controls.context(configuration, tuning, *master_tune);
             let mut sum = 0.0;
             for slot in slots.iter_mut() {
@@ -886,7 +1256,7 @@ impl Engine {
         let glide = finite(configuration.level_glide_s * configuration.sample_rate);
         let flush = *sample % 64 == 0;
         for part in parts.iter_mut() {
-            let PartState { controls, slots } = part;
+            let PartState { controls, slots, .. } = part;
             let context = controls.context(configuration, tuning, *master_tune);
             for slot in slots.iter_mut() {
                 if let Some(start) = slot.fading {
