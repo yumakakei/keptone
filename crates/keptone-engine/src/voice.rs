@@ -766,6 +766,47 @@ impl Voice {
         }
     }
 
+    /// A change of its note's per-note pitch kₙₒₜₑ, in keys (DESIGN §7.3), at the
+    /// instant of the sample at which it acts: the operators' pitches take it
+    /// from there on (MATH §2.2–§2.4), the phases going on (§4.7), and under
+    /// `scaling.key = pitch` the scaling key with it (§2.6), while
+    /// `onset-pitch` keeps the one at the onset. Nothing for a voice that does
+    /// not sound.
+    pub fn set_per_note(&mut self, per_note: f64, context: &Context<'_>) {
+        let state = &mut self.state;
+        if !state.sounds(context) {
+            return;
+        }
+        if let Some(note) = state.note.as_mut() {
+            note.per_note = per_note;
+        }
+        if context.configuration.scaling_key == ScalingKey::Pitch {
+            state.scaling = finite(state.transposed + per_note);
+        }
+    }
+
+    /// The level T at an instant of its loudest carrier, its offset O included
+    /// and the amplitude modulation not, as `voice.steal = quietest` compares
+    /// voices (MATH §13.2); −∞ where every carrier is silent, or for a voice
+    /// that does not sound.
+    #[must_use]
+    pub fn loudest(&self, at: Instant, context: &Context<'_>) -> f64 {
+        let state = &self.state;
+        if !state.sounds(context) {
+            return f64::NEG_INFINITY;
+        }
+        context
+            .patch
+            .graph
+            .carriers()
+            .iter()
+            .filter_map(|&carrier| {
+                let operator = state.operators.get(carrier)?;
+                state.level(carrier, operator, at, state.motion, context)
+            })
+            .fold(f64::NEG_INFINITY, f64::max)
+    }
+
     /// Records the end of its note at an instant (MATH §13.3): it sounds no
     /// more, and its phases run on from there at their last increments until
     /// its next note (§2.5).

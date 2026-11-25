@@ -1195,3 +1195,52 @@ fn the_pitch_follows_the_lfo_that_the_voice_follows() {
         }
     }
 }
+
+#[test]
+fn a_per_note_pitch_moves_the_pitch_and_under_pitch_the_scaling() {
+    // OP1 under the scaled patch with its pitch envelope and LFO still: a
+    // per-note pitch of 12 keys given in its hold moves its pitch by an octave
+    // under every scaling.key, and its level by the offset's change between
+    // the scaling keys k′ and k′ + 12, on the right of the break point, under
+    // `pitch` alone, the other two keeping the onset's scaling key (MATH §2.6).
+    let mut patch = scaled();
+    patch.voice.pitch_envelope.levels = [value(50.0); 4];
+    patch.voice.lfo.pitch_depth = value(0.0);
+    // At output level 60 the scaling stays below the level's limit (§0.7).
+    patch.voice.operators[0].output_level = value(60.0);
+    for choice in 0..3 {
+        let rig = Rig::new(&[("scaling.key", Value::Choice(choice))], &patch);
+        let context = rig.context();
+        let mut voice = rig.voice();
+        voice.key_on(
+            Instant::at(0),
+            note(80.0, VELOCITY, 0.0),
+            Portamento::Still,
+            0,
+            &context,
+        );
+        voice.output(Instant::at(0), &context);
+        for n in 1..=3000 {
+            step(&mut voice, &context, n);
+        }
+        let at = Instant::at(3000);
+        let before = voice.probe(0, at, &context).expect("a probe");
+        voice.set_per_note(12.0, &context);
+        let after = voice.probe(0, at, &context).expect("a probe");
+        assert!(
+            (after.pitch - before.pitch - 1.0).abs() <= 32.0 * U * after.pitch.abs(),
+            "{choice}"
+        );
+        let (before, after) = (before.level.expect("a level"), after.level.expect("a level"));
+        if choice == 2 {
+            let key = rig.transposed(80.0);
+            let moved = rig.offset(0, key + 12.0, VELOCITY).expect("an offset")
+                - rig.offset(0, key, VELOCITY).expect("an offset");
+            assert!(moved != 0.0);
+            // Each level rounds within u of itself, and so do the differences.
+            assert!((after - before - moved).abs() <= 4.0 * U * after.abs().max(before.abs()));
+        } else {
+            assert_eq!(after.to_bits(), before.to_bits(), "{choice}");
+        }
+    }
+}

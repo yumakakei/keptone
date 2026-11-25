@@ -82,6 +82,10 @@ pub enum Refusal {
     },
     /// A host rate that is not a finite number above 0.
     HostRate(f64),
+    /// The memory that the settings ask for, the voices of every part (MATH
+    /// §13.1), which the engine takes when it is prepared and never on the
+    /// audio thread, and which cannot be had.
+    Memory,
 }
 
 /// Where a voice's oscillators start when OSC KEY SYNC is off (MATH §2.5):

@@ -30,6 +30,9 @@
 //!   as the DX7's, through its key events, holds and live changes, and in
 //!   [`eg::progress`] a segment's progress over a piece of a sample on which
 //!   its rates' key moves;
+//! - [`engine`]: the engine, its parts and their slots, the stream of timed
+//!   events that is its input, and its output, rendered an engine sample at a
+//!   time;
 //! - [`feedback`]: an operator's feedback, the scale of FB and the loop gain,
 //!   the delay-free point solution and the models for a loop gain of 1 and
 //!   more: relaxation, the DX7's recurrence and clamp;
@@ -64,6 +67,7 @@ pub mod compile;
 pub mod configuration;
 pub mod control;
 pub mod eg;
+pub mod engine;
 pub mod feedback;
 pub mod graph;
 pub mod level;

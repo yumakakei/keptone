@@ -17,8 +17,11 @@
 //! at its key-on. A supplement and a fractional scaling are held by the patch
 //! and not heard until their laws are written (MATH §13.5, DESIGN §16).
 
+use core::num::NonZeroU32;
+
 use keptone_model::function::{Controller, Function, Polyphony, PortamentoMode};
 use keptone_model::graph::{Graph, Kind};
+use keptone_model::part::{KeyFilter, Part};
 use keptone_model::patch::Patch;
 use keptone_model::voice::{Mode, Operator, Voice, Wave};
 
@@ -274,5 +277,71 @@ impl CompiledPatch {
             transpose: voice.transpose.get(),
             function: CompiledFunction::new(function),
         }
+    }
+}
+
+/// A part as the engine takes it (MATH §13.5): the notes it takes, and the
+/// patch it plays with its function data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledPart {
+    /// Whether it takes notes at all.
+    pub on: bool,
+    /// Whether it receives every channel.
+    pub omni: bool,
+    /// The channel it receives, numbered across MIDI 2.0's groups: sixteen
+    /// for each group before its own, then its channel within its group, 0 to
+    /// 255.
+    pub channel: u8,
+    /// The lowest key it takes.
+    pub lowest_key: u8,
+    /// The highest key it takes.
+    pub highest_key: u8,
+    /// Which keys in its range it takes.
+    pub key_filter: KeyFilter,
+    /// The note shift s in keys (MATH §2.1).
+    pub note_shift: f64,
+    /// At most how many voices it holds, if it has a limit (MATH §13.5).
+    pub note_limit: Option<NonZeroU32>,
+    /// Its compiled patch, with its function data.
+    pub patch: CompiledPatch,
+}
+
+impl CompiledPart {
+    /// A part compiled in a configuration: total, as every value of
+    /// `keptone-model` is one that the engine takes. Until the supplement's
+    /// laws are written, the part plays its own function data (MATH §13.5).
+    #[must_use]
+    pub fn new(part: &Part, configuration: &Configuration) -> Self {
+        Self {
+            on: part.on,
+            omni: part.omni,
+            channel: part.group.get().saturating_mul(16).saturating_add(part.channel.get()),
+            lowest_key: part.lowest_key.get(),
+            highest_key: part.highest_key.get(),
+            key_filter: part.key_filter,
+            note_shift: part.note_shift.get(),
+            note_limit: part.note_limit,
+            patch: CompiledPatch::new(&part.patch, &part.function, configuration),
+        }
+    }
+
+    /// Whether it receives a channel's messages: it is on, and receives that
+    /// channel or every channel (MATH §13.5).
+    #[must_use]
+    pub const fn receives(&self, channel: u8) -> bool {
+        self.on && (self.omni || self.channel == channel)
+    }
+
+    /// Whether it takes a note of a channel and a key (MATH §13.5): it
+    /// receives the channel, the key lies between its lowest key and its
+    /// highest, both included, and its key filter lets the key through.
+    #[must_use]
+    pub const fn takes(&self, channel: u8, key: u8) -> bool {
+        let filtered = match self.key_filter {
+            KeyFilter::All => true,
+            KeyFilter::Odd => !key.is_multiple_of(2),
+            KeyFilter::Even => key.is_multiple_of(2),
+        };
+        self.receives(channel) && self.lowest_key <= key && key <= self.highest_key && filtered
     }
 }
