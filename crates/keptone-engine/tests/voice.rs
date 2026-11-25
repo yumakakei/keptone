@@ -1244,3 +1244,393 @@ fn a_per_note_pitch_moves_the_pitch_and_under_pitch_the_scaling() {
         }
     }
 }
+
+/// The held patch with OP1's output level at a value.
+fn leveled(level: f64) -> Patch {
+    let mut patch = held(true);
+    patch.voice.operators[0].output_level = value(level);
+    patch
+}
+
+/// A bound of the difference between a level T that a ramp moves and the
+/// test's sum: the ramp's difference d and its share (1 − r)d, its target's
+/// sum and the level's two sums round within u each of magnitudes below M, r
+/// within 2u of itself, and the test's own sum and product within 2u·M:
+/// within 9u·M.
+fn ramp_bound(magnitude: f64) -> f64 {
+    9.0 * U * magnitude
+}
+
+#[test]
+fn a_change_ramps_each_operator_s_offset_in_t() {
+    // OP1 held at L3, its envelope's own level still, under param.level_glide_s
+    // of 0.01 s, 480 samples. From OL 90 to 70 its T moves linearly from the
+    // one to the other; a change of its rates in the middle leaves the ramp as
+    // it was; to OL 0, at which it falls silent, from where the ramp had come
+    // linearly to the end level of eg.end_db, silent from that ramp's end on;
+    // and back to OL 90 from the end level.
+    // The rigs of OL 90, 70, 70 with R4 at 50, 0 and 90.
+    let rigs_in = |changes: &[(&str, Value)]| -> Vec<Rig> {
+        [90.0, 70.0, 70.0, 0.0, 90.0]
+            .iter()
+            .enumerate()
+            .map(|(k, &level)| {
+                let mut patch = leveled(level);
+                if k == 2 {
+                    patch.voice.operators[0].envelope.rates[3] = value(50.0);
+                }
+                Rig::new(changes, &patch)
+            })
+            .collect()
+    };
+    let rigs = rigs_in(&[("param.level_glide_s", Value::Number(0.01))]);
+    let context = |k: usize| Context {
+        patch: &rigs[k].patch,
+        ..rigs[0].context()
+    };
+    let glide = 0.01 * RATE;
+    let end = end_level(rigs[0].configuration.end_db);
+    let mut voice = rigs[0].voice();
+    voice.key_on(
+        Instant::at(0),
+        note(60.0, 100.0, 0.0),
+        Portamento::Still,
+        0,
+        &context(0),
+    );
+    run(&mut voice, &context(0), 1, 1000);
+    assert_eq!(voice.stage(0), Some(Stage::Held));
+    let level = |voice: &Voice, k: usize, n: u64| {
+        voice
+            .probe(0, Instant::at(n), &context(k))
+            .and_then(|probe| probe.level)
+    };
+    let held = level(&voice, 0, 1000).expect("a level");
+    let offsets = [0, 1].map(|k| rigs[k].offset(0, 60.0, 100.0).expect("an offset"));
+    let moved = offsets[1] - offsets[0];
+    let share = |from: u64, n: u64| (count(n - from) / glide).min(1.0);
+    let check =
+        |voice: &mut Voice, k: usize, range: core::ops::RangeInclusive<u64>, expected: &dyn Fn(u64) -> Option<f64>| {
+            for n in range {
+                if n > 1000 {
+                    step(voice, &context(k), n);
+                }
+                match (level(voice, k, n), expected(n)) {
+                    (Some(actual), Some(expected)) => assert!(
+                        (actual - expected).abs() <= ramp_bound(4400.0),
+                        "sample {n}: {actual} against {expected}"
+                    ),
+                    (actual, expected) => assert_eq!(actual, expected, "sample {n}"),
+                }
+            }
+        };
+    voice.change(Instant::at(1000), &context(0), &context(1));
+    check(&mut voice, 1, 1000..=1100, &|n| Some(held + share(1000, n) * moved));
+    voice.change(Instant::at(1100), &context(1), &context(2));
+    check(&mut voice, 2, 1101..=1240, &|n| Some(held + share(1000, n) * moved));
+    let reached = held + share(1000, 1240) * moved;
+    voice.change(Instant::at(1240), &context(2), &context(3));
+    check(&mut voice, 3, 1240..=1719, &|n| {
+        Some(reached + share(1240, n) * (end - reached))
+    });
+    check(&mut voice, 3, 1720..=2000, &|_| None);
+    voice.change(Instant::at(2000), &context(3), &context(4));
+    check(&mut voice, 4, 2000..=2600, &|n| {
+        Some(end + share(2000, n) * (held - end))
+    });
+    // With no glide, a change acts at once; a change to silence from below the
+    // end level, too.
+    let rigs = rigs_in(&[("param.level_glide_s", Value::Number(0.0))]);
+    let context = |k: usize| Context {
+        patch: &rigs[k].patch,
+        ..rigs[0].context()
+    };
+    let mut voice = rigs[0].voice();
+    voice.key_on(
+        Instant::at(0),
+        note(60.0, 100.0, 0.0),
+        Portamento::Still,
+        0,
+        &context(0),
+    );
+    run(&mut voice, &context(0), 1, 1000);
+    voice.change(Instant::at(1000), &context(0), &context(1));
+    let probe = voice.probe(0, Instant::at(1000), &context(1)).expect("a probe");
+    assert!((probe.level.expect("a level") - (held + moved)).abs() <= ramp_bound(4400.0));
+    voice.change(Instant::at(1000), &context(1), &context(3));
+    assert_eq!(
+        voice.probe(0, Instant::at(1000), &context(3)).expect("a probe").level,
+        None
+    );
+}
+
+/// The scaled patch with OP1's envelope and the pitch envelope's rates
+/// changed, its offset as it was.
+fn rescaled() -> Patch {
+    let mut patch = scaled();
+    patch.voice.pitch_envelope.rates = [value(40.0), value(80.0), value(30.0), value(90.0)];
+    let operator = &mut patch.voice.operators[0];
+    operator.envelope.rates = [value(30.0), value(70.0), value(20.0), value(40.0)];
+    operator.envelope.levels = [value(90.0), value(60.0), value(85.0), value(0.0)];
+    patch
+}
+
+/// OP1's level and the pitch envelope's against both driven apart, the voice
+/// changed at sample 700 from the first rig's patch to the second's, a note's
+/// key k′ under each given, bit for bit (MATH §4.7, §5): OP1's offset the same
+/// under both, its envelope re-anchored where its parameters or its rates' key
+/// change, and the pitch envelope where its own do.
+fn re_anchored(rigs: &[Rig; 2], keys: [f64; 2]) {
+    let context = |k: usize| Context {
+        patch: &rigs[k].patch,
+        ..rigs[0].context()
+    };
+    let offset = rigs[0].offset(0, keys[0], VELOCITY).expect("an offset");
+    assert_eq!(rigs[1].offset(0, keys[1], VELOCITY), Some(offset));
+    let mut voice = rigs[0].voice();
+    let start = Instant::at(0);
+    voice.key_on(start, note(52.0, VELOCITY, 0.0), Portamento::Still, 0, &context(0));
+    let mut driven = Driven::new(&rigs[0], 0, keys[0], None, offset, start);
+    let mut kept = Driven::new(&rigs[0], 0, keys[0], None, offset, start);
+    let mut differs = false;
+    let (before, after) = (&rigs[0].patch, &rigs[1].patch);
+    for n in 1..=3000 {
+        let k = usize::from(n > 700);
+        let (from, at) = (Instant::at(n - 1), Instant::at(n));
+        voice.advance(from, &context(k));
+        driven.sample(&rigs[k], keys[k], from, |_, _| offset);
+        kept.sample(&rigs[0], keys[0], from, |_, _| offset);
+        if n == 700 {
+            voice.change(at, &context(0), &context(1));
+            if before.pitch_envelope != after.pitch_envelope {
+                driven.pitch.change(at, &after.pitch_envelope, RATE);
+            }
+            let moved = driven.rates_key(keys[1], at);
+            let still = moved.to_bits() == driven.rates_key(keys[0], at).to_bits();
+            if before.operators[0].envelope != after.operators[0].envelope || !still {
+                let settings = &rigs[1].configuration.envelope;
+                driven
+                    .envelope
+                    .change(at, &after.operators[0].envelope, settings, moved);
+            }
+        }
+        let k = usize::from(n >= 700);
+        voice.output(at, &context(k));
+        let probe = voice.probe(0, at, &context(k)).expect("a probe");
+        assert_eq!(probe.level, driven.envelope.level(at, offset), "sample {n}");
+        assert_eq!(
+            voice.pitch_envelope(at, &context(k)),
+            driven.pitch.level(at),
+            "sample {n}"
+        );
+        differs |= probe.level != kept.envelope.level(at, offset);
+    }
+    assert!(differs, "the change makes no difference");
+}
+
+#[test]
+fn a_change_re_anchors_the_envelopes_where_their_parameters_or_keys_change() {
+    // The scaled patch, its rates' key moved by its pitch envelope, changed
+    // within its segments to rescaled rates and levels of OP1 and the pitch
+    // envelope.
+    let rigs = [Rig::new(&[], &scaled()), Rig::new(&[], &rescaled())];
+    let key = rigs[0].transposed(52.0);
+    re_anchored(&rigs, [key; 2]);
+    // A transpose that moves the rates' key, OP1's level scaling off, so that
+    // its offset holds.
+    let mut unscaled = scaled();
+    unscaled.voice.operators[0].left_depth = value(0.0);
+    unscaled.voice.operators[0].right_depth = value(0.0);
+    let mut up = unscaled.clone();
+    up.voice.transpose = value(39.0);
+    let rigs = [Rig::new(&[], &unscaled), Rig::new(&[], &up)];
+    let keys = [rigs[0].transposed(52.0), rigs[1].transposed(52.0)];
+    assert_eq!(keys[1], keys[0] + 12.0);
+    re_anchored(&rigs, keys);
+}
+
+#[test]
+fn a_change_moves_the_key_and_the_offset_with_it() {
+    // A transpose 12 keys up moves k′ and the operators' pitches an octave up at
+    // once, the phases going on, and the scaling key with them, whose offset
+    // the level ramps to (MATH §2.1, §4.7); OP1's rate scaling at 0, so that
+    // its rates do not move with the key.
+    // Under scaling.key = key and pitch alike, the pitch envelope and the LFO
+    // holding the pitch still, so that kₛ is k′.
+    for choice in [0, 2] {
+        moves_the_key(&[("scaling.key", Value::Choice(choice))]);
+    }
+}
+
+/// The transpose test of [`a_change_moves_the_key_and_the_offset_with_it`]
+/// in settings changed so.
+fn moves_the_key(adjusted: &[(&str, Value)]) {
+    let mut flat = scaled();
+    flat.voice.operators[0].rate_scaling = value(0.0);
+    flat.voice.pitch_envelope.levels = [value(50.0); 4];
+    flat.voice.lfo.pitch_depth = value(0.0);
+    let mut up = flat.clone();
+    up.voice.transpose = value(39.0);
+    let rigs = [Rig::new(adjusted, &flat), Rig::new(adjusted, &up)];
+    let context = |k: usize| Context {
+        patch: &rigs[k].patch,
+        ..rigs[0].context()
+    };
+    let mut voice = rigs[0].voice();
+    voice.key_on(
+        Instant::at(0),
+        note(52.0, VELOCITY, 0.0),
+        Portamento::Still,
+        0,
+        &context(0),
+    );
+    run(&mut voice, &context(0), 1, 500);
+    let at = Instant::at(500);
+    let before = voice.probe(0, at, &context(0)).expect("a probe");
+    voice.change(at, &context(0), &context(1));
+    let after = voice.probe(0, at, &context(1)).expect("a probe");
+    assert_eq!(voice.transposed(), rigs[0].transposed(52.0) + 12.0);
+    assert_eq!(after.phase, before.phase);
+    // Each pitch sums at most five terms below 16 in magnitude, each rounding
+    // within u·16, and 12-TET's twelfth within u·16 more: within 6u·16 each.
+    assert!((after.pitch - before.pitch - 1.0).abs() <= 12.0 * U * 16.0);
+    assert_eq!(after.level, before.level);
+    // The ramp of param.level_glide_s, 96 samples, is over by sample 700.
+    let n = 700;
+    assert!(rigs[0].configuration.level_glide_s * RATE < 200.0);
+    run(&mut voice, &context(1), 501, n);
+    let moved = rigs[1].offset(0, voice.transposed(), VELOCITY).expect("an offset")
+        - rigs[0]
+            .offset(0, voice.transposed() - 12.0, VELOCITY)
+            .expect("an offset");
+    assert!(moved.abs() > 1.0);
+    let mut unchanged = rigs[0].voice();
+    unchanged.key_on(
+        Instant::at(0),
+        note(52.0, VELOCITY, 0.0),
+        Portamento::Still,
+        0,
+        &context(0),
+    );
+    run(&mut unchanged, &context(0), 1, n);
+    let level = |voice: &Voice, k: usize| {
+        voice
+            .probe(0, Instant::at(n), &context(k))
+            .and_then(|probe| probe.level)
+    };
+    let (changed, kept) = (
+        level(&voice, 1).expect("a level"),
+        level(&unchanged, 0).expect("a level"),
+    );
+    assert!(
+        (changed - kept - moved).abs() <= ramp_bound(4400.0),
+        "{changed} {kept} {moved}"
+    );
+}
+
+#[test]
+fn a_change_moves_the_switches_and_the_voice_s_own_lfo() {
+    // A switch that the change turns off ramps as one that acts by itself.
+    let mut off = held(true);
+    off.voice.operators[1].on = false;
+    let rigs = [Rig::new(&[], &held(true)), Rig::new(&[], &off)];
+    let context = |k: usize| Context {
+        patch: &rigs[k].patch,
+        ..rigs[0].context()
+    };
+    let mut changed = rigs[0].voice();
+    changed.key_on(
+        Instant::at(0),
+        note(60.0, 100.0, 0.0),
+        Portamento::Still,
+        0,
+        &context(0),
+    );
+    run(&mut changed, &context(0), 1, 300);
+    let mut switched = changed.clone();
+    changed.change(Instant::at(300), &context(0), &context(1));
+    switched.switch(Instant::at(300), 1, false, &context(0));
+    for n in 301..=500 {
+        let changed_out = step(&mut changed, &context(1), n);
+        assert_eq!(changed_out, step(&mut switched, &context(0), n), "sample {n}");
+    }
+    // Under lfo.scope = voice its own LFO takes the new speed and DELAY: the
+    // amplitude modulation against an LFO changed so apart.
+    let scope = [("lfo.scope", Value::Choice(1))];
+    let mut faster = modulated(5.0, Wave::Triangle, true);
+    faster.voice.lfo.speed = value(80.0);
+    faster.voice.lfo.delay = value(10.0);
+    let rigs = [
+        Rig::new(&scope, &modulated(5.0, Wave::Triangle, true)),
+        Rig::new(&scope, &faster),
+    ];
+    let mut voice = rigs[0].voice();
+    let at = Instant::at(0);
+    voice.key_on(at, note(64.0, 100.0, 0.0), Portamento::Still, 0, &rigs[0].context());
+    let mut own = Lfo::new(at, rigs[0].patch.lfo.speed, RATE, rigs[0].streams.voices, 0);
+    own.key_on(at, false, 5.0, RATE);
+    run(&mut voice, &rigs[0].context(), 1, 3000);
+    let change = Instant::at(3000);
+    let new = Context {
+        patch: &rigs[1].patch,
+        ..rigs[0].context()
+    };
+    voice.change(change, &rigs[0].context(), &new);
+    own.set_speed(change, rigs[1].patch.lfo.speed, RATE);
+    own.set_delay(change, rigs[1].patch.lfo.delay, RATE);
+    modulation_follows(&rigs[1], &mut voice, 3001, 9000, |at| {
+        (own.fade(at), own.wave(at, Wave::Triangle))
+    });
+}
+
+#[test]
+fn a_ramp_gives_way_to_a_note_and_to_levels_below_the_end_level() {
+    // Under param.level_glide_s of 0.01 s: a key-on during a ramp from OL 90 to
+    // 70 takes the new law's offset at once; OL 10⁻⁹, λ so far below 1 that
+    // its held T lies below the end level, falls silent at once at OL 0, and
+    // comes back from it at once.
+    let changes = [("param.level_glide_s", Value::Number(0.01))];
+    let rigs: Vec<Rig> = [90.0, 70.0, 1e-9, 0.0]
+        .iter()
+        .map(|&level| Rig::new(&changes, &leveled(level)))
+        .collect();
+    let context = |k: usize| Context {
+        patch: &rigs[k].patch,
+        ..rigs[0].context()
+    };
+    let end = end_level(rigs[0].configuration.end_db);
+    let level = |voice: &Voice, k: usize, n: u64| {
+        voice
+            .probe(0, Instant::at(n), &context(k))
+            .and_then(|probe| probe.level)
+    };
+    let mut voice = rigs[0].voice();
+    let tune = note(60.0, 100.0, 0.0);
+    voice.key_on(Instant::at(0), tune, Portamento::Still, 0, &context(0));
+    run(&mut voice, &context(0), 1, 1000);
+    let held = level(&voice, 0, 1000).expect("a level");
+    let moved = rigs[1].offset(0, 60.0, 100.0).expect("an offset") - rigs[0].offset(0, 60.0, 100.0).expect("an offset");
+    voice.change(Instant::at(1000), &context(0), &context(1));
+    run(&mut voice, &context(1), 1001, 1100);
+    voice.key_on(Instant::at(1100), tune, Portamento::Still, 1, &context(1));
+    for n in [1100, 1101, 1200] {
+        if n > 1100 {
+            step(&mut voice, &context(1), n);
+        }
+        let actual = level(&voice, 1, n).expect("a level");
+        assert!(
+            (actual - (held + moved)).abs() <= ramp_bound(4400.0),
+            "sample {n}: {actual}"
+        );
+    }
+    let mut voice = rigs[2].voice();
+    voice.key_on(Instant::at(0), tune, Portamento::Still, 0, &context(2));
+    run(&mut voice, &context(2), 1, 1000);
+    let low = level(&voice, 2, 1000).expect("a level");
+    assert!(low < end, "{low} against {end}");
+    voice.change(Instant::at(1000), &context(2), &context(3));
+    assert_eq!(level(&voice, 3, 1000), None);
+    run(&mut voice, &context(3), 1001, 1100);
+    voice.change(Instant::at(1100), &context(3), &context(2));
+    assert_eq!(level(&voice, 2, 1100), Some(low));
+}

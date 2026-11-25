@@ -51,3 +51,9 @@ pub(crate) fn scaled(value: f64, octaves: f64) -> f64 {
 pub(crate) fn finite(value: f64) -> f64 {
     value.clamp(-f64::MAX, f64::MAX)
 }
+
+/// Whether two values are the same binary64, as a change compares a
+/// parameter's values before and after it.
+pub(crate) fn same(a: f64, b: f64) -> bool {
+    a.to_bits() == b.to_bits()
+}

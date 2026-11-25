@@ -19,7 +19,11 @@
 //! and [`Plan::output`] gives the operators' outputs at the sample's instant,
 //! θ, g and κ taken there. What the feedback keeps from sample to sample is
 //! a [`Memory`], which a voice takes when the engine is prepared; neither
-//! step allocates.
+//! step allocates. A plan keeps its stages, their operators and the
+//! operators' modulators in flat vectors, so that a voice can copy its part's
+//! into one whose room it took when the engine was prepared
+//! ([`Plan::room`], [`Plan::copy_from`]), as it keeps the graph that it
+//! started with under `graph.algorithm_scope = voice` (MATH §8.3).
 //!
 //! An operator's μ adds its modulators' outputs in the ascending order of
 //! their operators, and the carriers' sum adds theirs in that order too, so
@@ -39,6 +43,7 @@ use crate::binary64::finite;
 use crate::compile::FeedbackEdge;
 use crate::configuration::{Feedback, FeedbackModel};
 use crate::feedback::{self, Fed};
+use crate::pieces::copied;
 
 /// 2⁻⁵⁰⁰, below which a state is flushed to 0 (MATH §13.4).
 const TINY: f64 = f64::from_bits((1023 - 500) << 52);
@@ -54,8 +59,27 @@ struct Modulator {
     feedback: bool,
 }
 
+/// A run of one of a plan's flat vectors: its start and its length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Run {
+    /// The index of its first entry.
+    start: usize,
+    /// Its count of entries.
+    len: usize,
+}
+
+impl Run {
+    /// Its entries of a vector, none where it lies beyond the vector.
+    fn of<T>(self, values: &[T]) -> &[T] {
+        self.start
+            .checked_add(self.len)
+            .and_then(|end| values.get(self.start..end))
+            .unwrap_or(&[])
+    }
+}
+
 /// A step of a sample's evaluation: one strongly connected component.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Stage {
     /// An operator on no loop.
     Operator(usize),
@@ -65,18 +89,18 @@ enum Stage {
     /// Operators on loops that no model here solves, a component closed by
     /// more than one feedback edge or by none, which none of the DX7's
     /// algorithms has (MATH §8.1): they give nothing until user graphs come
-    /// (DESIGN §16, M8b).
-    Silent(Vec<usize>),
+    /// (DESIGN §16, M8b). Its operators are a run of the plan's members.
+    Silent(Run),
 }
 
-/// A feedback stage: its operators in an order in which each comes after
-/// its modulators but for the feedback edge, the operator that the edge
-/// enters, which indexes the stage's memory, the one that it leaves, whose
-/// output yᵇ feeds back, and the edge's κ.
-#[derive(Debug, Clone, PartialEq)]
+/// A feedback stage: its operators in their order of evaluation, a run of the
+/// plan's members, each after its modulators but the feedback edge's, the
+/// operator that the edge enters, which indexes the stage's memory, the one
+/// that it leaves, whose output yᵇ feeds back, and the edge's κ.
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Loop {
     /// The stage's operators in their order of evaluation.
-    order: Vec<usize>,
+    order: Run,
     /// The operator that the feedback edge enters.
     to: usize,
     /// The operator that it leaves.
@@ -87,15 +111,32 @@ struct Loop {
 
 /// What a voice evaluates at each engine sample (MATH §8.2): its graph's
 /// strongly connected components in their order, each operator's modulators
-/// and the carriers.
-#[derive(Debug, Clone, PartialEq)]
+/// and the carriers, in flat vectors. A copy keeps the room of each vector, so
+/// that a voice's copy holds what [`Plan::room`] took.
+#[derive(Debug, PartialEq)]
 pub struct Plan {
     /// The components, in their order of evaluation.
     stages: Vec<Stage>,
-    /// Each operator's modulators, ascending.
-    modulators: Vec<Vec<Modulator>>,
+    /// The operators of the feedback and silent stages, each stage's a run.
+    members: Vec<usize>,
+    /// The operators' modulators, each operator's a run, ascending.
+    modulators: Vec<Modulator>,
+    /// Each operator's run of modulators.
+    runs: Vec<Run>,
     /// The carriers, ascending.
     carriers: Vec<usize>,
+}
+
+impl Clone for Plan {
+    fn clone(&self) -> Self {
+        Self {
+            stages: copied(&self.stages, self.stages.capacity()),
+            members: copied(&self.members, self.members.capacity()),
+            modulators: copied(&self.modulators, self.modulators.capacity()),
+            runs: copied(&self.runs, self.runs.capacity()),
+            carriers: copied(&self.carriers, self.carriers.capacity()),
+        }
+    }
 }
 
 impl Plan {
@@ -115,14 +156,23 @@ impl Plan {
                 .map_or(1.0, |edge| edge.kappa)
         };
         let mut stages = Vec::with_capacity(components.len());
+        let mut members = Vec::new();
         let mut closing = Vec::new();
+        let run = |operators: &[usize], members: &mut Vec<usize>| {
+            let start = members.len();
+            members.extend_from_slice(operators);
+            Run {
+                start,
+                len: operators.len(),
+            }
+        };
         for component in components {
             stages.push(match component {
                 Component::Operator(k) => Stage::Operator(*k),
                 Component::SelfLoop(k) => {
                     closing.push((*k, *k));
                     Stage::Feedback(Loop {
-                        order: vec![*k],
+                        order: run(&[*k], &mut members),
                         to: *k,
                         from: *k,
                         kappa: kappa(*k, *k),
@@ -132,40 +182,114 @@ impl Plan {
                     Some((order, from, to)) => {
                         closing.push((from, to));
                         Stage::Feedback(Loop {
-                            order,
+                            order: run(&order, &mut members),
                             to,
                             from,
                             kappa: kappa(from, to),
                         })
                     }
-                    None => Stage::Silent(operators.clone()),
+                    None => Stage::Silent(run(operators, &mut members)),
                 },
             });
         }
-        let modulators = (0..graph.operators())
-            .map(|k| {
-                graph
-                    .edges_to(k)
-                    .iter()
-                    .map(|edge| Modulator {
-                        from: edge.from,
-                        feedback: closing.contains(&(edge.from, edge.to)),
-                    })
-                    .collect()
-            })
-            .collect();
+        let mut modulators = Vec::new();
+        let mut runs = Vec::with_capacity(graph.operators());
+        for k in 0..graph.operators() {
+            let start = modulators.len();
+            modulators.extend(graph.edges_to(k).iter().map(|edge| Modulator {
+                from: edge.from,
+                feedback: closing.contains(&(edge.from, edge.to)),
+            }));
+            runs.push(Run {
+                start,
+                len: modulators.len() - start,
+            });
+        }
         Self {
             stages,
+            members,
             modulators,
+            runs,
             carriers: graph.carriers().to_vec(),
         }
+    }
+
+    /// A plan with room for any plan of so many operators, empty: its memory
+    /// taken now, as the engine is prepared and never on the audio thread,
+    /// or none where it cannot be had. A graph of N operators has at most N
+    /// stages, N operators on loops and N² edges, one for each ordered pair
+    /// of its operators, a self-loop's among them (MATH §8.4).
+    #[must_use]
+    pub fn room(operators: usize) -> Option<Self> {
+        let mut plan = Self {
+            stages: Vec::new(),
+            members: Vec::new(),
+            modulators: Vec::new(),
+            runs: Vec::new(),
+            carriers: Vec::new(),
+        };
+        plan.stages.try_reserve_exact(operators).ok()?;
+        plan.members.try_reserve_exact(operators).ok()?;
+        plan.modulators
+            .try_reserve_exact(operators.checked_mul(operators)?)
+            .ok()?;
+        plan.runs.try_reserve_exact(operators).ok()?;
+        plan.carriers.try_reserve_exact(operators).ok()?;
+        Some(plan)
+    }
+
+    /// Whether its room holds another plan: no vector of the other longer than
+    /// its own room.
+    #[must_use]
+    pub fn has_room_for(&self, other: &Self) -> bool {
+        other.stages.len() <= self.stages.capacity()
+            && other.members.len() <= self.members.capacity()
+            && other.modulators.len() <= self.modulators.capacity()
+            && other.runs.len() <= self.runs.capacity()
+            && other.carriers.len() <= self.carriers.capacity()
+    }
+
+    /// Copies another plan into its own room, neither allocating nor freeing
+    /// memory, and tells whether it did: false, and nothing copied, where its
+    /// room does not hold the other ([`Plan::has_room_for`]).
+    pub fn copy_from(&mut self, other: &Self) -> bool {
+        let fits = self.has_room_for(other);
+        if fits {
+            self.stages.clear();
+            self.stages.extend_from_slice(&other.stages);
+            self.members.clear();
+            self.members.extend_from_slice(&other.members);
+            self.modulators.clear();
+            self.modulators.extend_from_slice(&other.modulators);
+            self.runs.clear();
+            self.runs.extend_from_slice(&other.runs);
+            self.carriers.clear();
+            self.carriers.extend_from_slice(&other.carriers);
+        }
+        fits
+    }
+
+    /// Its carriers, ascending, whose outputs the voice's output sums.
+    #[must_use]
+    pub fn carriers(&self) -> &[usize] {
+        &self.carriers
+    }
+
+    /// A feedback stage's operators in their order of evaluation.
+    fn order(&self, stage: &Loop) -> &[usize] {
+        stage.order.of(&self.members)
+    }
+
+    /// Operator k's modulators, ascending.
+    fn modulators_of(&self, k: usize) -> &[Modulator] {
+        self.runs.get(k).map_or(&[], |run| run.of(&self.modulators))
     }
 
     /// The number of its operators, which a voice's outputs and its memory
     /// hold.
     #[must_use]
     pub fn operators(&self) -> usize {
-        self.modulators.len()
+        self.runs.len()
     }
 
     /// The lags of the relaxation over an engine sample (MATH §9.6, §9.7),
@@ -303,7 +427,7 @@ impl Plan {
                     outputs[*k] = finite(gain * sin2pi(turns));
                 }
                 Stage::Silent(operators) => {
-                    for &k in operators {
+                    for &k in operators.of(&self.members) {
                         outputs[k] = 0.0;
                     }
                 }
@@ -336,7 +460,7 @@ impl Plan {
             ..
         } = memory;
         let to = stage.to;
-        let single = stage.order.len() == 1;
+        let single = stage.order.len == 1;
         let loop_gain = self.gain(stage, |k| at(k).1);
         scratch[..count].copy_from_slice(&outputs[..count]);
         match settings.model {
@@ -443,7 +567,7 @@ impl Plan {
         outputs: &mut [f64],
     ) {
         self.chain(stage, kappa, fed, at, scratch, slopes);
-        for &k in &stage.order {
+        for &k in self.order(stage) {
             outputs[k] = scratch[k];
         }
     }
@@ -453,8 +577,7 @@ impl Plan {
     /// that the edge enters, times 2π times each other's, each product
     /// rounding within u, saturated at binary64's largest finite number.
     fn gain(&self, stage: &Loop, gains: impl Fn(usize) -> f64) -> f64 {
-        let _ = self;
-        stage.order.iter().fold(1.0, |product, &k| {
+        self.order(stage).iter().fold(1.0, |product, &k| {
             let factor = if k == stage.to {
                 feedback::beta(stage.kappa, gains(k))
             } else {
@@ -467,7 +590,7 @@ impl Plan {
     /// μ of operator k, its modulators' outputs added in their ascending
     /// order, a feedback edge's term being κ times `fed`.
     fn modulation(&self, k: usize, outputs: &[f64], kappa: f64, fed: f64) -> f64 {
-        self.modulators[k].iter().fold(0.0, |sum, modulator| {
+        self.modulators_of(k).iter().fold(0.0, |sum, modulator| {
             let term = if modulator.feedback {
                 finite(kappa * fed)
             } else {
@@ -492,13 +615,14 @@ impl Plan {
         slopes: &mut [f64],
     ) -> Fed {
         let mut entering = 0.0;
-        for &k in &stage.order {
+        let order = self.order(stage);
+        for &k in order {
             let (phase, gain) = values(k);
             let turns = phase + self.modulation(k, scratch, kappa, fed);
-            let slope = self.modulators[k].iter().fold(0.0, |sum, modulator| {
+            let slope = self.modulators_of(k).iter().fold(0.0, |sum, modulator| {
                 let term = if modulator.feedback {
                     kappa
-                } else if stage.order.contains(&modulator.from) {
+                } else if order.contains(&modulator.from) {
                     slopes[modulator.from]
                 } else {
                     0.0
@@ -631,7 +755,9 @@ impl Memory {
             };
             let kept = old.stages.iter().any(|before| {
                 matches!(before, Stage::Feedback(before)
-                    if before.to == stage.to && before.from == stage.from && same_operators(&before.order, &stage.order))
+                    if before.to == stage.to
+                        && before.from == stage.from
+                        && same_operators(old.order(before), new.order(stage)))
             });
             if !kept && stage.to < self.lagged.len() {
                 self.lagged[stage.to] = 0.0;

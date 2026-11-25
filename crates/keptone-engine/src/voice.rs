@@ -20,7 +20,8 @@
 //! relaxation's lags (§9.6), which take θ and g at instants within the sample
 //! from the voice's states at its start run over the part of the sample up to
 //! each ([`Voice::within`]). Then the events of the sample's instant act:
-//! [`Voice::key_on`], [`Voice::key_off`], [`Voice::switch`]. Then
+//! [`Voice::key_on`], [`Voice::key_off`], [`Voice::switch`], and
+//! [`Voice::change`], a new patch of its part. Then
 //! [`Voice::output`] gives the voice's output there, its carriers' sum as
 //! `output.carrier_normalization` scales it (§14).
 //!
@@ -39,19 +40,22 @@
 use keptone_math::eft::two_product;
 use keptone_model::voice::Mode;
 
-use crate::binary64::finite;
-use crate::compile::{CompiledOperator, CompiledPatch};
-use crate::configuration::{Configuration, FreePhaseStart, LfoScope, Normalization, RateKey, ScalingKey};
+use crate::binary64::{finite, same};
+use crate::compile::{CompiledFunction, CompiledOperator, CompiledPatch};
+use crate::configuration::{
+    AlgorithmScope, Configuration, FreePhaseStart, LfoScope, Modulation, Normalization, RateKey, ScalingKey,
+};
 use crate::control::{Limited, kept, lowering, modulation};
 use crate::eg::end_level;
 use crate::eg::envelope::{self, Envelope, Stage};
-use crate::graph::evaluation::Memory;
+use crate::graph::evaluation::{Memory, Plan};
 use crate::level::{distance, gain, keyboard_scaling, offset};
 use crate::lfo::Lfo;
 use crate::peg::{self, PitchEnvelope};
 use crate::pieces::{self, Keys, Parts, Portamento, Signals};
 use crate::pitch::phase::Phase;
 use crate::pitch::{TwelveTet, detune, transposed_key};
+use crate::portamento::{Glide, Glissando, Unit};
 use crate::random::{self, Streams};
 use crate::time::Instant;
 
@@ -167,6 +171,79 @@ impl Ramp {
     }
 }
 
+/// A change of an operator's offset O, ramped in T over `param.level_glide_s`
+/// (MATH §4.7): O(t) = target − (1 − r)·difference, r rising linearly from 0
+/// at the change to 1, the target the new parameters' offset, or, where the
+/// operator falls silent, the offset at which its T lay at the end level of
+/// `eg.end_db` at the change; from r = 1 on, the new parameters' offset.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LevelRamp {
+    /// The change's instant.
+    start: Instant,
+    /// The target less the offset, at the change.
+    difference: f64,
+    /// The target where the operator falls silent; none where the new
+    /// parameters' offset is the target.
+    silent: Option<f64>,
+}
+
+impl LevelRamp {
+    /// r at an instant for a glide of so many samples, 1 where that is 0 or
+    /// less: the samples since the change over the glide, within u(|Δ| + 1/2)
+    /// of the exact count and the quotient within u; from 1 on the ramp is
+    /// over.
+    fn progress(&self, at: Instant, glide: f64) -> f64 {
+        if glide <= 0.0 {
+            return 1.0;
+        }
+        at.samples_since(self.start).max(0.0) / glide
+    }
+
+    /// The ramp that takes an operator's offset from one side of a change to
+    /// the other at an instant, its envelope there and the end level given
+    /// (MATH §4.7): none where both sides are silent, where the glide is 0 or
+    /// less, and where the side that is silent leaves the operator's T at or
+    /// below the end level at the change, so that the change acts at once.
+    fn between(
+        before: Option<f64>,
+        after: Option<f64>,
+        envelope: &Envelope,
+        at: Instant,
+        end: f64,
+        glide: f64,
+    ) -> Option<Self> {
+        if glide <= 0.0 {
+            return None;
+        }
+        match (before, after) {
+            (Some(before), Some(after)) => Some(Self {
+                start: at,
+                difference: finite(after - before),
+                silent: None,
+            }),
+            (Some(before), None) => {
+                let level = envelope.level(at, before).filter(|&level| level > end)?;
+                let target = finite(before + (end - level));
+                Some(Self {
+                    start: at,
+                    difference: finite(target - before),
+                    silent: Some(target),
+                })
+            }
+            (None, Some(after)) => {
+                let level = envelope.level(at, after).filter(|&level| level > end)?;
+                let from = finite(after + (end - level));
+                Some(Self {
+                    start: at,
+                    difference: finite(after - from),
+                    silent: None,
+                })
+            }
+            (None, None) => None,
+        }
+    }
+}
+
 /// What a voice keeps of each operator.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Operator {
@@ -177,6 +254,8 @@ struct Operator {
     /// Its offset O at the note's onset (MATH §3.2), none where it is silent;
     /// under `scaling.key = pitch` it is taken anew at each instant instead.
     offset: Option<f64>,
+    /// The ramp of a change of its offset under way (MATH §4.7).
+    ramp: Option<LevelRamp>,
     /// Its switch's factor.
     switch: Ramp,
     /// Its phase's increment over the last sample that the voice integrated,
@@ -333,6 +412,49 @@ fn glide(context: &Context<'_>) -> f64 {
     finite(context.configuration.level_glide_s * context.configuration.sample_rate)
 }
 
+/// A voice's portamento, taken to an instant, after a change there of TIME or
+/// of the glissando (MATH §7.3): none where the new TIME makes no glide, the
+/// glide taking its target there; a glissando turned on starts its glide and
+/// its key at the pitch there, one turned off leaves its glide to start at the
+/// key heard, and otherwise the glide is re-anchored there at the new speed,
+/// a glissando keeping its progress.
+fn retimed(
+    portamento: Portamento,
+    at: Instant,
+    function: &CompiledFunction,
+    configuration: &Configuration,
+) -> Portamento {
+    let Some(speed) = function.portamento_speed else {
+        return Portamento::Still;
+    };
+    let rate = configuration.sample_rate;
+    match portamento {
+        Portamento::Still => Portamento::Still,
+        Portamento::Glide(mut glide) if !function.glissando => {
+            glide.set_speed(at, speed, rate);
+            Portamento::Glide(glide)
+        }
+        Portamento::Glide(glide) => {
+            let keys = match glide.unit() {
+                Unit::Octaves => finite(12.0 * glide.offset(at)),
+                Unit::Keys => glide.offset(at),
+            };
+            Portamento::Glissando(Glissando::new(at, keys, speed, rate))
+        }
+        Portamento::Glissando(mut glissando) if function.glissando => {
+            glissando.set_speed(at, speed, rate);
+            Portamento::Glissando(glissando)
+        }
+        Portamento::Glissando(glissando) => {
+            let keys = glissando.offset();
+            Portamento::Glide(match configuration.modulation {
+                Modulation::Pitch => Glide::new(at, keys / 12.0, speed, Unit::Octaves, rate),
+                Modulation::Keys => Glide::new(at, keys, speed, Unit::Keys, rate),
+            })
+        }
+    }
+}
+
 impl State {
     /// Whether it holds a context's patch's operators.
     fn holds(&self, context: &Context<'_>) -> bool {
@@ -392,31 +514,60 @@ impl State {
     }
 
     /// The scaling key kₛ at an instant under `scaling.key = pitch` (MATH
-    /// §2.6), from a state of what moves the pitch at or before it: k′ and the
-    /// per-note pitch, with twelve keys an octave of the pitch envelope's
-    /// level, the portamento's offset and the LFO's pitch, and the bend.
-    fn pitch_key(&self, at: Instant, motion: Motion, context: &Context<'_>) -> f64 {
+    /// §2.6), from a state of what moves the pitch at or before it: a base, k′
+    /// and the per-note pitch, with twelve keys an octave of the pitch
+    /// envelope's level, the portamento's offset and the LFO's pitch, and the
+    /// bend.
+    fn pitch_key(&self, base: f64, at: Instant, motion: Motion, context: &Context<'_>) -> f64 {
         let motion = motion.at(at, context);
         let moved = finite(motion.envelope.level(at) + motion.portamento.octaves(at));
         let octaves = finite(moved + self.lfo_pitch(at, context));
-        finite(finite(12.0_f64.mul_add(octaves, self.scaling)) + context.bend)
+        finite(finite(12.0_f64.mul_add(octaves, base)) + context.bend)
     }
 
-    /// An operator's offset O at an instant (MATH §3.2, §2.6), none where it is
-    /// silent: its offset at the note's onset, or under `scaling.key = pitch`
-    /// its offset at the scaling key there, from a state of what moves the
-    /// pitch at or before it.
+    /// The offset O that an operator's parameters give at a scaling key's base
+    /// and an instant (MATH §3.2, §2.6), none where it is silent: at the base
+    /// itself under `key` and `onset-pitch`, and under `pitch` at the scaling
+    /// key that moves from it, from a state of what moves the pitch at or
+    /// before the instant.
+    fn law(
+        &self,
+        compiled: &CompiledOperator,
+        base: f64,
+        at: Instant,
+        motion: Motion,
+        context: &Context<'_>,
+    ) -> Option<f64> {
+        let note = self.note?;
+        let key = match context.configuration.scaling_key {
+            ScalingKey::Pitch => self.pitch_key(base, at, motion, context),
+            ScalingKey::Key | ScalingKey::OnsetPitch => base,
+        };
+        offset_of(compiled, key, note.velocity)
+    }
+
+    /// An operator's offset O at an instant (MATH §3.2, §2.6, §4.7), none where
+    /// it is silent: its offset at the note's onset, or under `scaling.key =
+    /// pitch` its offset at the scaling key there, from a state of what moves
+    /// the pitch at or before it; while a change's ramp is under way, that
+    /// offset less (1 − r) times the ramp's difference, the ramp's own target
+    /// standing for it where the operator falls silent.
     fn offset_at(&self, k: usize, at: Instant, motion: Motion, context: &Context<'_>) -> Option<f64> {
         let operator = self.operators.get(k)?;
-        if context.configuration.scaling_key != ScalingKey::Pitch {
-            return operator.offset;
+        let law = if context.configuration.scaling_key == ScalingKey::Pitch {
+            self.law(context.patch.operators.get(k)?, self.scaling, at, motion, context)
+        } else {
+            operator.offset
+        };
+        let Some(ramp) = operator.ramp else {
+            return law;
+        };
+        let r = ramp.progress(at, glide(context));
+        if r >= 1.0 {
+            return law;
         }
-        let note = self.note?;
-        offset_of(
-            &context.patch.operators[k],
-            self.pitch_key(at, motion, context),
-            note.velocity,
-        )
+        let target = ramp.silent.or(law)?;
+        Some(finite(target - (1.0 - r) * ramp.difference))
     }
 
     /// An operator's level T at an instant from a state of it, its offset O
@@ -517,6 +668,10 @@ pub struct Voice {
     state: State,
     /// What its feedback keeps (MATH §9.6, §9.7).
     memory: Memory,
+    /// The graph that it keeps under `graph.algorithm_scope = voice`, its
+    /// part's at its last note's key-on (MATH §8.3), its room taken when the
+    /// engine is prepared.
+    plan: Plan,
     /// Its operators' outputs at its last instant.
     outputs: Vec<f64>,
     /// Its operators' θ and g at its last instant.
@@ -541,6 +696,7 @@ impl Voice {
             phase: Phase::ZERO,
             envelope: Envelope::new(&RESTING, SILENT, at),
             offset: None,
+            ramp: None,
             switch: Ramp::settled(true, at),
             step: 0.0,
         };
@@ -565,6 +721,7 @@ impl Voice {
                 span_keys: Keys::new(max_pieces)?,
             },
             memory: Memory::new(operators)?,
+            plan: Plan::room(operators)?,
             outputs: filled(operators, 0.0)?,
             values: filled(operators, (0.0, 0.0))?,
             parts: Parts::new(max_pieces)?,
@@ -659,10 +816,16 @@ impl Voice {
     /// has had none, starts its envelopes from T(L4) at the new offsets, its
     /// phases without OSC KEY SYNC run on from its last note's end at their
     /// last increments, and its feedback anew (§9.6, §9.7); a voice's first
-    /// note settles its switches at its patch's.
+    /// note settles its switches at its patch's. The note's offsets act at
+    /// once, a change's ramp under way ending there (§4.7), and under
+    /// `graph.algorithm_scope = voice` the voice takes its part's graph, the
+    /// feedback state of each operator whose component that alters starting
+    /// anew where it sounds (§8.3). Nothing for a voice without room for the
+    /// patch.
     pub fn key_on(&mut self, at: Instant, note: Note, portamento: Portamento, nth: u64, context: &Context<'_>) {
         let state = &mut self.state;
-        if !state.holds(context) {
+        let scoped = context.configuration.algorithm_scope == AlgorithmScope::Voice;
+        if !state.holds(context) || (scoped && !self.plan.has_room_for(&context.patch.plan)) {
             return;
         }
         let (patch, configuration) = (context.patch, context.configuration);
@@ -691,6 +854,7 @@ impl Voice {
         });
         for (k, (operator, compiled)) in state.operators.iter_mut().zip(&patch.operators).enumerate() {
             operator.offset = offset_of(compiled, state.scaling, note.velocity);
+            operator.ramp = None;
             if first {
                 operator.switch = Ramp::settled(compiled.on, at);
             }
@@ -720,6 +884,12 @@ impl Voice {
             operator
                 .envelope
                 .key_on(at, &compiled.envelope, &configuration.envelope, key, offset);
+        }
+        if scoped {
+            if !fresh {
+                self.memory.renew_changed(&self.plan, &patch.plan);
+            }
+            self.plan.copy_from(&patch.plan);
         }
         if fresh {
             self.memory.renew();
@@ -849,6 +1019,107 @@ impl Voice {
         state.motion = motion;
     }
 
+    /// A change of its part's compiled patch at an instant (MATH §0.3, §4.7,
+    /// §5, §8.3, §8.5), the part's context before the change, `old`, and after
+    /// it, `new`. A voice that has had a note: its switches move toward the
+    /// new patch's (§8.5), and its portamento takes a new TIME or glissando
+    /// from the pitch there (§7.3). One that sounds besides: its key after
+    /// transposition moves with the transpose and the note shift, and its
+    /// scaling key with it (§2.1, §2.6), while one that does not keeps the
+    /// pitch where it was; each operator whose offset's law changes ramps
+    /// from its offset there to the new law's over `param.level_glide_s`, in
+    /// T, through the end level of `eg.end_db` from or to silence (§4.7); each
+    /// envelope whose parameters or rates' key change, and the pitch envelope
+    /// where its own do, are re-anchored there (§4.7, §5); its own LFO takes a
+    /// new speed or DELAY under `lfo.scope = voice` (§6.1, §6.5); and under
+    /// `graph.algorithm_scope = patch` the feedback state of each operator
+    /// whose component the new graph alters starts anew, while under `voice`
+    /// the voice keeps its graph (§8.3). Nothing for a voice that has had no
+    /// note, nor for one without room for either patch.
+    pub fn change(&mut self, at: Instant, old: &Context<'_>, new: &Context<'_>) {
+        let Some(note) = self.state.note else {
+            return;
+        };
+        if !self.state.holds(old) || !self.state.holds(new) {
+            return;
+        }
+        for (k, compiled) in new.patch.operators.iter().enumerate() {
+            self.switch(at, k, compiled.on, new);
+        }
+        let state = &mut self.state;
+        let configuration = new.configuration;
+        let rate = configuration.sample_rate;
+        let before = state.motion.at(at, old);
+        let mut after = before;
+        let (from, to) = (&old.patch.function, &new.patch.function);
+        if (from.portamento_speed, from.glissando) != (to.portamento_speed, to.glissando) {
+            after.portamento = retimed(after.portamento, at, to, configuration);
+        }
+        if !state.sounds(new) {
+            state.motion = after;
+            return;
+        }
+        let transposed = transposed_key(
+            note.key,
+            new.patch.transpose,
+            new.note_shift,
+            configuration.transpose_octave,
+            TwelveTet::PERIOD,
+        );
+        let scaling = match configuration.scaling_key {
+            ScalingKey::Pitch => finite(transposed + note.per_note),
+            ScalingKey::Key | ScalingKey::OnsetPitch => finite(state.scaling + finite(transposed - state.transposed)),
+        };
+        if old.patch.pitch_envelope != new.patch.pitch_envelope {
+            after.envelope.change(at, &new.patch.pitch_envelope, rate);
+        }
+        let key = state.rates_key(at, before, old);
+        let end = end_level(configuration.end_db);
+        let glide = glide(new);
+        for (k, compiled) in new.patch.operators.iter().enumerate() {
+            let offset = state.offset_at(k, at, before, old);
+            let previous = state.law(&old.patch.operators[k], state.scaling, at, before, old);
+            let next = state.law(compiled, scaling, at, after, new);
+            let operator = &mut state.operators[k];
+            if next.map(f64::to_bits) != previous.map(f64::to_bits) {
+                operator.ramp = LevelRamp::between(offset, next, &operator.envelope, at, end, glide);
+            }
+            operator.offset = offset_of(compiled, scaling, note.velocity);
+        }
+        state.motion = after;
+        state.transposed = transposed;
+        state.scaling = scaling;
+        let moved = state.rates_key(at, after, new);
+        for (k, compiled) in new.patch.operators.iter().enumerate() {
+            if old.patch.operators[k].envelope != compiled.envelope || !same(moved, key) {
+                state.operators[k]
+                    .envelope
+                    .change(at, &compiled.envelope, &configuration.envelope, moved);
+            }
+        }
+        if let Some(lfo) = state.lfo.as_mut() {
+            let (was, is) = (&old.patch.lfo, &new.patch.lfo);
+            if !same(was.speed, is.speed) {
+                lfo.set_speed(at, is.speed, rate);
+            }
+            if !same(was.delay, is.delay) {
+                lfo.set_delay(at, is.delay, rate);
+            }
+        }
+        if configuration.algorithm_scope == AlgorithmScope::Patch && old.patch.plan != new.patch.plan {
+            self.memory.renew_changed(&old.patch.plan, &new.patch.plan);
+        }
+    }
+
+    /// The graph that it plays (MATH §8.3): its own under
+    /// `graph.algorithm_scope = voice`, its part's under `patch`.
+    fn plan<'s>(&'s self, context: &Context<'s>) -> &'s Plan {
+        match context.configuration.algorithm_scope {
+            AlgorithmScope::Voice => &self.plan,
+            AlgorithmScope::Patch => &context.patch.plan,
+        }
+    }
+
     /// The level T at an instant of its loudest carrier, its offset O included
     /// and the amplitude modulation not, as `voice.steal = quietest` compares
     /// voices (MATH §13.2); −∞ where every carrier is silent, or for a voice
@@ -859,9 +1130,7 @@ impl Voice {
         if !state.sounds(context) {
             return f64::NEG_INFINITY;
         }
-        context
-            .patch
-            .graph
+        self.plan(context)
             .carriers()
             .iter()
             .filter_map(|&carrier| {
@@ -929,7 +1198,11 @@ impl Voice {
             operator.envelope = envelope;
         }
         state.motion = start.at(to, context);
-        patch.plan.integrate(
+        let plan = match configuration.algorithm_scope {
+            AlgorithmScope::Voice => &self.plan,
+            AlgorithmScope::Patch => &patch.plan,
+        };
+        plan.integrate(
             &mut self.memory,
             |samples, out| state.within(samples, out, context),
             &self.outputs,
@@ -968,7 +1241,11 @@ impl Voice {
             self.values[k] = state.value(k, &state.operators[k], at, state.motion, context);
         }
         let values = &self.values;
-        let sum = patch.plan.output(
+        let plan = match configuration.algorithm_scope {
+            AlgorithmScope::Voice => &self.plan,
+            AlgorithmScope::Patch => &patch.plan,
+        };
+        let sum = plan.output(
             &mut self.memory,
             |k| values[k],
             &configuration.feedback,
@@ -982,7 +1259,7 @@ impl Voice {
         } else {
             self.silent = 0.0;
         }
-        let carriers = u32::try_from(patch.graph.carriers().len()).map_or(f64::MAX, f64::from);
+        let carriers = u32::try_from(plan.carriers().len()).map_or(f64::MAX, f64::from);
         match configuration.normalization {
             Normalization::Count if carriers > 0.0 => sum / carriers,
             Normalization::SqrtCount if carriers > 0.0 => sum / carriers.sqrt(),
@@ -1007,8 +1284,10 @@ impl Voice {
         }
         let end = end_level(context.configuration.end_db);
         let glide = glide(context);
-        context.patch.graph.carriers().iter().all(|&carrier| {
-            let operator = &state.operators[carrier];
+        self.plan(context).carriers().iter().all(|&carrier| {
+            let Some(operator) = state.operators.get(carrier) else {
+                return true;
+            };
             let off = operator.switch.factor(at, glide) <= 0.0;
             let released = matches!(operator.envelope.stage(), Stage::Segment(3) | Stage::Resting);
             let below = state

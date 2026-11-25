@@ -27,14 +27,16 @@
 //! `lfo.scope = part`, restarts at each key-on (§6.5). A poly part's notes
 //! glide as its portamento says, retaining or following, while its foot switch
 //! is on, and a mono part plays its keys in its first slot, legato as §7.3
-//! says, fingered or full time. Milestone M3 renders at the host's rate,
-//! `engine.oversampling` at 1.
+//! says, fingered or full time. A part's new compiled patch comes with a block
+//! and takes the part's place at its event's sample, the part's own going back
+//! in its place: the part's voices go on under it as §4.7 and §8.3 say.
+//! Milestone M3 renders at the host's rate, `engine.oversampling` at 1.
 
 use keptone_model::dx7ii::Index;
 use keptone_model::part;
 use keptone_model::settings::Settings;
 
-use crate::binary64::finite;
+use crate::binary64::{finite, same};
 use crate::compile::{CompiledFunction, CompiledPart};
 use crate::configuration::{Channels, Configuration, LfoScope, Modulation, Refusal, Retrigger, Steal};
 use crate::control::{self, Limited, Source};
@@ -148,6 +150,18 @@ pub enum Kind {
     MasterTune {
         /// The cents.
         cents: f64,
+    },
+    /// A part's new compiled patch, with the part's own parameters (§0.3,
+    /// §13.5; DESIGN §5): the compiled part at an index of those that come
+    /// with the block, which the engine exchanges with the part's own, so that
+    /// the part plays the new one from the event's instant and the one that it
+    /// played goes back in its place, to be dropped off the audio thread.
+    /// Nothing where the part or the index lies beyond those there are.
+    Patch {
+        /// The part.
+        part: usize,
+        /// The compiled part's index among those that come with the block.
+        index: usize,
     },
 }
 
@@ -623,8 +637,10 @@ impl Engine {
     /// (§14). The block runs as long as the shortest channel given; an event
     /// whose sample lies beyond the block acts at its last sample, and one that
     /// comes after an event of a later sample acts at that later sample. A
-    /// block of no samples does nothing.
-    pub fn render(&mut self, events: &[Event], outputs: &mut [&mut [f64]]) {
+    /// block of no samples does nothing. The compiled parts that come with the
+    /// block are those that its [`Kind::Patch`] events name, each of which
+    /// leaves the part's previous one in its place.
+    pub fn render(&mut self, events: &[Event], patches: &mut [CompiledPart], outputs: &mut [&mut [f64]]) {
         let length = outputs.iter().map(|channel| channel.len()).min().unwrap_or(0);
         let mut next = 0;
         for index in 0..length {
@@ -636,7 +652,7 @@ impl Engine {
             while let Some(event) = events.get(next)
                 && (last || usize::try_from(event.offset).is_ok_and(|offset| offset <= index))
             {
-                self.act(&event.kind, at);
+                self.act(&event.kind, at, patches);
                 next += 1;
             }
             let value = self.output(at);
@@ -673,8 +689,9 @@ impl Engine {
         }
     }
 
-    /// An event acting at an instant.
-    fn act(&mut self, kind: &Kind, at: Instant) {
+    /// An event acting at an instant, the compiled parts that come with its
+    /// block given.
+    fn act(&mut self, kind: &Kind, at: Instant, patches: &mut [CompiledPart]) {
         match *kind {
             Kind::NoteOn {
                 channel,
@@ -770,6 +787,59 @@ impl Engine {
                 }
             }
             Kind::MasterTune { cents } => self.master_tune = finite(cents / 1200.0),
+            Kind::Patch { part, index } => self.exchange(part, index, patches, at),
+        }
+    }
+
+    /// A part's new compiled patch at an instant, the compiled part at an
+    /// index of those given, exchanged with the part's own (MATH §0.3, §4.7,
+    /// §6.5, §7.3, §8.3, §13.5): the controllers' depths and the bend from the
+    /// new function data, the part's LFO at a new speed or DELAY, each of its
+    /// voices changed as [`Voice::change`] says, and, at a change between poly
+    /// and mono, its voices released as their keys' releases would release
+    /// them and its held keys and legato's direction forgotten. Nothing where
+    /// the part or the index lies beyond those there are.
+    fn exchange(&mut self, part: usize, index: usize, patches: &mut [CompiledPart], at: Instant) {
+        let (Some(state), Some(given)) = (self.parts.get_mut(part), patches.get_mut(index)) else {
+            return;
+        };
+        let PartState { controls, slots, .. } = state;
+        let before = (controls.pitch, controls.amplitude, controls.bias, controls.bend);
+        core::mem::swap(&mut controls.compiled, given);
+        controls.settle();
+        let old: &CompiledPart = given;
+        let rate = self.configuration.sample_rate;
+        let (was, is) = (&old.patch.lfo, &controls.compiled.patch.lfo);
+        if !same(was.speed, is.speed) {
+            controls.lfo.set_speed(at, is.speed, rate);
+        }
+        if !same(was.delay, is.delay) {
+            controls.lfo.set_delay(at, is.delay, rate);
+        }
+        let switched = old.patch.function.mono != controls.compiled.patch.function.mono;
+        let new = controls.context(&self.configuration, &self.tuning, self.master_tune);
+        let previous = Context {
+            patch: &old.patch,
+            note_shift: old.note_shift,
+            pitch_controllers: before.0,
+            amplitude_controllers: before.1,
+            bias: before.2,
+            bend: before.3,
+            ..new
+        };
+        for slot in slots.iter_mut() {
+            slot.voice.change(at, &previous, &new);
+        }
+        if switched {
+            for slot in 0..self.parts[part].slots.len() {
+                let held = &self.parts[part].slots[slot];
+                if held.playing() && held.down {
+                    self.release(part, slot, at);
+                }
+            }
+            let mono = &mut self.parts[part].mono;
+            mono.keys.clear();
+            mono.sounding = None;
         }
     }
 

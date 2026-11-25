@@ -100,11 +100,12 @@ fn index(samples: u64) -> usize {
 }
 
 /// Renders so many samples from the engine's next, the events at absolute
-/// samples in their order, in blocks whose lengths `block` gives, and gives
-/// both channels, each starting at `initial`.
+/// samples in their order, in blocks whose lengths `block` gives, every block
+/// with the compiled parts given, and gives both channels, each starting at
+/// `initial`.
 fn render_with(
     engine: &mut Engine,
-    events: &[(u64, Kind)],
+    (events, patches): (&[(u64, Kind)], &mut [CompiledPart]),
     samples: u64,
     initial: f64,
     mut block: impl FnMut() -> u64,
@@ -125,7 +126,7 @@ fn render_with(
             .collect();
         let range = index(done)..index(done + length);
         let [left, right] = &mut channels;
-        engine.render(&within, &mut [&mut left[range.clone()], &mut right[range]]);
+        engine.render(&within, patches, &mut [&mut left[range.clone()], &mut right[range]]);
         done += length;
     }
     channels
@@ -133,7 +134,12 @@ fn render_with(
 
 /// Renders so many samples in one block.
 fn render(engine: &mut Engine, events: &[(u64, Kind)], samples: u64) -> [Vec<f64>; 2] {
-    render_with(engine, events, samples, 0.0, || samples)
+    render_with(engine, (events, &mut []), samples, 0.0, || samples)
+}
+
+/// Renders so many samples in one block with compiled parts.
+fn patched(engine: &mut Engine, events: &[(u64, Kind)], patches: &mut [CompiledPart], samples: u64) -> [Vec<f64>; 2] {
+    render_with(engine, (events, patches), samples, 0.0, || samples)
 }
 
 /// The key of the note that the voice in a part's slot plays or played last,
@@ -779,7 +785,7 @@ fn the_output_adds_the_parts_in_the_channels_it_has() {
         ("output.channels", Value::Choice(1)),
     ];
     let mut alone = prepared(&mono, &two_parts());
-    let [channel, untouched] = render_with(&mut alone, &[first[0], second[0]], samples, 7.0, || samples);
+    let [channel, untouched] = render_with(&mut alone, (&[first[0], second[0]], &mut []), samples, 7.0, || samples);
     assert!(channel.iter().zip(&left).all(|(a, b)| a.to_bits() == b.to_bits()));
     assert!(untouched.iter().all(|value| value.to_bits() == 7.0_f64.to_bits()));
 }
@@ -791,7 +797,7 @@ fn events_act_at_their_samples_within_the_block() {
     let block = |events: &[Event]| {
         let mut engine = prepared(&[], &[]);
         let [mut left, mut right] = [vec![0.0; 10], vec![0.0; 10]];
-        engine.render(events, &mut [&mut left, &mut right]);
+        engine.render(events, &mut [], &mut [&mut left, &mut right]);
         let [rest, _] = render(&mut engine, &[], 500);
         left.into_iter().chain(rest).collect::<Vec<_>>()
     };
@@ -860,7 +866,7 @@ fn random_events(random: &mut Random, samples: u64) -> Vec<(u64, Kind)> {
             continue;
         }
         let channel = u8::try_from(random.below(2)).expect("a channel");
-        let kind = match random.below(11) {
+        let kind = match random.below(12) {
             0..=2 => {
                 let number = u8::try_from(36 + random.below(48)).expect("a key");
                 held.push((channel, number));
@@ -894,6 +900,7 @@ fn random_events(random: &mut Random, samples: u64) -> Vec<(u64, Kind)> {
                 }
             }
             9 => foot(channel, random.below(3) != 0),
+            10 => patch(index(random.below(2)), index(random.below(4))),
             _ => Kind::MasterTune {
                 cents: 100.0 * random.unit() - 50.0,
             },
@@ -948,12 +955,18 @@ fn random_parts() -> [Part; 2] {
 
 #[test]
 fn a_render_is_the_same_however_its_samples_are_split_into_blocks() {
-    // Each policy and retrigger, both channels' forms and both LFO scopes and
-    // three feedback models, three voices for two parts: random input
-    // rendered in one block and in blocks of 1 to 700 samples, bit for bit.
+    // Each policy and retrigger, both channels' forms, both LFO scopes and
+    // both graph scopes and three feedback models, three voices for two parts:
+    // random input, with new compiled patches among it, rendered in one block
+    // and in blocks of 1 to 700 samples, bit for bit.
     let samples = 6000;
-    let configurations = [(0, 1, 0, 0, 0), (1, 0, 1, 1, 1), (2, 1, 0, 1, 2), (3, 0, 0, 0, 0)];
-    for (seed, &(steal, retrigger, channels, scope, model)) in (1_u64..).zip(&configurations) {
+    let configurations = [
+        (0, 1, 0, 0, 0, 0),
+        (1, 0, 1, 1, 1, 1),
+        (2, 1, 0, 1, 2, 0),
+        (3, 0, 0, 0, 0, 1),
+    ];
+    for (seed, &(steal, retrigger, channels, scope, model, graph)) in (1_u64..).zip(&configurations) {
         let changes = [
             ("voice.count", Value::Integer(3)),
             ("voice.steal", Value::Choice(steal)),
@@ -961,11 +974,16 @@ fn a_render_is_the_same_however_its_samples_are_split_into_blocks() {
             ("output.channels", Value::Choice(channels)),
             ("lfo.scope", Value::Choice(scope)),
             ("feedback.model", Value::Choice(model)),
+            ("graph.algorithm_scope", Value::Choice(graph)),
         ];
         let events = random_events(&mut Random(seed), samples);
-        let whole = render(&mut prepared(&changes, &random_parts()), &events, samples);
+        let mut engine = prepared(&changes, &random_parts());
+        let mut patches = random_patches(&engine);
+        let whole = patched(&mut engine, &events, &mut patches, samples);
         let mut random = Random(seed.wrapping_mul(7919));
-        let split = render_with(&mut prepared(&changes, &random_parts()), &events, samples, 0.0, || {
+        let mut engine = prepared(&changes, &random_parts());
+        let mut patches = random_patches(&engine);
+        let split = render_with(&mut engine, (&events, &mut patches), samples, 0.0, || {
             1 + random.below(700)
         });
         for (channel, (a, b)) in whole.iter().zip(&split).enumerate() {
@@ -979,6 +997,35 @@ fn a_render_is_the_same_however_its_samples_are_split_into_blocks() {
         }
         assert!(whole[0].iter().any(|value| value.abs() > 0.1), "configuration {seed}");
     }
+}
+
+/// The compiled parts that random input's patch events take: the random
+/// parts changed in their levels, rates and LFO; in their algorithm,
+/// feedback, transpose and pitch envelope; to mono with a glissando and a note
+/// shift; and to poly with an operator off, a sine LFO and a wider bend.
+fn random_patches(engine: &Engine) -> Vec<CompiledPart> {
+    let [first, second] = random_parts();
+    let mut variants: Vec<Part> = [&first, &second, &first, &second].into_iter().cloned().collect();
+    for operator in &mut variants[0].patch.voice.operators {
+        operator.output_level = value(70.0);
+        operator.envelope.rates = [value(80.0), value(40.0), value(60.0), value(50.0)];
+    }
+    variants[0].patch.voice.lfo.speed = value(30.0);
+    variants[0].patch.voice.lfo.delay = value(10.0);
+    let voice = &mut variants[1].patch.voice;
+    voice.algorithm = Algorithm::new(7).expect("an algorithm");
+    voice.feedback = value(3.0);
+    voice.transpose = value(30.0);
+    voice.pitch_envelope.levels = [value(60.0), value(40.0), value(55.0), value(50.0)];
+    variants[2].function.polyphony = Polyphony::Mono;
+    variants[2].function.glissando = true;
+    variants[2].function.portamento_time = value(60.0);
+    variants[2].note_shift = NoteShift::new(4.0).expect("a shift");
+    variants[3].function.polyphony = Polyphony::Poly;
+    variants[3].patch.voice.operators[1].on = false;
+    variants[3].patch.voice.lfo.wave = Wave::Sine;
+    variants[3].function.pitch_bend_range = value(7.0);
+    variants.iter().map(|part| compiled(engine, part)).collect()
 }
 
 /// A part whose portamento glides at TIME 50, retaining or following, with
@@ -1470,18 +1517,23 @@ fn a_mono_part_holds_each_key_once_and_takes_a_voice_when_none_is_spare() {
 #[test]
 fn a_copy_of_an_engine_renders_as_the_engine_does() {
     // A copy keeps the room that the engine took when it was prepared, for the
-    // parts of each sample, the rates' key's pieces and nodes and a mono part's
-    // keys, so that the copy and the engine render the same, bit for bit, from
-    // a copy made before any note, with osc.max_pieces at 1 too, so that the
-    // samples whose pieces outnumber it take the rule's nodes, and from one
-    // made in the middle of a render.
+    // parts of each sample, the rates' key's pieces and nodes, a mono part's
+    // keys and each voice's graph, so that the copy and the engine render the
+    // same, bit for bit, from a copy made before any note, with osc.max_pieces
+    // at 1 too, so that the samples whose pieces outnumber it take the rule's
+    // nodes, and under graph.algorithm_scope = voice, and from one made in the
+    // middle of a render.
     let changes = [("voice.count", Value::Integer(3))];
     let events = random_events(&mut Random(99), 8000);
     let few = [
         ("voice.count", Value::Integer(3)),
         ("osc.max_pieces", Value::Integer(1)),
     ];
-    for changes in [&changes[..], &few[..]] {
+    let scoped = [
+        ("voice.count", Value::Integer(3)),
+        ("graph.algorithm_scope", Value::Choice(1)),
+    ];
+    for changes in [&changes[..], &few[..], &scoped[..]] {
         let mut engine = prepared(changes, &random_parts());
         let mut copy = engine.clone();
         let whole = render(&mut engine, &events, 8000);
@@ -1731,4 +1783,518 @@ fn glides_run_between_keys_after_transposition() {
     let mut engine = prepared(&[], &[shifted(false, true)]);
     render(&mut engine, &[(10, on(0, 60, 100.0)), (100, on(0, 67, 100.0))], 101);
     glides(&mut engine, 0, (72.0, 79.0), 100, Some(Unit::Octaves));
+}
+
+/// A part compiled in an engine's configuration.
+fn compiled(engine: &Engine, part: &Part) -> CompiledPart {
+    CompiledPart::new(part, engine.configuration())
+}
+
+/// A part's new compiled patch, the one at an index of those given.
+const fn patch(part: usize, index: usize) -> Kind {
+    Kind::Patch { part, index }
+}
+
+#[test]
+fn a_patch_event_exchanges_a_part_s_compiled_patch() {
+    // The part plays the new compiled part from the event's sample, and the one
+    // that it played goes back in its place; an index or a part beyond those
+    // there are changes nothing.
+    let mut engine = prepared(&[], &[]);
+    let initial = compiled(&engine, &Part::initial(true));
+    let mut changed = Part::initial(true);
+    changed.patch.voice.operators[0].output_level = value(70.0);
+    changed.note_shift = NoteShift::new(5.0).expect("a shift");
+    let new = compiled(&engine, &changed);
+    let mut patches = [new.clone()];
+    let events = [(100, patch(0, 0)), (100, patch(0, 1)), (100, patch(2, 0))];
+    patched(&mut engine, &events, &mut patches, 101);
+    assert_eq!(patches[0], initial);
+    let context = engine.context(0).expect("a part");
+    assert_eq!(*context.patch, new.patch);
+    assert_eq!(context.note_shift, 5.0);
+}
+
+/// What a voice of a compiled part takes from it with the part's LFO, its
+/// controllers at rest under VOICE INIT's function data and its bend at the
+/// centre.
+fn context_of<'a>(
+    part: &'a CompiledPart,
+    lfo: &'a Lfo,
+    configuration: &'a keptone_engine::configuration::Configuration,
+    tuning: &'a TwelveTet,
+) -> Context<'a> {
+    let wheel = Source {
+        position: 0.0,
+        range: 99.0,
+    };
+    Context {
+        patch: &part.patch,
+        configuration,
+        tuning,
+        lfo,
+        note_shift: part.note_shift,
+        pitch_controllers: control::controllers(&[wheel]),
+        amplitude_controllers: control::controllers(&[]),
+        bias: control::bias(&[]),
+        bend: 0.0,
+        master_tune: 0.0,
+        streams: Streams::of(configuration.lfo_seed, 0),
+    }
+}
+
+/// VOICE INIT changed in most of what a change takes over: OP1's level and
+/// rates, OP2 audible, the transpose, the pitch envelope, the LFO's speed and
+/// DELAY, the algorithm and the feedback, and the part's note shift.
+fn changed() -> Part {
+    let mut part = Part::initial(true);
+    let voice = &mut part.patch.voice;
+    voice.operators[0].output_level = value(80.0);
+    voice.operators[0].envelope.rates = [value(70.0), value(60.0), value(50.0), value(40.0)];
+    voice.operators[1].output_level = value(60.0);
+    voice.transpose = value(30.0);
+    voice.pitch_envelope.levels = [value(55.0), value(45.0), value(52.0), value(50.0)];
+    voice.lfo.speed = value(70.0);
+    voice.lfo.delay = value(20.0);
+    voice.algorithm = Algorithm::new(5).expect("an algorithm");
+    voice.feedback = value(6.0);
+    part.note_shift = NoteShift::new(3.0).expect("a shift");
+    part
+}
+
+#[test]
+fn a_note_through_a_patch_change_plays_as_its_voice_changed_apart() {
+    // VOICE INIT changed while its note sounds: the engine's output against
+    // `output.gain` times a voice driven apart and changed at the same sample,
+    // the part's LFO taking the new speed and DELAY there, bit for bit.
+    let mut engine = prepared(&[], &[]);
+    let configuration = *engine.configuration();
+    let tuning = TwelveTet::new(configuration.a4_hz);
+    let before = compiled(&engine, &Part::initial(true));
+    let after = compiled(&engine, &changed());
+    let mut patches = [after.clone()];
+    let (on_at, change_at, off_at, samples) = (10, 1000, 3000, 30_000);
+    let events = [
+        (on_at, on(0, 60, 100.0)),
+        (change_at, patch(0, 0)),
+        (off_at, off(0, 60)),
+    ];
+    let [left, _] = patched(&mut engine, &events, &mut patches, samples);
+    let streams = Streams::of(configuration.lfo_seed, 0);
+    let mut lfo = Lfo::new(Instant::at(0), before.patch.lfo.speed, RATE, streams.part, 0);
+    let mut voice = Voice::new(6, configuration.max_pieces, Instant::at(0)).expect("memory");
+    let mut ended = false;
+    for n in 0..samples {
+        let at = Instant::at(n);
+        let held = if n <= change_at { &before } else { &after };
+        if n > 0 {
+            voice.advance(Instant::at(n - 1), &context_of(held, &lfo, &configuration, &tuning));
+        }
+        if n == on_at {
+            lfo.key_on(at, before.patch.lfo.sync, before.patch.lfo.delay, RATE);
+            let note = Note {
+                key: 60.0,
+                velocity: 100.0,
+                per_note: 0.0,
+            };
+            let context = context_of(&before, &lfo, &configuration, &tuning);
+            voice.key_on(at, note, Portamento::Still, 0, &context);
+        }
+        if n == change_at {
+            lfo.set_speed(at, after.patch.lfo.speed, RATE);
+            lfo.set_delay(at, after.patch.lfo.delay, RATE);
+            let old = context_of(&before, &lfo, &configuration, &tuning);
+            voice.change(at, &old, &context_of(&after, &lfo, &configuration, &tuning));
+        }
+        let current = if n < change_at { &before } else { &after };
+        let context = context_of(current, &lfo, &configuration, &tuning);
+        if n == off_at {
+            voice.key_off(at, &context);
+        }
+        let expected = configuration.output_gain * voice.output(at, &context);
+        assert_eq!(left[index(n)].to_bits(), expected.to_bits(), "sample {n}");
+        if !ended && voice.ended(at, &context) {
+            voice.end(at);
+            ended = true;
+        }
+    }
+    assert!(ended && left.iter().any(|value| value.abs() > 0.5));
+}
+
+#[test]
+fn a_change_between_poly_and_mono_releases_the_part_s_voices() {
+    // Poly with two keys down, then mono: both voices released at the change;
+    // the release of a key held through it does nothing; a key pressed after
+    // it sounds in the first slot, starting its envelopes, and the next is a
+    // legato. Then poly again: the mono voice released and its keys forgotten,
+    // so that their releases do nothing and a new key takes a voice as a poly
+    // part's does.
+    let mut engine = prepared(&[], &[]);
+    let mut mono = Part::initial(true);
+    mono.function.polyphony = Polyphony::Mono;
+    let mut patches = [compiled(&engine, &mono)];
+    let stage = |engine: &Engine, slot| engine.voice(0, slot).and_then(|voice| voice.stage(0));
+    let events = [(0, on(0, 60, 100.0)), (10, on(0, 64, 100.0)), (1000, patch(0, 0))];
+    patched(&mut engine, &events, &mut patches, 1001);
+    assert_eq!(stage(&engine, 0), Some(Stage::Segment(3)));
+    assert_eq!(stage(&engine, 1), Some(Stage::Segment(3)));
+    patched(
+        &mut engine,
+        &[(1001, off(0, 60)), (1100, on(0, 67, 100.0))],
+        &mut patches,
+        100,
+    );
+    assert_eq!(stage(&engine, 0), Some(Stage::Segment(0)));
+    assert_eq!(keyed(&engine, 0, 0), Some(67.0));
+    patched(&mut engine, &[(1200, on(0, 70, 100.0))], &mut patches, 100);
+    assert_eq!(engine.voice(0, 0).map(Voice::transposed), Some(70.0));
+    assert_ne!(stage(&engine, 0), Some(Stage::Segment(0)));
+    let events = [
+        (2000, patch(0, 0)),
+        (2001, off(0, 70)),
+        (2002, off(0, 67)),
+        (2100, on(0, 72, 100.0)),
+    ];
+    patched(&mut engine, &events, &mut patches, 1000);
+    assert_eq!(stage(&engine, 0), Some(Stage::Segment(3)));
+    assert_eq!(keyed(&engine, 0, 1), Some(72.0));
+    assert!(sounds(&engine, 0, 1) && engine.voice(0, 1).is_some_and(Voice::held));
+    // Mono again: a key's release with none other held releases its voice, no
+    // key of before the changes held still.
+    let events = [(3000, patch(0, 0)), (3100, on(0, 60, 100.0)), (3200, off(0, 60))];
+    let count = 3201 - engine.sample();
+    patched(&mut engine, &events, &mut patches, count);
+    assert_eq!(keyed(&engine, 0, 0), Some(60.0));
+    assert_eq!(stage(&engine, 0), Some(Stage::Segment(3)));
+}
+
+#[test]
+fn a_patch_change_carries_the_part_s_parameters_and_function_data() {
+    // A bend range of 12, a note shift of 5, the lowest key 62 and the LFO at
+    // speed 70 with DELAY 30, at sample 1000 in the middle of DELAY 20's
+    // delay: the bend from its position at the new range at once, the held
+    // note's k′ moved at once, a key below 62 taken no more while the held
+    // note's release still reaches it, and the part's LFO against one changed
+    // so apart.
+    let mut delayed = Part::initial(true);
+    delayed.patch.voice.lfo.delay = value(20.0);
+    let mut engine = prepared(&[], &[delayed.clone()]);
+    let mut part = delayed.clone();
+    part.function.pitch_bend_range = value(12.0);
+    part.note_shift = NoteShift::new(5.0).expect("a shift");
+    part.lowest_key = Index::new(62).expect("a key");
+    part.patch.voice.lfo.speed = value(70.0);
+    part.patch.voice.lfo.delay = value(30.0);
+    let mut patches = [compiled(&engine, &part)];
+    let bend = Kind::Bend {
+        channel: 0,
+        position: 1.0,
+    };
+    let events = [(10, on(0, 60, 100.0)), (20, bend), (1000, patch(0, 0))];
+    patched(&mut engine, &events, &mut patches, 1001);
+    let context = engine.context(0).expect("a part");
+    assert_eq!(context.bend, control::bend(1.0, 12.0, 0.0));
+    assert_eq!(engine.voice(0, 0).map(Voice::transposed), Some(65.0));
+    patched(
+        &mut engine,
+        &[(1100, on(0, 61, 100.0)), (1200, off(0, 60))],
+        &mut patches,
+        300,
+    );
+    assert_eq!(keyed(&engine, 0, 1), None);
+    assert_eq!(
+        engine.voice(0, 0).and_then(|voice| voice.stage(0)),
+        Some(Stage::Segment(3))
+    );
+    let initial = compiled(&engine, &delayed);
+    let streams = Streams::of(engine.configuration().lfo_seed, 0);
+    let mut lfo = Lfo::new(Instant::at(0), initial.patch.lfo.speed, RATE, streams.part, 0);
+    lfo.key_on(Instant::at(10), initial.patch.lfo.sync, initial.patch.lfo.delay, RATE);
+    lfo.set_speed(Instant::at(1000), 70.0, RATE);
+    lfo.set_delay(Instant::at(1000), 30.0, RATE);
+    let part_lfo = engine.context(0).expect("a part").lfo;
+    for n in [1000, 1001, 1300, 5000, 20_000] {
+        let at = Instant::at(n);
+        assert_eq!(part_lfo.turns(at).to_bits(), lfo.turns(at).to_bits(), "sample {n}");
+        assert_eq!(part_lfo.fade(at).to_bits(), lfo.fade(at).to_bits(), "sample {n}");
+    }
+}
+
+/// Renders up to each sample of a list and asserts that the voice in a part's
+/// slot is heard there at the key that a function gives.
+fn hears(
+    engine: &mut Engine,
+    (events, patches): (&[(u64, Kind)], &mut [CompiledPart]),
+    (slot, samples): (usize, &[u64]),
+    expected: impl Fn(u64) -> f64,
+) {
+    for &n in samples {
+        if engine.sample() <= n {
+            let count = n + 1 - engine.sample();
+            patched(engine, events, patches, count);
+        }
+        assert_eq!(heard(engine, 0, slot, n), Some(expected(n)), "sample {n}");
+    }
+}
+
+#[test]
+fn a_patch_change_retimes_a_glide() {
+    // A retaining glide from 60 to 67 at TIME 50 from sample 100: at 1000 TIME
+    // 80 re-anchors it there at its speed; at 1500 a change that leaves the
+    // portamento leaves the glide; at 2000 TIME 0 takes it to its target at
+    // once.
+    let speed = |time| portamento::speed(time).expect("a speed");
+    let timed = |time: f64, glissando: bool| {
+        let mut part = gliding(false, glissando, false);
+        part.function.portamento_time = value(time);
+        part
+    };
+    let mut louder = timed(80.0, false);
+    louder.patch.voice.operators[0].output_level = value(70.0);
+    let mut engine = prepared(&[], &[gliding(false, false, false)]);
+    let mut patches = [
+        compiled(&engine, &timed(80.0, false)),
+        compiled(&engine, &timed(0.0, false)),
+        compiled(&engine, &louder),
+    ];
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 60, 100.0)),
+        (100, on(0, 67, 100.0)),
+        (1000, patch(0, 0)),
+        (1500, patch(0, 2)),
+        (2000, patch(0, 1)),
+    ];
+    let mut glide = Glide::new(Instant::at(100), -7.0 / 12.0, speed(50.0), Unit::Octaves, RATE);
+    glide.set_speed(Instant::at(1000), speed(80.0), RATE);
+    let along = |n: u64| 12.0_f64.mul_add(glide.offset(Instant::at(n)), 67.0);
+    hears(
+        &mut engine,
+        (&events, &mut patches),
+        (1, &[1000, 1001, 1499, 1500, 1999]),
+        along,
+    );
+    hears(&mut engine, (&events, &mut patches), (1, &[2000, 2500]), |_| 67.0);
+    // The glissando turned on at 1000 starts its glide and its key at the
+    // pitch there; TIME 80 at 1500 keeps its progress at the new speed; turned
+    // off at 2000, its glide starts at the key heard.
+    let mut engine = prepared(&[], &[gliding(false, false, false)]);
+    let mut patches = [
+        compiled(&engine, &timed(50.0, true)),
+        compiled(&engine, &timed(80.0, true)),
+    ];
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 60, 100.0)),
+        (100, on(0, 67, 100.0)),
+        (1000, patch(0, 0)),
+        (1500, patch(0, 1)),
+        (2000, patch(0, 0)),
+    ];
+    let glide = Glide::new(Instant::at(100), -7.0 / 12.0, speed(50.0), Unit::Octaves, RATE);
+    let mut glissando = Glissando::new(
+        Instant::at(1000),
+        12.0 * glide.offset(Instant::at(1000)),
+        speed(50.0),
+        RATE,
+    );
+    let stepped = |glissando: &Glissando, n: u64| 12.0_f64.mul_add(glissando.offset_at(Instant::at(n)) / 12.0, 67.0);
+    hears(&mut engine, (&events, &mut patches), (1, &[1000, 1300, 1499]), |n| {
+        stepped(&glissando, n)
+    });
+    glissando.advance(Instant::at(1500));
+    glissando.set_speed(Instant::at(1500), speed(80.0), RATE);
+    hears(&mut engine, (&events, &mut patches), (1, &[1500, 1700, 1999]), |n| {
+        stepped(&glissando, n)
+    });
+    glissando.advance(Instant::at(2000));
+    let after = Glide::new(
+        Instant::at(2000),
+        glissando.offset() / 12.0,
+        speed(50.0),
+        Unit::Octaves,
+        RATE,
+    );
+    hears(&mut engine, (&events, &mut patches), (1, &[2000, 2400, 3000]), |n| {
+        12.0_f64.mul_add(after.offset(Instant::at(n)), 67.0)
+    });
+}
+
+/// VOICE INIT with every operator audible at OL 80, an algorithm and a
+/// feedback.
+fn audible(algorithm: u8, feedback: f64) -> Part {
+    let mut part = Part::initial(true);
+    let voice = &mut part.patch.voice;
+    for operator in &mut voice.operators {
+        operator.output_level = value(80.0);
+    }
+    voice.algorithm = Algorithm::new(algorithm).expect("an algorithm");
+    voice.feedback = value(feedback);
+    part
+}
+
+#[test]
+fn a_sounding_voice_keeps_its_graph_under_the_voice_scope() {
+    // Under output.carrier_normalization = count, algorithm 1 at FB 7, two
+    // carriers, changed at sample 1000 while a note sounds to algorithm 5 at FB
+    // 4, three carriers, its self-loop on OP6 as algorithm 1's, or to algorithm
+    // 6, its loop from OP5 back to OP6. Under graph.algorithm_scope = voice the
+    // note goes on as it was, bit for bit, under clamp and, for algorithm 6,
+    // under the relaxation, its state kept; under clamp, whose self-loops keep
+    // no state, the next note, in a voice that has had none, plays the new
+    // graph as a part that had it from the start; under patch the note takes
+    // the new graph at once.
+    let events = [
+        (10, on(0, 60, 100.0)),
+        (1000, patch(0, 0)),
+        (3000, off(0, 60)),
+        (6000, on(0, 64, 100.0)),
+    ];
+    let quiet: Vec<(u64, Kind)> = events
+        .iter()
+        .copied()
+        .filter(|(_, kind)| !matches!(kind, Kind::Patch { .. }))
+        .collect();
+    let samples = 9000;
+    let same =
+        |a: &[f64], b: &[f64], range: core::ops::Range<usize>| range.clone().all(|n| a[n].to_bits() == b[n].to_bits());
+    for (scope, model, algorithm) in [(1, 2, 5), (1, 0, 6), (0, 2, 5)] {
+        let changes = [
+            ("feedback.model", Value::Choice(model)),
+            ("graph.algorithm_scope", Value::Choice(scope)),
+            ("output.carrier_normalization", Value::Choice(1)),
+        ];
+        let mut engine = prepared(&changes, &[audible(1, 7.0)]);
+        let mut patches = [compiled(&engine, &audible(algorithm, 4.0))];
+        let [x, _] = patched(&mut engine, &events, &mut patches, samples);
+        let [kept, _] = render(&mut prepared(&changes, &[audible(1, 7.0)]), &quiet, samples);
+        let [new, _] = render(&mut prepared(&changes, &[audible(algorithm, 4.0)]), &quiet, samples);
+        assert!(!same(&kept, &new, 1000..3000));
+        match (scope, model) {
+            (1, 2) => assert!(same(&x, &kept, 1000..6000) && same(&x, &new, 6000..9000)),
+            (1, _) => assert!(same(&x, &kept, 1000..6000)),
+            _ => assert!(same(&x, &new, 1000..9000)),
+        }
+    }
+    // A note kept on its graph ends when that graph's carriers end: OP5, a
+    // carrier of algorithm 5 alone, falls slowly after the key-off.
+    let changes = [("graph.algorithm_scope", Value::Choice(1))];
+    let slow = |algorithm| {
+        let mut part = audible(algorithm, 7.0);
+        part.patch.voice.operators[4].envelope.rates[3] = value(20.0);
+        part
+    };
+    let mut engine = prepared(&changes, &[slow(1)]);
+    let mut patches = [compiled(&engine, &slow(5))];
+    let mut unchanged = prepared(&changes, &[slow(1)]);
+    patched(&mut engine, &events[..3], &mut patches, 3001);
+    render(&mut unchanged, &quiet[..2], 3001);
+    for n in (3001..6000).step_by(100) {
+        patched(&mut engine, &[], &mut patches, 100);
+        render(&mut unchanged, &[], 100);
+        assert_eq!(sounds(&engine, 0, 0), sounds(&unchanged, 0, 0), "sample {n}");
+    }
+    assert!(!sounds(&engine, 0, 0));
+}
+
+#[test]
+fn a_change_that_alters_a_component_starts_its_feedback_anew() {
+    // Under feedback.model = dx7-discrete: algorithm 1's self-loop on OP6
+    // changed at sample 1000 to algorithm 4's loop from OP4 back to OP6, which
+    // starts anew: its first output there feeds back κ times the mean of two
+    // outputs at 0, as algorithm 4 at FB 0 gives, and the next does not.
+    let changes = [("feedback.model", Value::Choice(1))];
+    let events = [(10, on(0, 60, 100.0)), (1000, patch(0, 0))];
+    let mut looped = prepared(&changes, &[audible(1, 7.0)]);
+    let mut patches = [compiled(&looped, &audible(4, 7.0))];
+    let [x, _] = patched(&mut looped, &events, &mut patches, 1002);
+    let mut open = prepared(&changes, &[audible(1, 7.0)]);
+    let mut patches = [compiled(&open, &audible(4, 0.0))];
+    let [y, _] = patched(&mut open, &events, &mut patches, 1002);
+    assert_eq!(x[999].to_bits(), y[999].to_bits());
+    assert_eq!(x[1000].to_bits(), y[1000].to_bits());
+    assert_ne!(x[1001].to_bits(), y[1001].to_bits());
+}
+
+#[test]
+fn a_note_that_takes_a_sounding_voice_gives_it_the_part_s_graph() {
+    // Under graph.algorithm_scope = voice and feedback.model = dx7-discrete,
+    // the sounding voice keeps algorithm 1's self-loop on OP6 through a change
+    // to algorithm 4 at sample 1000, and the key pressed again at 1500 under
+    // voice.retrigger = same-voice restarts it with algorithm 4, whose loop
+    // from OP4 back to OP6 starts anew there, as algorithm 4 at FB 0 gives,
+    // and not once its outputs, from phases that OSC KEY SYNC sets to 0 there,
+    // have risen.
+    let changes = [
+        ("graph.algorithm_scope", Value::Choice(1)),
+        ("feedback.model", Value::Choice(1)),
+        ("voice.retrigger", Value::Choice(0)),
+    ];
+    let events = [(10, on(0, 60, 100.0)), (1000, patch(0, 0)), (1500, on(0, 60, 100.0))];
+    let mut looped = prepared(&changes, &[audible(1, 7.0)]);
+    let mut patches = [compiled(&looped, &audible(4, 7.0))];
+    let [x, _] = patched(&mut looped, &events, &mut patches, 1600);
+    let mut open = prepared(&changes, &[audible(1, 7.0)]);
+    let mut patches = [compiled(&open, &audible(4, 0.0))];
+    let [y, _] = patched(&mut open, &events, &mut patches, 1600);
+    assert_eq!(x[1499].to_bits(), y[1499].to_bits());
+    assert_eq!(x[1500].to_bits(), y[1500].to_bits());
+    assert!((1501..1600).any(|n| x[n].to_bits() != y[n].to_bits()));
+    assert_eq!(keyed(&looped, 0, 1), None);
+}
+
+#[test]
+fn a_change_that_alters_nothing_that_a_voice_takes_leaves_it_as_it_was() {
+    // A new highest key for the part at sample 1000, during a glide and a
+    // pitch envelope that moves, with every operator audible: the render, bit
+    // for bit, as one without the change.
+    let mut part = gliding(false, false, false);
+    for operator in &mut part.patch.voice.operators {
+        operator.output_level = value(80.0);
+    }
+    part.patch.voice.pitch_envelope.levels = [value(60.0), value(40.0), value(55.0), value(50.0)];
+    part.patch.voice.pitch_envelope.rates = [value(60.0); 4];
+    let mut changed = part.clone();
+    changed.highest_key = Index::new(120).expect("a key");
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 60, 100.0)),
+        (100, on(0, 67, 100.0)),
+        (1000, patch(0, 0)),
+    ];
+    let mut engine = prepared(&[], &[part.clone()]);
+    let mut patches = [compiled(&engine, &changed)];
+    let [x, _] = patched(&mut engine, &events, &mut patches, 8000);
+    let [y, _] = render(&mut prepared(&[], &[part]), &events[..3], 8000);
+    assert!(x.iter().zip(&y).all(|(a, b)| a.to_bits() == b.to_bits()));
+}
+
+#[test]
+fn under_keys_a_glissando_turns_on_and_off_in_keys() {
+    // Under tuning.modulation = keys the glide runs in keys: a glissando turned
+    // on at 1000 starts its glide and its key at the key there, and turned off
+    // at 2000 leaves its glide in keys to start at the key heard.
+    let speed = portamento::speed(50.0).expect("a speed");
+    let keys = [("tuning.modulation", Value::Choice(1))];
+    let mut engine = prepared(&keys, &[gliding(false, false, false)]);
+    let mut patches = [compiled(&engine, &gliding(false, true, false))];
+    let events = [
+        (0, foot(0, true)),
+        (10, on(0, 60, 100.0)),
+        (100, on(0, 67, 100.0)),
+        (1000, patch(0, 0)),
+        (2000, patch(0, 0)),
+    ];
+    let glide = Glide::new(Instant::at(100), -7.0, speed, Unit::Keys, RATE);
+    let mut glissando = Glissando::new(Instant::at(1000), glide.offset(Instant::at(1000)), speed, RATE);
+    let stepped = |glissando: &Glissando, n: u64| 12.0_f64.mul_add(glissando.offset_at(Instant::at(n)) / 12.0, 67.0);
+    hears(&mut engine, (&events, &mut patches), (1, &[1000, 1300, 1999]), |n| {
+        stepped(&glissando, n)
+    });
+    glissando.advance(Instant::at(2000));
+    let after = Glide::new(Instant::at(2000), glissando.offset(), speed, Unit::Keys, RATE);
+    let samples: Vec<u64> = (2000..6000).step_by(37).collect();
+    hears(&mut engine, (&events, &mut patches), (1, &samples), |n| {
+        12.0_f64.mul_add(after.offset(Instant::at(n)) / 12.0, 67.0)
+    });
 }
