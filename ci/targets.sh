@@ -24,7 +24,11 @@
 #
 # With `test`, each build's tests run too, where the processor has what the
 # build needs: AVX-512 F, BW, CD, DQ and VL besides x86-64-v3's AVX2, FMA, BMI1,
-# BMI2, F16C, LZCNT and MOVBE.
+# BMI2, F16C, LZCNT and MOVBE. Where /proc/cpuinfo does not list one of those
+# flags, the build is not tested, and the flags it lacks and the line of the
+# processor's flags are printed, so that a runner whose processor has the level,
+# though /proc/cpuinfo does not say so, can be told from one whose processor
+# lacks it.
 set -euo pipefail
 
 case "$(uname -s)" in
@@ -36,12 +40,15 @@ Linux) triple=x86_64-unknown-linux-gnu ;;
     ;;
 esac
 
-# Whether /proc/cpuinfo, which MSYS2 has on Windows too, lists every flag.
-has() {
+# The flags of a list that /proc/cpuinfo, which MSYS2 has on Windows too, does
+# not list, on one line: nothing where it lists them all.
+missing() {
     local flag
+    local absent=()
     for flag in "$@"; do
-        grep -qw "$flag" /proc/cpuinfo 2>/dev/null || return 1
+        grep -qw -- "$flag" /proc/cpuinfo 2>/dev/null || absent+=("$flag")
     done
+    echo "${absent[*]}"
 }
 
 builds=(
@@ -57,10 +64,12 @@ for build in "${builds[@]}"; do
     echo "== x86-64-$name: $flags"
     cargo build "${arguments[@]}" --all-targets
     if [[ "${1:-}" == test ]]; then
-        if has "${needs[@]}"; then
+        lacking=$(missing "${needs[@]}")
+        if [[ -z $lacking ]]; then
             cargo test "${arguments[@]}"
         else
-            echo "note: this processor has not all of ${needs[*]}; the build is not tested"
+            echo "note: /proc/cpuinfo does not list $lacking, of ${needs[*]}; the build is not tested"
+            grep -m 1 '^flags' /proc/cpuinfo || echo "note: /proc/cpuinfo has no line of flags"
         fi
     fi
 done
