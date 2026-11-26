@@ -2298,3 +2298,93 @@ fn under_keys_a_glissando_turns_on_and_off_in_keys() {
         12.0_f64.mul_add(after.offset(Instant::at(n)) / 12.0, 67.0)
     });
 }
+
+/// Random input remade for one part: every event's channel moved to a
+/// channel and a patch event's part to a part, its patch events kept where
+/// asked, and the master tune, which every part takes, left out.
+fn for_part(events: &[(u64, Kind)], channel: u8, part: usize, patches: bool) -> Vec<(u64, Kind)> {
+    events
+        .iter()
+        .filter_map(|&(at, kind)| {
+            let kind = match kind {
+                Kind::NoteOn { key, velocity, id, .. } => Kind::NoteOn {
+                    channel,
+                    key,
+                    velocity,
+                    id,
+                },
+                Kind::NoteOff { key, id, .. } => Kind::NoteOff { channel, key, id },
+                Kind::Controller {
+                    controller, position, ..
+                } => Kind::Controller {
+                    channel,
+                    controller,
+                    position,
+                },
+                Kind::Bend { position, .. } => Kind::Bend { channel, position },
+                Kind::Portamento { on, .. } => Kind::Portamento { channel, on },
+                Kind::Sustain { on, .. } => Kind::Sustain { channel, on },
+                Kind::PerNote { key, id, keys, .. } => Kind::PerNote { channel, key, id, keys },
+                Kind::Patch { index, .. } if patches => Kind::Patch { part, index },
+                Kind::Patch { .. } | Kind::MasterTune { .. } => return None,
+            };
+            Some((at, kind))
+        })
+        .collect()
+}
+
+#[test]
+fn a_part_plays_the_same_whatever_the_other_parts_play() {
+    // With voices to spare, the first part's voices at every sample, bit for
+    // bit, and their whole state at the end, whether the second part plays
+    // random input of its own on its channel, new compiled patches among it,
+    // or nothing, under three seeds (MATH §13.5); under dx7-discrete, whose
+    // feedback costs least and keeps a state.
+    let count: u64 = 64;
+    let changes = [
+        ("voice.count", Value::Integer(count)),
+        ("feedback.model", Value::Choice(1)),
+    ];
+    let [mut first, second] = random_parts();
+    first.omni = false;
+    let parts = [first, second.clone()];
+    let samples = 6000;
+    let slots = usize::try_from(count).expect("a count");
+    for seed in 1..=3 {
+        let own = for_part(&random_events(&mut Random(seed), samples), 0, 0, false);
+        let others = for_part(&random_events(&mut Random(seed + 100), samples), 1, 1, true);
+        let mut both: Vec<(u64, Kind)> = own.iter().chain(&others).copied().collect();
+        both.sort_by_key(|&(at, _)| at);
+        let mut together = prepared(&changes, &parts);
+        let mut alone = prepared(&changes, &parts);
+        let mut variants = vec![second.clone(); 4];
+        variants[0].patch.voice.algorithm = Algorithm::new(7).expect("an algorithm");
+        variants[1].function.polyphony = Polyphony::Poly;
+        variants[2].patch.voice.lfo.speed = value(90.0);
+        variants[3].note_shift = NoteShift::new(7.0).expect("a shift");
+        let mut patches: Vec<CompiledPart> = variants.iter().map(|part| compiled(&together, part)).collect();
+        let mut peak = 0;
+        for n in 0..samples {
+            patched(&mut together, &both, &mut patches, 1);
+            render(&mut alone, &own, 1);
+            peak = peak.max(together.sounding());
+            for slot in 0..slots {
+                let (x, y) = (together.voice(0, slot), alone.voice(0, slot));
+                let same = x.zip(y).is_some_and(|(x, y)| {
+                    x.outputs().len() == y.outputs().len()
+                        && x.outputs()
+                            .iter()
+                            .zip(y.outputs())
+                            .all(|(a, b)| a.to_bits() == b.to_bits())
+                });
+                assert!(same, "seed {seed}, sample {n}, slot {slot}");
+            }
+        }
+        assert!(peak < slots, "seed {seed}: {peak} voices");
+        assert!(others.iter().any(|(_, kind)| matches!(kind, Kind::Patch { .. })));
+        for slot in 0..slots {
+            let state = |engine: &Engine| format!("{:?}", engine.voice(0, slot));
+            assert_eq!(state(&together), state(&alone), "seed {seed}, slot {slot}");
+        }
+    }
+}
