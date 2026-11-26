@@ -53,6 +53,10 @@ version = "0.1.0"
 [[package]]
 name = "keptone-tools"
 version = "0.1.0"
+dependencies = [
+ "keptone-engine",
+ "keptone-model",
+]
 
 [[package]]
 name = "keptone-ui"

@@ -391,6 +391,18 @@ Specified in `docs/STATE-FORMAT.md`, and read and written by `keptone_model::sta
 
 A part plays in the tuning that `tuning.source` gives (MATH §2.1), or in a micro tuning of the DX7II's and the TX802's, a step from 0 to 10794 for each of the 128 keys (§11.2). Their eleven preset tunings, equal temperament, pure major and pure minor, mean tone, Pythagorean, Werckmeister, Kirnberger, Vallotti and Young, the equal temperament shifted by a quarter tone, the quarter tone and the eighth tone, the second to the fifth of them in any key [DX7II-MANUAL] [TX802-MANUAL], are computed from the ratios and temperaments they name and checked against the cents that [TX802-MANUAL] prints (its p. 28), never copied from an instrument's memory (§14).
 
+### 11.5 The offline renderer
+
+`keptone-tools render` renders one note of a patch to a WAV file, offline, through the engine that the plugin runs (§6), with milestone M3's values of the settings that M3 does not compute yet (§16) unless `--set` gives others.
+
+- Its input is a `.syx` file, whose first dump of a voice or of a bank of 32 it plays, `--voice N` choosing the bank's Nth, 1 to 32, the file read as `syx.accept_bad_checksum` and `syx.out_of_range` say (§11.2); or, with `--state FILE`, a native state (§11.1), its settings and its parts, read to the depth of `json.max_depth`. A voice plays as the first part, the others as they start (MATH §13.5).
+- Its note: `--note K`, 60 by default, at `--velocity V`, 100, a binary64 on the scale of 0 to 127, on channel 0 from the render's first sample, and released `--hold S` seconds later, 1, at the first sample at or after that instant.
+- Its settings: every setting at its default, or the state's, then M3's values of `engine.oversampling`, `adaa.order` and `feedback.series_beta_max`, then each `--set NAME=VALUE` in its order: a switch `true` or `false`, a choice by its name, a number in binary64, `auto` for a number that MATH gives as a formula, and an integer in decimal (MATH §17). The engine refuses at its preparation what M3 does not compute (§16), and the render ends there, naming the setting.
+- Its rate: `--rate HZ`, a whole number of samples a second from 1 to 2³² − 1, 48 000 by default.
+- Its blocks: `--blocks N`, blocks of N samples, 512 by default, or `--blocks random:SEED`, blocks of 1 to 4096 samples that SplitMix64 draws from the seed (MATH §6.3). A render is the same whatever its blocks (MATH §0.3).
+- Its length: until no voice sounds once the key has been released, `--max-seconds S` at most, 60 by default, and then without the frames at its end that are 0 in every channel, so that its length, too, is the same whatever its blocks.
+- Its output, `-o FILE`: a WAV file of IEEE floating-point samples (format tag 3), of 64 bits by default and of 32 with `--format f32`, each binary64 rounded to the nearest binary32 then and one beyond binary32's largest number taken at it with its sign, as MATH §0.5 takes binary64's, little-endian; of two channels under `output.channels = stereo` and of one under `mono`; with a `fmt ` chunk of 18 bytes and no extension, a `fact` chunk that gives the count of frames and the `data` chunk, and nothing else, so that a render gives the same bytes on every system. A render whose chunks would not fit RIFF's 32-bit sizes is refused.
+
 ## 12. Dependencies
 
 ### 12.1 Policy

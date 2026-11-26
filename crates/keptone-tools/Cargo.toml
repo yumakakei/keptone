@@ -20,5 +20,9 @@ publish.workspace = true
 name = "keptone-tools"
 path = "src/main.rs"
 
+[dependencies]
+keptone-engine = { path = "../keptone-engine" }
+keptone-model = { path = "../keptone-model" }
+
 [lints]
 workspace = true
