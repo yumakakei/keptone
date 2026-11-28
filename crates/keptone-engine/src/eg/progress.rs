@@ -14,23 +14,27 @@
 //! segment ends.
 //!
 //! A piece is the caller's: a sample split where kᴿ has a corner or a jump
-//! (MATH §2.5), on which kᴿ is a line with a glide's law beside it. Between
-//! two of ρ's corners a piece's stretch is a part of the budget of
-//! `osc.max_pieces`, and under the exponential law with a glide each part of
-//! §2.5's rule on it is one.
+//! (MATH §2.5), on which kᴿ is a line with a glide's law beside it, and, where
+//! the rates' key is the level's under `scaling.key = pitch`, the LFO's part
+//! of the pitch beside them (MATH §2.6), which can turn kᴿ many times within a
+//! piece. Such a piece is halved until each stretch either holds no corner of
+//! ρ within kᴿ's range there or has kᴿ monotone (MATH §4.7). Between two of ρ's
+//! corners a piece's stretch is a part of the budget of `osc.max_pieces`, and
+//! so is each halving; under the exponential law with a glide or the LFO each
+//! part of §2.5's rule on a stretch is one.
 //!
 //! Each function documents its error against the law's exact value at its
 //! binary64 inputs; tests/progress.rs measures each against exact values
 //! (`scripts/progress_references.py`).
 
-use core::f64::consts::{LN_2, LOG2_E};
+use core::f64::consts::{LN_2, LOG2_E, PI, TAU};
 
 use keptone_math::eft::two_sum;
-use keptone_math::{exp2, exp2m1, log2, log2p1};
+use keptone_math::{cos2pi, exp2, exp2m1, log2, log2p1, sin2pi, sinc, sinc_prime};
 
 use super::{RateLaw, rate, speed};
 use crate::binary64::finite;
-use crate::pieces::rule_parts;
+use crate::pieces::{Shape, rule_parts, turns_after};
 use crate::pitch::phase::{gauss_increment, gauss_instants, linear_increment};
 
 /// The whole keys between which q's group of keys moves (MATH §4.1): q holds
@@ -46,10 +50,166 @@ const SMALL: f64 = 1.0 / 1_073_741_824.0;
 /// least, and 1100 halvings take any bracket of binary64 to one of its steps.
 const SEARCH: u32 = 1100;
 
+/// The most halvings of a piece on which the LFO moves kᴿ: a stretch 2⁻⁶⁰ of
+/// the piece long that is neither free of ρ's corners nor monotone is taken as
+/// monotone, its crossing found within it.
+const HALVINGS: usize = 60;
+
+/// u = 2⁻⁵³, binary64's unit roundoff.
+const U: f64 = f64::EPSILON / 2.0;
+
+/// 1 + 2⁻⁴⁰, by which a bound of kᴿ's curvature is taken larger, so that the
+/// roundings of its terms, a few u of each, never make it smaller than the
+/// curvature.
+const MARGIN: f64 = 1.0 + 1.0 / 1_099_511_627_776.0;
+
+/// The LFO's part of the rates' key on a piece where it moves the key other
+/// than along a line (MATH §2.6, §4.7), A(τ)ℓ(τ) in keys, τ the samples since
+/// the piece's start: A = A₀ + A′τ the depth of the LFO's pitch in keys and ℓ
+/// the LFO's wave on the piece (`crate::pieces`), a sine, or a triangle or a
+/// saw whose depth a fade moves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Swing {
+    /// A₀, A at the piece's start, in keys.
+    pub depth: f64,
+    /// A′, in keys a sample.
+    pub depth_slope: f64,
+    /// ℓ on the piece.
+    pub shape: Shape,
+}
+
+impl Swing {
+    /// A at τ, within u|A| and |A′| times τ's own error.
+    fn depth_at(&self, samples: f64) -> f64 {
+        finite(self.depth_slope.mul_add(samples, self.depth))
+    }
+
+    /// ℓ at τ and its slope ℓ′ a sample: exact where it holds still and
+    /// within u where it is linear; for a sine −sin 2πφ within 21u, its phase
+    /// within 3u turns of its place and sin2pi within 1.46u (`crate::pieces`),
+    /// and −2πs·cos 2πφ within u(22 + |2πs|) of itself relatively to 2πs.
+    fn wave_at(&self, samples: f64) -> (f64, f64) {
+        match self.shape {
+            Shape::Constant(value) => (value, 0.0),
+            Shape::Linear { value, slope } => (slope.mul_add(samples, value), slope),
+            Shape::Sine { turns, step } => {
+                let phase = turns_after(turns, step, samples);
+                (-sin2pi(phase), finite(finite(-TAU * step) * cos2pi(phase)))
+            }
+        }
+    }
+
+    /// A·ℓ at τ: within u|A|(2 + e), e = 0, 1 or 21 the wave's error, |ℓ|
+    /// being at most 1.
+    fn at(&self, samples: f64) -> f64 {
+        finite(self.depth_at(samples) * self.wave_at(samples).0)
+    }
+
+    /// (Aℓ)′ = A′ℓ + Aℓ′ at τ, in keys a sample.
+    fn slope_at(&self, samples: f64) -> f64 {
+        let (wave, wave_slope) = self.wave_at(samples);
+        finite(finite(self.depth_slope * wave) + finite(self.depth_at(samples) * wave_slope))
+    }
+
+    /// The swing's law from τ samples on, as a piece that starts there takes
+    /// it: A there, and the wave's value or phase there.
+    fn later(&self, samples: f64) -> Self {
+        let shape = match self.shape {
+            Shape::Constant(value) => Shape::Constant(value),
+            Shape::Linear { value, slope } => Shape::Linear {
+                value: slope.mul_add(samples, value),
+                slope,
+            },
+            Shape::Sine { turns, step } => Shape::Sine {
+                turns: turns_after(turns, step, samples),
+                step,
+            },
+        };
+        Self {
+            depth: self.depth_at(samples),
+            depth_slope: self.depth_slope,
+            shape,
+        }
+    }
+
+    /// The largest |A| on [a, b], at one of its ends.
+    fn largest_depth(&self, a: f64, b: f64) -> f64 {
+        self.depth_at(a).abs().max(self.depth_at(b).abs())
+    }
+
+    /// Bounds of |(Aℓ)⁽ᵏ⁾| on [a, b], k = 1 to 6, by Leibniz's rule with A
+    /// linear: Aₘωᵏ + k|A′|ωᵏ⁻¹ for a sine, ω = 2π|s|; |A′|ℓₘ + Aₘ|ℓ′| and
+    /// 2|A′ℓ′| for a linear wave; |A′ℓ| for one that holds still; Aₘ and ℓₘ the
+    /// largest |A| and |ℓ| at the ends. Each within a few u of itself.
+    fn bounds(&self, a: f64, b: f64) -> [f64; 6] {
+        let depth = self.largest_depth(a, b);
+        let depth_slope = self.depth_slope.abs();
+        let mut bounds = [0.0; 6];
+        match self.shape {
+            Shape::Constant(value) => bounds[0] = finite(depth_slope * value.abs()),
+            Shape::Linear { value, slope } => {
+                let wave = slope.mul_add(a, value).abs().max(slope.mul_add(b, value).abs());
+                bounds[0] = finite(finite(depth_slope * wave) + finite(depth * slope.abs()));
+                bounds[1] = 2.0 * finite(depth_slope * slope.abs());
+            }
+            Shape::Sine { step, .. } => {
+                let omega = finite(TAU * step.abs());
+                let (mut power, mut below) = (omega, 1.0);
+                for (order, bound) in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0].into_iter().zip(&mut bounds) {
+                    *bound = finite(finite(depth * power) + finite(order * finite(depth_slope * below)));
+                    below = power;
+                    power = finite(power * omega);
+                }
+            }
+        }
+        bounds
+    }
+
+    /// The mean of A·ℓ over [a, b], about its middle c and with L = b − a:
+    /// A(c)·v for a wave v that holds still; A(c)ℓ(c) + A′ℓ′L²/12 for a linear
+    /// one; and for a sine −A(c)·sin 2πφ(c)·sinc(sL) + (L/2)·A′·cos 2πφ(c)·
+    /// sinc′(sL)/π, the integrals of A(c)·ℓ and A′(τ − c)·ℓ about c, which keep
+    /// their accuracy however few or many turns the sine makes on [a, b]
+    /// (MATH §4.7, §12.2).
+    ///
+    /// For the sine, φ(c) lies within u(3 + sb) turns of its place, c rounding
+    /// within u·c, so that sin and cos lie within u(2π(3 + sb) + 1.46) of
+    /// theirs; sinc within 2u and its argument's rounding within 4u more,
+    /// |x·sinc′(x)| being at most 2; sinc′ within 9u absolutely and its
+    /// argument's rounding within 7u more; and the products and the sum within
+    /// u each: the mean within u(|A|(30 + 2π·sb) + |A′|(b + L(8 + 1.4sb)) +
+    /// |mean|), |A| the largest at the ends. For the linear wave within
+    /// u(3|A| + |A′|b + 6|A′ℓ′|L²/12 + |A|·|ℓ′|b), and for one that holds
+    /// still within u(2|A| + |A′|b).
+    fn mean(&self, a: f64, b: f64) -> f64 {
+        let length = b - a;
+        let middle = f64::midpoint(a, b);
+        let depth = self.depth_at(middle);
+        match self.shape {
+            Shape::Constant(value) => finite(depth * value),
+            Shape::Linear { value, slope } => {
+                let wave = slope.mul_add(middle, value);
+                let curve = finite(finite(self.depth_slope * slope) * finite(length * length)) / 12.0;
+                finite(depth.mul_add(wave, curve))
+            }
+            Shape::Sine { turns, step } => {
+                let phase = turns_after(turns, step, middle);
+                let span = finite(step * length);
+                let first = finite(finite(-depth * sin2pi(phase)) * sinc(span));
+                let half = finite(finite(0.5 * length) * self.depth_slope);
+                let second = finite(finite(half * cos2pi(phase)) * sinc_prime(span)) / PI;
+                finite(first + second)
+            }
+        }
+    }
+}
+
 /// The rates' key kᴿ on a piece of a sample (MATH §2.6), τ the samples since
-/// its start: k + bτ + G(τ), G a glide's offset from its target in keys,
-/// d + (d + 3·sgn d)·(e^(−ρτ) − 1) from its offset d at the start, as a glide
-/// in keys moves (MATH §7.3), up to its arrival, where the piece ends.
+/// its start: k + bτ + G(τ) + S(τ), G a glide's offset from its target in
+/// keys, d + (d + 3·sgn d)·(e^(−ρτ) − 1) from its offset d at the start, as a
+/// glide in keys moves (MATH §7.3), up to its arrival, where the piece ends,
+/// and S the LFO's part of the key, a [`Swing`], where it moves it other than
+/// along a line.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Key {
     /// k at the start, the key without the glide's offset.
@@ -60,6 +220,9 @@ pub struct Key {
     pub glide: f64,
     /// ρ = 4κ/fₑ, the rate of the glide's law a sample.
     pub rate: f64,
+    /// S, none where the LFO does not move the key or moves it along a line,
+    /// which `key` and `slope` then hold.
+    pub swing: Option<Swing>,
 }
 
 impl Key {
@@ -71,6 +234,7 @@ impl Key {
             slope: 0.0,
             glide: 0.0,
             rate: 0.0,
+            swing: None,
         }
     }
 
@@ -90,23 +254,30 @@ impl Key {
     /// k + bτ rounds within u|k + bτ|, the glide's offset within u((|d| +
     /// 3)(2.24|m| + 3x·e^(−x)) + |G|), x = ρτ and m = e^(−x) − 1, as a glide's
     /// offset does (`crate::portamento`), 4.35u(|d| + 3) at most, and the sum
-    /// within u|kᴿ|.
+    /// within u|kᴿ|; the swing's part as [`Swing`]'s does, u|A|(2 + e), and its
+    /// sum within u|kᴿ| more.
     #[must_use]
     pub fn at(&self, samples: f64) -> f64 {
         let line = self.slope.mul_add(samples, self.key);
-        if self.glide == 0.0 {
-            return line;
+        let key = if self.glide == 0.0 {
+            line
+        } else {
+            let from = self.glide.abs();
+            let falling = exp2m1(-(self.rate * samples) * LOG2_E);
+            let offset = (from + 3.0).mul_add(falling, from).max(0.0).copysign(self.glide);
+            finite(line + offset)
+        };
+        match self.swing {
+            None => key,
+            Some(swing) => finite(key + swing.at(samples)),
         }
-        let from = self.glide.abs();
-        let falling = exp2m1(-(self.rate * samples) * LOG2_E);
-        let offset = (from + 3.0).mul_add(falling, from).max(0.0).copysign(self.glide);
-        finite(line + offset)
     }
 
     /// The key's law from τ samples into the piece on, as a piece that starts
-    /// there takes it: the line moved by bτ, and the glide's offset there with
-    /// its rate, its law being the same from any of its instants. The line
-    /// rounds within u|k + bτ| and the offset as [`Key::at`]'s does.
+    /// there takes it: the line moved by bτ, the glide's offset there with
+    /// its rate, its law being the same from any of its instants, and the
+    /// swing from there. The line rounds within u|k + bτ| and the offset as
+    /// [`Key::at`]'s does.
     #[must_use]
     pub fn later(&self, samples: f64) -> Self {
         let glide = if self.glide == 0.0 {
@@ -121,6 +292,7 @@ impl Key {
             slope: self.slope,
             glide,
             rate: if glide == 0.0 { 0.0 } else { self.rate },
+            swing: self.swing.map(|swing| swing.later(samples)),
         }
     }
 
@@ -144,6 +316,91 @@ impl Key {
     /// The glide's amplitude at τ, g·e^(−ρτ): what is left of it from there.
     fn amplitude_at(&self, samples: f64) -> f64 {
         finite(self.amplitude() * exp2(-(self.rate * samples) * LOG2_E))
+    }
+
+    /// kᴿ′ at τ in keys a sample: b − ρg·e^(−ρτ) with a glide, b without, and
+    /// the swing's slope beside it.
+    fn derivative(&self, samples: f64) -> f64 {
+        let moved = if self.glides() {
+            finite(self.slope - finite(self.rate * self.amplitude_at(samples)))
+        } else {
+            self.slope
+        };
+        match self.swing {
+            None => moved,
+            Some(swing) => finite(moved + swing.slope_at(samples)),
+        }
+    }
+
+    /// A bound of |kᴿ″| on [a, b]: the glide's |g(a)|ρ², at a, where it is
+    /// largest, and the swing's second bound ([`Swing::bounds`]), taken 1 +
+    /// 2⁻⁴⁰ times larger than they round.
+    fn curvature(&self, a: f64, b: f64) -> f64 {
+        let glide = if self.glides() {
+            finite(finite(self.amplitude_at(a).abs() * self.rate) * self.rate)
+        } else {
+            0.0
+        };
+        let swing = self.swing.map_or(0.0, |swing| swing.bounds(a, b)[1]);
+        finite(finite(glide + swing) * MARGIN)
+    }
+
+    /// A bound of kᴿ's own rounding at the ends of [a, b], as [`Key::at`]
+    /// documents it: u(4K + 5(|d| + 3) + 24A), K the larger |kᴿ| there, d the
+    /// glide's offset at the piece's start and A the swing's largest depth.
+    fn tolerance(&self, key_a: f64, key_b: f64, a: f64, b: f64) -> f64 {
+        let glide = if self.glide == 0.0 {
+            0.0
+        } else {
+            5.0 * (self.glide.abs() + 3.0)
+        };
+        let swing = self.swing.map_or(0.0, |swing| 24.0 * swing.largest_depth(a, b));
+        finite(finite(finite(4.0 * key_a.abs().max(key_b.abs())) + glide) + swing) * U
+    }
+
+    /// The mean of kᴿ over [a, b], about its middle c and with L = b − a: the
+    /// line at c, the glide's G(a) − g(a)·x·H(x), x = ρL and g(a) its
+    /// amplitude at a, as ∫G over [a, b] is L·G(a) − g(a)∫(1 − e^(−ρσ)) dσ
+    /// from 0 to L, and the swing's mean ([`Swing::mean`]).
+    ///
+    /// The line within u(|k + bc| + |b|c); the glide's within 19u(|d| + 3),
+    /// G(a) as [`Key::at`]'s offset, g(a) within 2u, H within 8u and the
+    /// products within u each, x·H(x) being at most 1; the swing's as it
+    /// documents; and the two sums within u|mean| each.
+    fn mean(&self, a: f64, b: f64) -> f64 {
+        let length = b - a;
+        let middle = f64::midpoint(a, b);
+        let line = self.slope.mul_add(middle, self.key);
+        let glide = if self.glide == 0.0 {
+            0.0
+        } else {
+            let from = self.glide.abs();
+            let falling = exp2m1(-(self.rate * a) * LOG2_E);
+            let start = (from + 3.0).mul_add(falling, from).max(0.0).copysign(self.glide);
+            if self.glides() {
+                let x = finite(self.rate * length);
+                finite(start - finite(finite(self.amplitude_at(a) * x) * second_mean(x)))
+            } else {
+                start
+            }
+        };
+        let swing = self.swing.map_or(0.0, |swing| swing.mean(a, b));
+        finite(finite(line + glide) + swing)
+    }
+
+    /// Bounds of |kᴿ⁽ᵏ⁾| on [a, b], k = 1 to 6: the line's |b|, the glide's
+    /// |g(a)|ρᵏ and the swing's ([`Swing::bounds`]).
+    fn bounds(&self, a: f64, b: f64) -> [f64; 6] {
+        let mut bounds = self.swing.map_or([0.0; 6], |swing| swing.bounds(a, b));
+        if self.glides() {
+            let mut term = self.amplitude_at(a).abs();
+            for bound in &mut bounds {
+                term = finite(term * self.rate);
+                *bound = finite(*bound + term);
+            }
+        }
+        bounds[0] = finite(bounds[0] + self.slope.abs());
+        bounds
     }
 }
 
@@ -286,13 +543,14 @@ fn knot(rates: &Rates, from: f64, to: f64) -> Option<f64> {
 
 /// The instant within [a, b] at which a monotone kᴿ reaches a key between its
 /// values there: (K − kᴿ(0))/b where kᴿ is a line, and by Newton's
-/// iteration within the bracket [a, b] where a glide moves it, bisecting where
-/// a step leaves the bracket, until the bracket is one of binary64's steps or
-/// kᴿ there rounds to the key. The line's instant rounds within u of the
-/// difference and u of the quotient; the glide's lies within the bracket at
-/// its end, where kᴿ lies within its own error of the key.
+/// iteration within the bracket [a, b] where a glide or the LFO moves it,
+/// bisecting where a step leaves the bracket, until the bracket is one of
+/// binary64's steps or kᴿ there rounds to the key. The line's instant rounds
+/// within u of the difference and u of the quotient; the iteration's lies
+/// within the bracket at its end, where kᴿ lies within its own error of the
+/// key.
 fn crossing(key: &Key, target: f64, a: f64, b: f64) -> f64 {
-    if !key.glides() {
+    if !key.glides() && key.swing.is_none() {
         let offset = if key.glide == 0.0 { 0.0 } else { key.glide };
         return (finite(target - finite(key.key + offset)) / key.slope).clamp(a, b);
     }
@@ -313,8 +571,7 @@ fn crossing(key: &Key, target: f64, a: f64, b: f64) -> f64 {
         if middle <= low || middle >= high {
             break;
         }
-        let slope = finite(key.slope - finite(key.rate * key.amplitude_at(samples)));
-        let next = samples - error / slope;
+        let next = samples - error / key.derivative(samples);
         samples = if next > low && next < high { next } else { middle };
     }
     f64::midpoint(low, high)
@@ -373,6 +630,18 @@ fn mean_place(key: &Key, a: f64, b: f64) -> f64 {
     if mean.is_finite() { mean.clamp(0.0, 1.0) } else { 0.5 }
 }
 
+/// What a walk over a stretch of a piece leaves: the walk going on past it,
+/// the target reached within it, or the budget spent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Taken {
+    /// On to the next stretch.
+    On,
+    /// The target reached, or the piece's end.
+    At(Reach),
+    /// The budget spent.
+    Spent,
+}
+
 /// Where a piece's progress reaches a target.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Reach {
@@ -393,11 +662,15 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// The bounds of the derivatives of ln ρ(kᴿ(τ)) on a stretch under the
-    /// exponential law, where ln ρ is ln 2·q′·kᴿ/4 and its constant: the
-    /// line's slope and the glide's ρᵏ·|g₀|, times ln 2·|q′|/4.
-    fn bounds(&self, a: f64, slope: f64) -> [f64; 6] {
+    /// The bounds of the derivatives of ln ρ(kᴿ(τ)) on a stretch [a, b] under
+    /// the exponential law, where ln ρ is ln 2·q′·kᴿ/4 and its constant: the
+    /// line's slope, the glide's ρᵏ·|g₀| and the swing's ([`Key::bounds`]),
+    /// times ln 2·|q′|/4.
+    fn bounds(&self, a: f64, b: f64, slope: f64) -> [f64; 6] {
         let factor = finite(LN_2 * slope.abs() / 4.0);
+        if self.key.swing.is_some() {
+            return self.key.bounds(a, b).map(|bound| finite(bound * factor));
+        }
         let mut bounds = [0.0; 6];
         let mut term = self.key.amplitude_at(a).abs();
         for bound in &mut bounds {
@@ -426,10 +699,12 @@ impl Walk<'_> {
     ///
     /// Under the dx7 law ρ is linear in kᴿ there, and the progress is
     /// (b − a)·(ρ₀ + m·(ρ₁ − ρ₀)), m kᴿ's mean place ([`mean_place`]),
-    /// 1/2 for a line: the trapezoid's. Under the exponential law it is
+    /// 1/2 for a line: the trapezoid's; where the LFO moves kᴿ, it is (b − a)
+    /// times ρ at kᴿ's mean over the stretch ([`Key::mean`]), the same where ρ
+    /// is affine in kᴿ. Under the exponential law it is
     /// ρ₀∫2^((q₁ − q₀)τ/(4(b − a))) dτ where kᴿ is a line, in closed form
-    /// (`linear_increment`), and with a glide the rule on its parts at
-    /// q′(kᴿ − kᴿ(a))/4 octaves of ρ.
+    /// (`linear_increment`), and with a glide or the LFO the rule on its parts
+    /// at q′(kᴿ − kᴿ(a))/4 octaves of ρ.
     fn integral(&self, a: f64, b: f64, key_a: f64, key_b: f64) -> (f64, f64) {
         let length = b - a;
         let (rho_a, q_a) = {
@@ -437,19 +712,20 @@ impl Walk<'_> {
             (self.rates.step_of(q), q)
         };
         match self.rates.law {
+            RateLaw::Dx7 if self.key.swing.is_some() => (finite(self.rates.step(self.key.mean(a, b)) * length), 1.0),
             RateLaw::Dx7 => {
                 let rho_b = self.rates.step(key_b);
                 let mean = mean_place(self.key, a, b);
                 (finite(mean.mul_add(finite(rho_b - rho_a), rho_a) * length), 1.0)
             }
-            RateLaw::Exponential if !self.key.glides() => {
+            RateLaw::Exponential if !self.key.glides() && self.key.swing.is_none() => {
                 let q_b = self.rates.q(key_b);
                 let slope = finite(q_b - q_a) / 4.0 / length;
                 (linear_increment(rho_a, 0.0, slope, length), 1.0)
             }
             RateLaw::Exponential => {
                 let q_slope = self.q_slope(key_a, key_b);
-                let parts = rule_parts(self.bounds(a, q_slope), length);
+                let parts = rule_parts(self.bounds(a, b, q_slope), length);
                 if parts > *self.budget {
                     return (0.0, parts);
                 }
@@ -499,7 +775,7 @@ impl Walk<'_> {
             return 0.0;
         }
         let rho_a = self.rates.step(key_a);
-        if !self.key.glides() {
+        if !self.key.glides() && self.key.swing.is_none() {
             let root = match self.rates.law {
                 RateLaw::Dx7 => {
                     let slope = finite(self.rates.step(key_b) - rho_a) / length;
@@ -546,6 +822,117 @@ impl Walk<'_> {
         }
         f64::midpoint(low, high)
     }
+
+    /// The stretch [start, end] of the piece, on which ρ has no corner, taken
+    /// into the progress, kᴿ there from `key_start` to `key_stop`: the budget
+    /// spent where it does not hold its parts, and where its progress reaches
+    /// the target, the instant in the piece of `length` samples at which it
+    /// does.
+    fn take(
+        &mut self,
+        (start, end): (f64, f64),
+        (key_start, key_stop): (f64, f64),
+        length: f64,
+        target: Option<f64>,
+    ) -> Taken {
+        if *self.budget < 1.0 {
+            return Taken::Spent;
+        }
+        let (progress, parts) = self.integral(start, end, key_start, key_stop);
+        if parts > *self.budget {
+            return Taken::Spent;
+        }
+        *self.budget -= parts;
+        let done = finite(self.high + self.low);
+        if let Some(target) = target
+            && finite(done + progress) >= target
+        {
+            let left = finite(target - done).max(0.0);
+            let samples = self.solve(start, end, key_start, key_stop, left);
+            return Taken::At(Reach::Within(finite(start + samples).min(length)));
+        }
+        let (sum, error) = two_sum(self.high, progress);
+        self.high = sum;
+        self.low += error;
+        Taken::On
+    }
+
+    /// The stretch [a, b] of the piece, on which kᴿ is monotone, split at
+    /// the keys where ρ has a corner (MATH §4.7) and each part taken
+    /// ([`Walk::take`]).
+    fn through(&mut self, a: f64, b: f64, length: f64, target: Option<f64>) -> Taken {
+        let (mut start, mut key_start) = (a, self.key.at(a));
+        let key_end = self.key.at(b);
+        loop {
+            let corner = knot(self.rates, key_start, key_end);
+            let (end, key_stop) = match corner {
+                Some(corner) => (crossing(self.key, corner, start, b), corner),
+                None => (b, key_end),
+            };
+            if end > start {
+                let taken = self.take((start, end), (key_start, key_stop), length, target);
+                if taken != Taken::On {
+                    return taken;
+                }
+            }
+            if corner.is_none() {
+                return Taken::On;
+            }
+            start = end;
+            key_start = key_stop;
+        }
+    }
+
+    /// A piece on which the LFO moves kᴿ (MATH §4.7), from its start on,
+    /// halved until each stretch [a, b] either holds no corner of ρ within
+    /// kᴿ's range there, taken whole, or has kᴿ monotone, taken through its
+    /// corners: kᴿ lies within M·L²/8 of the line between its values at the
+    /// ends, M ([`Key::curvature`]) bounding |kᴿ″| and L = b − a, and that
+    /// reach less kᴿ's own rounding ([`Key::tolerance`]) widens their range;
+    /// and kᴿ′ does not vanish on [a, b] where |kᴿ′| at the middle exceeds
+    /// M·L, twice what M lets it lose there, which covers its roundings. A
+    /// range that passes a corner by no more than kᴿ's rounding is so taken as
+    /// holding none, which moves the progress as an error of twice that
+    /// rounding in the key would. Each halving takes a part of the budget, and
+    /// a stretch halved [`HALVINGS`] times is taken as monotone.
+    fn sweep(&mut self, length: f64, target: Option<f64>) -> Option<Reach> {
+        let mut ends = [0.0; HALVINGS];
+        let mut depth = 0;
+        let (mut a, mut b) = (0.0, length);
+        loop {
+            let (key_a, key_b) = (self.key.at(a), self.key.at(b));
+            let span = b - a;
+            let curvature = self.key.curvature(a, b);
+            let chord = finite(finite(curvature * span) * span) / 8.0;
+            let reach = (chord - self.key.tolerance(key_a, key_b, a, b)).max(0.0);
+            let (low, high) = (finite(key_a.min(key_b) - reach), finite(key_a.max(key_b) + reach));
+            let taken = if knot(self.rates, low, high).is_none() {
+                self.take((a, b), (key_a, key_b), length, target)
+            } else if depth >= HALVINGS || self.key.derivative(f64::midpoint(a, b)).abs() > finite(curvature * span) {
+                self.through(a, b, length, target)
+            } else {
+                if *self.budget < 1.0 {
+                    return None;
+                }
+                *self.budget -= 1.0;
+                ends[depth] = b;
+                depth += 1;
+                b = f64::midpoint(a, b);
+                continue;
+            };
+            match taken {
+                Taken::On => {}
+                Taken::At(reach) => return Some(reach),
+                Taken::Spent => return None,
+            }
+            if depth == 0 {
+                return Some(Reach::Beyond(finite(self.high + self.low)));
+            }
+            depth -= 1;
+            a = b;
+            b = ends[depth];
+        }
+    }
 }
 
 /// A whole count of parts of at least 1 as a u32, at most `osc.max_pieces`.
@@ -564,8 +951,8 @@ fn whole(parts: f64) -> u32 {
 /// piece, or, given a target, the progress left in the segment, the instant
 /// at which the progress reaches it, where the segment ends; none where the
 /// piece would take more parts than the budget leaves, which it spends, each
-/// stretch between two of ρ's corners one, and under the exponential law with
-/// a glide each of the rule's parts on it one.
+/// stretch between two of ρ's corners one, each halving one, and under the
+/// exponential law with a glide or a swing each of the rule's parts on it one.
 ///
 /// The piece is split at the instant at which a glide turns kᴿ ([`Key`]),
 /// and each monotone stretch at the keys where ρ has a corner (MATH §4.7):
@@ -581,6 +968,17 @@ fn whole(parts: f64) -> u32 {
 /// kept by two-sums, within u of itself. A target's instant lies within the
 /// progress's error over ρ there, beside the roundings of the root's formula,
 /// a few u of it, or the search's bracket.
+///
+/// A piece with a swing is halved until each stretch either holds no corner
+/// of ρ within kᴿ's range or has kᴿ monotone (`Walk::sweep`), the monotone
+/// ones split at their corners as above. Under the dx7 law a stretch's
+/// progress is then its length times ρ at kᴿ's mean there ([`Key`]'s mean),
+/// within ε + 3u of itself relatively with |q′|/4 times the mean's error and
+/// twice kᴿ's rounding, by which a stretch may pass a corner, beside it; and
+/// under the exponential law the rule's, within ε + 9u + 2⁻⁶⁰ with ln 2·|q′|/4
+/// times twice kᴿ's rounding at the rule's instants and twice that by which a
+/// stretch may pass a corner: a relative bound that holds whatever stretches
+/// the halving takes.
 pub fn advance(rates: &Rates, key: &Key, length: f64, target: Option<f64>, budget: &mut f64) -> Option<Reach> {
     let mut walk = Walk {
         rates,
@@ -592,46 +990,19 @@ pub fn advance(rates: &Rates, key: &Key, length: f64, target: Option<f64>, budge
     if length.is_nan() || length <= 0.0 {
         return Some(Reach::Beyond(0.0));
     }
+    if key.swing.is_some() {
+        return walk.sweep(length, target);
+    }
     let turn = key.turn(length);
     let halves = [(0.0, turn.unwrap_or(length)), (turn.unwrap_or(length), length)];
     for (a, b) in halves {
         if b <= a {
             continue;
         }
-        let (mut start, mut key_start) = (a, key.at(a));
-        let key_end = key.at(b);
-        loop {
-            let corner = knot(rates, key_start, key_end);
-            let (end, key_stop) = match corner {
-                Some(corner) => (crossing(key, corner, start, b), corner),
-                None => (b, key_end),
-            };
-            if end > start {
-                if *walk.budget < 1.0 {
-                    return None;
-                }
-                let (progress, parts) = walk.integral(start, end, key_start, key_stop);
-                if parts > *walk.budget {
-                    return None;
-                }
-                *walk.budget -= parts;
-                let done = finite(walk.high + walk.low);
-                if let Some(target) = target
-                    && finite(done + progress) >= target
-                {
-                    let left = finite(target - done).max(0.0);
-                    let samples = walk.solve(start, end, key_start, key_stop, left);
-                    return Some(Reach::Within(finite(start + samples).min(length)));
-                }
-                let (sum, error) = two_sum(walk.high, progress);
-                walk.high = sum;
-                walk.low += error;
-            }
-            if corner.is_none() {
-                break;
-            }
-            start = end;
-            key_start = key_stop;
+        match walk.through(a, b, length, target) {
+            Taken::On => {}
+            Taken::At(reach) => return Some(reach),
+            Taken::Spent => return None,
         }
     }
     Some(Reach::Beyond(finite(walk.high + walk.low)))

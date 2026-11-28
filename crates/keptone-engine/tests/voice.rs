@@ -370,32 +370,53 @@ fn scaled() -> Patch {
     patch
 }
 
+/// How an envelope driven apart takes its rates' key (MATH §2.6): at
+/// `frequency`'s, k′ with the pitch envelope; under `level`, held at a key;
+/// or under `level` with `scaling.key = pitch`, the scaling key, which
+/// follows the pitch from a base.
+#[derive(Debug, Clone, Copy)]
+enum RatesKey {
+    Frequency,
+    Held(f64),
+    Pitch(f64),
+}
+
+/// The scaling key under `scaling.key = pitch` at an instant (MATH §2.6), from
+/// a base, the pitch envelope there and the rig's LFO: the base with twelve
+/// keys an octave of the pitch envelope's level, the portamento's offset, none
+/// here, and the LFO's pitch, and the bend.
+fn pitch_key(rig: &Rig, base: f64, at: Instant, envelope: PitchEnvelope) -> f64 {
+    let patch = &rig.patch;
+    let depth = modulation(patch.lfo.pitch_depth, rig.lfo.fade(at), rig.pitch_controllers).value;
+    let lfo = (patch.pitch_sensitivity * depth) * rig.lfo.wave(at, patch.lfo.wave);
+    12.0_f64.mul_add((envelope.level(at) + 0.0) + lfo, base) + rig.bend
+}
+
 /// An operator's envelope and a pitch envelope driven apart from a voice, as
-/// MATH §4.7 and §5 say a voice drives them: at the rates' key of
-/// `frequency`, or at a key held under `level`.
+/// MATH §4.7 and §5 say a voice drives them, at the rates' key that a
+/// [`RatesKey`] gives.
 struct Driven {
     operator: usize,
-    held: Option<f64>,
+    rates: RatesKey,
     pitch: PitchEnvelope,
     envelope: Envelope,
     keys: Keys,
 }
 
 impl Driven {
-    /// Both from a key-on at an instant, at a key k′ and an offset there, the
-    /// rates' key held at a key under `level`.
-    fn new(rig: &Rig, operator: usize, key: f64, held: Option<f64>, offset: f64, at: Instant) -> Self {
+    /// Both from a key-on at an instant, at a key k′ and an offset there.
+    fn new(rig: &Rig, operator: usize, key: f64, rates: RatesKey, offset: f64, at: Instant) -> Self {
         let mut pitch = PitchEnvelope::new(&rig.patch.pitch_envelope, at);
         pitch.key_on(at, &rig.patch.pitch_envelope, RATE);
         let parameters = &rig.patch.operators[operator].envelope;
         let mut driven = Self {
             operator,
-            held,
+            rates,
             pitch,
             envelope: Envelope::new(parameters, offset, at),
             keys: Keys::new(rig.configuration.max_pieces).expect("memory"),
         };
-        let rates_key = driven.rates_key(key, at);
+        let rates_key = driven.rates_key(rig, key, at);
         driven
             .envelope
             .key_on(at, parameters, &rig.configuration.envelope, rates_key, offset);
@@ -403,9 +424,12 @@ impl Driven {
     }
 
     /// The rates' key at an instant (MATH §2.6).
-    fn rates_key(&self, key: f64, at: Instant) -> f64 {
-        self.held
-            .unwrap_or_else(|| 12.0_f64.mul_add(self.pitch.level(at) + 0.0, key))
+    fn rates_key(&self, rig: &Rig, key: f64, at: Instant) -> f64 {
+        match self.rates {
+            RatesKey::Frequency => 12.0_f64.mul_add(self.pitch.level(at) + 0.0, key),
+            RatesKey::Held(held) => held,
+            RatesKey::Pitch(base) => pitch_key(rig, base, at, self.pitch),
+        }
     }
 
     /// The parameters of its operator's envelope.
@@ -414,11 +438,11 @@ impl Driven {
     }
 
     /// The rates' key over a span of a sample from an instant, from the pitch
-    /// envelope's state at the sample's start.
+    /// envelope's state at the sample's start and the rig's LFO.
     fn keys(&mut self, rig: &Rig, key: f64, from: Instant, length: f64, start: PitchEnvelope) {
-        match self.held {
-            Some(held) => self.keys.hold_over(held, length),
-            None => self.keys.span(
+        match self.rates {
+            RatesKey::Held(held) => self.keys.hold_over(held, length),
+            RatesKey::Frequency => self.keys.span(
                 from,
                 length,
                 key,
@@ -427,6 +451,21 @@ impl Driven {
                 Portamento::Still,
                 RATE,
             ),
+            RatesKey::Pitch(base) => {
+                let patch = &rig.patch;
+                let signals = Signals {
+                    pitch_envelope: start,
+                    pitch_parameters: &patch.pitch_envelope,
+                    portamento: Portamento::Still,
+                    lfo: &rig.lfo,
+                    wave: patch.lfo.wave,
+                    sensitivity: patch.pitch_sensitivity,
+                    depth: patch.lfo.pitch_depth,
+                    controllers: rig.pitch_controllers,
+                    sample_rate: RATE,
+                };
+                self.keys.pitch_span(from, length, base, rig.bend, &signals);
+            }
         }
     }
 
@@ -450,19 +489,19 @@ impl Driven {
 
     /// A key-off at an instant, at a key k′ and an offset there.
     fn key_off(&mut self, rig: &Rig, key: f64, offset: f64, at: Instant) {
-        let rates_key = self.rates_key(key, at);
+        let rates_key = self.rates_key(rig, key, at);
         self.envelope
             .key_off(at, self.parameters(rig), &rig.configuration.envelope, rates_key, offset);
         self.pitch.key_off(at, &rig.patch.pitch_envelope, RATE);
     }
 }
 
-/// A way to take the scaling key: the settings that choose it, the rates' key
-/// held under `scaling.rate_key = level` where they choose that, and the key
-/// itself at an instant from k′ and the pitch envelope there.
+/// A way to take the scaling key: the settings that choose it, how the rates'
+/// key moves under them, and the key itself at an instant from k′ and the
+/// pitch envelope there.
 struct Scaling<F> {
     changes: Vec<(&'static str, Value)>,
-    held: Option<f64>,
+    rates: RatesKey,
     key: F,
 }
 
@@ -470,37 +509,41 @@ struct Scaling<F> {
 /// `onset-pitch`, k′ with the per-note pitch at the onset, under each
 /// `scaling.rate_key`; and `pitch`, k′ and the per-note pitch with twelve
 /// keys an octave of the pitch envelope, the portamento's offset, none here,
-/// and the LFO's pitch, and the bend.
-fn scalings(key: f64) -> [Scaling<KeyOf>; 4] {
-    let pitch_key = move |rig: &Rig, at: Instant, pitch: PitchEnvelope| {
-        let patch = &rig.patch;
-        let depth = modulation(patch.lfo.pitch_depth, rig.lfo.fade(at), rig.pitch_controllers).value;
-        let lfo = (patch.pitch_sensitivity * depth) * rig.lfo.wave(at, patch.lfo.wave);
-        12.0_f64.mul_add((pitch.level(at) + 0.0) + lfo, key + PER_NOTE) + rig.bend
-    };
+/// and the LFO's pitch, and the bend, under each `scaling.rate_key`, the
+/// rates then following the LFO under `level`.
+fn scalings(key: f64) -> [Scaling<KeyOf>; 5] {
+    let base = key + PER_NOTE;
     [
         Scaling {
             changes: vec![("scaling.key", Value::Choice(0))],
-            held: None,
+            rates: RatesKey::Frequency,
             key: Box::new(move |_, _, _| key),
         },
         Scaling {
             changes: vec![("scaling.key", Value::Choice(1))],
-            held: None,
-            key: Box::new(move |_, _, _| key + PER_NOTE),
+            rates: RatesKey::Frequency,
+            key: Box::new(move |_, _, _| base),
         },
         Scaling {
             changes: vec![
                 ("scaling.key", Value::Choice(1)),
                 ("scaling.rate_key", Value::Choice(1)),
             ],
-            held: Some(key + PER_NOTE),
-            key: Box::new(move |_, _, _| key + PER_NOTE),
+            rates: RatesKey::Held(base),
+            key: Box::new(move |_, _, _| base),
         },
         Scaling {
             changes: vec![("scaling.key", Value::Choice(2))],
-            held: None,
-            key: Box::new(pitch_key),
+            rates: RatesKey::Frequency,
+            key: Box::new(move |rig, at, pitch| pitch_key(rig, base, at, pitch)),
+        },
+        Scaling {
+            changes: vec![
+                ("scaling.key", Value::Choice(2)),
+                ("scaling.rate_key", Value::Choice(1)),
+            ],
+            rates: RatesKey::Pitch(base),
+            key: Box::new(move |rig, at, pitch| pitch_key(rig, base, at, pitch)),
         },
     ]
 }
@@ -548,7 +591,7 @@ fn levels_follow(scaling: &Scaling<impl Fn(&Rig, Instant, PitchEnvelope) -> f64>
     voice.key_on(start, note(52.0, VELOCITY, PER_NOTE), Portamento::Still, 0, &context);
     let mut onset = PitchEnvelope::new(&rig.patch.pitch_envelope, start);
     onset.key_on(start, &rig.patch.pitch_envelope, RATE);
-    let mut driven = Driven::new(&rig, 0, key, scaling.held, offset_at(start, onset), start);
+    let mut driven = Driven::new(&rig, 0, key, scaling.rates, offset_at(start, onset), start);
     let end = end_level(rig.configuration.end_db);
     let (mut release, mut last) = (u64::MAX, u64::MAX);
     let mut stages = Vec::new();
@@ -612,6 +655,28 @@ fn fast() -> Patch {
     patch
 }
 
+/// The scaled patch with a sine LFO that swings its pitch over octaves, so
+/// that under `scaling.rate_key = level` with `scaling.key = pitch` the rates'
+/// key turns across the corners of ρ within the pieces of samples (MATH
+/// §4.7).
+fn swung() -> Patch {
+    let mut patch = scaled();
+    patch.voice.lfo.wave = Wave::Sine;
+    patch.voice.lfo.speed = value(70.0);
+    patch.voice.lfo.pitch_depth = value(99.0);
+    patch.voice.pitch_sensitivity = value(7.0);
+    patch
+}
+
+/// The still patch without the LFO's pitch, under which the level's key under
+/// `scaling.key = pitch` holds still apart from k′ from the key-on on, so that
+/// the envelope takes its closed form at the key that its key-on gives it.
+fn held_pitch() -> Patch {
+    let mut patch = still();
+    patch.voice.lfo.pitch_depth = value(0.0);
+    patch
+}
+
 /// The k′ of the scalings' notes.
 fn scalings_key() -> f64 {
     scaled_rig(&scalings(0.0)[0], &scaled()).1
@@ -623,6 +688,8 @@ fn levels_follow_their_envelopes_at_the_scaling_keys() {
         levels_follow(scaling, &scaled());
     }
     levels_follow(&scalings(scalings_key())[0], &still());
+    levels_follow(&scalings(scalings_key())[4], &swung());
+    levels_follow(&scalings(scalings_key())[4], &held_pitch());
 }
 
 /// A patch with the amplitude modulation on OP1, its LFO at a speed, a delay
@@ -807,7 +874,7 @@ fn a_voice_ends_once_its_carriers_have_ended() {
     let key = rig.transposed(60.0);
     let offset = rig.offset(4, key, 100.0).expect("an offset");
     voice.key_on(Instant::at(0), note(60.0, 100.0, 0.0), Portamento::Still, 0, &context);
-    let mut slowest = Driven::new(&rig, 4, key, None, offset, Instant::at(0));
+    let mut slowest = Driven::new(&rig, 4, key, RatesKey::Frequency, offset, Instant::at(0));
     let end = end_level(rig.configuration.end_db);
     let release = 1000;
     let mut ended = None;
@@ -897,7 +964,7 @@ fn within_follows(
         &rig,
         0,
         key,
-        scaling.held,
+        scaling.rates,
         offset_at(Instant::at(0), onset),
         Instant::at(0),
     );
@@ -1005,6 +1072,15 @@ fn values_within_a_sample_are_its_start_states_taken_over_part_of_it() {
     let (worst, ends, both) = within_follows(&scalings[3], &fast(), &spans);
     println!("fast: phases within samples {worst:.3} of their bound; {ends} spans with ends, {both} with both");
     assert!(both >= 2, "{both}");
+    // Under `level` with `pitch`, the rates' key follows a sine LFO too.
+    let spans = Spans {
+        samples: 40_000,
+        release: 20_000,
+        taus: &[0.25, 0.5, 0.75],
+    };
+    let (worst, ends, _) = within_follows(&scalings[4], &swung(), &spans);
+    println!("swung: phases within samples {worst:.3} of their bound; {ends} spans with ends");
+    assert!(ends >= 3, "{ends}");
 }
 
 /// A patch of algorithm 1 whose OP6, a modulator with its feedback at FB 7,
@@ -1390,8 +1466,8 @@ fn re_anchored(rigs: &[Rig; 2], keys: [f64; 2]) {
     let mut voice = rigs[0].voice();
     let start = Instant::at(0);
     voice.key_on(start, note(52.0, VELOCITY, 0.0), Portamento::Still, 0, &context(0));
-    let mut driven = Driven::new(&rigs[0], 0, keys[0], None, offset, start);
-    let mut kept = Driven::new(&rigs[0], 0, keys[0], None, offset, start);
+    let mut driven = Driven::new(&rigs[0], 0, keys[0], RatesKey::Frequency, offset, start);
+    let mut kept = Driven::new(&rigs[0], 0, keys[0], RatesKey::Frequency, offset, start);
     let mut differs = false;
     let (before, after) = (&rigs[0].patch, &rigs[1].patch);
     for n in 1..=3000 {
@@ -1405,8 +1481,8 @@ fn re_anchored(rigs: &[Rig; 2], keys: [f64; 2]) {
             if before.pitch_envelope != after.pitch_envelope {
                 driven.pitch.change(at, &after.pitch_envelope, RATE);
             }
-            let moved = driven.rates_key(keys[1], at);
-            let still = moved.to_bits() == driven.rates_key(keys[0], at).to_bits();
+            let moved = driven.rates_key(&rigs[1], keys[1], at);
+            let still = moved.to_bits() == driven.rates_key(&rigs[0], keys[0], at).to_bits();
             if before.operators[0].envelope != after.operators[0].envelope || !still {
                 let settings = &rigs[1].configuration.envelope;
                 driven

@@ -22,6 +22,14 @@ at 40 digits. Beside each it writes the bound within which keptone-engine's valu
 functions document. It writes crates/keptone-engine/tests/data/progress.txt: on each line the kind, its inputs, the
 exact value as a double-double and the bound, every number as the 16 hexadecimal digits of its binary64. The inputs
 are draws of SplitMix64 from a fixed seed, on the scales and beyond them, so that the file is the same every time.
+
+It writes crates/keptone-engine/tests/data/progress_swung.txt likewise for keys that the LFO swings beside the line
+and the glide, as it moves the level's key under scaling.key = pitch (§2.6): a sine, slow or of turns a sample, or a
+triangle's or a saw's line whose depth a fade moves; each piece split at the instants at which k_R' changes sign,
+found on a grid of 64 instants a quarter of the sine's turn and by bisection to 120 digits, and each monotone run at
+the corners of rho, crossed by bisection; and the progress over each stretch by mpmath's quadrature at 40 digits.
+Its bound is a relative one that holds for any stretches the engine takes, from the errors that its functions
+document, at the largest key, depth and slope of q on the piece.
 """
 
 import itertools
@@ -38,8 +46,11 @@ from eg_references import rate_law
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "crates" / "keptone-engine" / "tests" / "data" / "progress.txt"
+SWUNG_OUTPUT = ROOT / "crates" / "keptone-engine" / "tests" / "data" / "progress_swung.txt"
 SEED = 0x70726F6772657373
+SWUNG_SEED = 0x7377756E67
 CASES = 700
+SWUNG_CASES = 240
 RATES = [8000.0, 22050.0, 44100.0, 48000.0, 96000.0, 192000.0]
 LOWEST, HIGHEST = 23, 114
 U = 2.0**-53
@@ -53,6 +64,22 @@ HEADER = """\
 # Written by scripts/progress_references.py with mpmath; do not edit.
 # Each line: a kind, then law rate sensitivity clock sample_rate key slope glide
 # glide_rate length (law 0 for dx7, 1 for exponential); for reach the target
+# after them; then the exact value as a double-double (high, low) and the bound
+# of keptone-engine's error, every number the binary64 bits in hexadecimal:
+#   progress: the progress over the piece
+#   reach: the samples into the piece at which the progress reaches the target
+"""
+
+# The head of the file of swinging keys.
+SWUNG_HEADER = """\
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Written by scripts/progress_references.py with mpmath; do not edit.
+# Each line: a kind, then law rate sensitivity clock sample_rate key slope glide
+# glide_rate wave depth depth_slope first second length (law 0 for dx7, 1 for
+# exponential; the swing (depth + depth_slope t) times the wave, -sin 2pi(first
+# + second t) for wave 0 and first + second t for wave 1); for reach the target
 # after them; then the exact value as a double-double (high, low) and the bound
 # of keptone-engine's error, every number the binary64 bits in hexadecimal:
 #   progress: the progress over the piece
@@ -407,15 +434,341 @@ def lines(randoms: Iterator[int]) -> Iterator[list[str | float]]:
         count += 1
 
 
-def main() -> None:
-    """Writes the file."""
-    mpmath.mp.dps = 40
-    randoms = splitmix64(SEED)
-    out = [HEADER.rstrip("\n")]
-    for kind, *numbers in lines(randoms):
+@dataclass(frozen=True)
+class Swing:
+    """The LFO's part of the key on a piece, (depth + depth_slope t) times a wave: a sine -sin 2pi(first + second t)
+    (wave 0), or a line first + second t (wave 1); its numbers binary64."""
+
+    wave: int
+    depth: float
+    depth_slope: float
+    first: float
+    second: float
+
+    def depth_at(self, t: mpmath.mpf) -> mpmath.mpf:
+        """The depth at t, exactly."""
+        return mpmath.mpf(self.depth) + mpmath.mpf(self.depth_slope) * t
+
+    def wave_at(self, t: mpmath.mpf) -> mpmath.mpf:
+        """The wave at t."""
+        if self.wave == 0:
+            return -mpmath.sinpi(2 * (mpmath.mpf(self.first) + mpmath.mpf(self.second) * t))
+        return mpmath.mpf(self.first) + mpmath.mpf(self.second) * t
+
+    def wave_slope(self, t: mpmath.mpf) -> mpmath.mpf:
+        """The wave's derivative at t."""
+        if self.wave == 0:
+            phase = 2 * (mpmath.mpf(self.first) + mpmath.mpf(self.second) * t)
+            return -2 * mpmath.pi * mpmath.mpf(self.second) * mpmath.cospi(phase)
+        return mpmath.mpf(self.second)
+
+    def at(self, t: mpmath.mpf) -> mpmath.mpf:
+        """The swing at t."""
+        return self.depth_at(t) * self.wave_at(t)
+
+    def slope_at(self, t: mpmath.mpf) -> mpmath.mpf:
+        """The swing's derivative at t."""
+        return mpmath.mpf(self.depth_slope) * self.wave_at(t) + self.depth_at(t) * self.wave_slope(t)
+
+
+@dataclass(frozen=True)
+class SwungKey:
+    """A line with a glide's law beside it and the LFO's swing."""
+
+    line: Key
+    swing: Swing
+
+    def at(self, t: mpmath.mpf) -> mpmath.mpf:
+        """k_R at t samples, exactly."""
+        return self.line.at(t) + self.swing.at(t)
+
+    def derivative(self, t: mpmath.mpf) -> mpmath.mpf:
+        """k_R' at t."""
+        slope = mpmath.mpf(self.line.slope) + self.swing.slope_at(t)
+        if self.line.glides():
+            rate = mpmath.mpf(self.line.rate)
+            slope -= rate * self.line.amplitude() * mpmath.exp(-rate * t)
+        return slope
+
+
+def bisect(function: Callable[[mpmath.mpf], mpmath.mpf], a: mpmath.mpf, b: mpmath.mpf) -> mpmath.mpf:
+    """The zero of a function within [a, b], where it changes sign, by 400 bisections at 120 digits."""
+    with mpmath.workdps(120):
+        low, high = a, b
+        rising = function(high) > function(low)
+        for _ in range(400):
+            middle = (low + high) / 2
+            if (function(middle) < 0) == rising:
+                low = middle
+            else:
+                high = middle
+        return (low + high) / 2
+
+
+def grid(key: SwungKey, length: float) -> list[mpmath.mpf]:
+    """The instants on which a piece's turns are sought: 64 a quarter of the sine's turn, 256 at least."""
+    quarters = 4 * abs(key.swing.second) * length if key.swing.wave == 0 else 0
+    count = max(256, int(64 * quarters) + 1)
+    return [mpmath.mpf(length) * index / count for index in range(count + 1)]
+
+
+def swung_stretches(rates: Rates, key: SwungKey, length: float) -> list[tuple]:
+    """The piece's stretches between rho's corners: its monotone runs between the instants at which k_R' changes
+    sign, found on the grid and by bisection, and each run split at the keys where rho has a corner."""
+    instants = grid(key, length)
+    slopes = [key.derivative(t) for t in instants]
+    bounds = [mpmath.mpf(0)]
+    for (a, slope_a), (b, slope_b) in itertools.pairwise(zip(instants, slopes, strict=True)):
+        if slope_a * slope_b < 0:
+            bounds.append(bisect(key.derivative, a, b))
+    bounds.append(mpmath.mpf(length))
+    out = []
+    for a, b in itertools.pairwise(bounds):
+        start, key_start = a, key.at(a)
+        for knot in rates.knots(key.at(a), key.at(b)):
+            end = bisect(lambda t, knot=knot: key.at(t) - knot, start, b)
+            out.append((start, end, key_start, knot))
+            start, key_start = end, knot
+        out.append((start, b, key_start, key.at(b)))
+    return out
+
+
+def swung_progress(rates: Rates, key: SwungKey, stretch: tuple, end: mpmath.mpf | None = None) -> mpmath.mpf:
+    """The progress over a stretch, or from its start to an instant within it, by mpmath's quadrature."""
+    a, b = stretch[0], stretch[1] if end is None else end
+    if b <= a:
+        return mpmath.mpf(0)
+    return mpmath.quad(lambda t: rates.step(key.at(t)), [a, b])
+
+
+def swung_reach(rates: Rates, key: SwungKey, pieces: list[tuple], target: mpmath.mpf) -> tuple[mpmath.mpf, int]:
+    """The instant at which the progress reaches a target, and the stretch where it does: Newton's iteration within
+    the stretch's bracket until the progress lies within 10^-36 of the target relatively."""
+    done = mpmath.mpf(0)
+    for index, stretch in enumerate(pieces):
+        progress = swung_progress(rates, key, stretch)
+        if done + progress >= target:
+            left = target - done
+            low, high = stretch[0], stretch[1]
+            t = low + (high - low) * left / progress if progress > 0 else low
+            for _ in range(100):
+                value = swung_progress(rates, key, stretch, t) - left
+                if abs(value) <= mpmath.mpf(10) ** -36 * target:
+                    break
+                if value < 0:
+                    low = t
+                else:
+                    high = t
+                step = t - value / rates.step(key.at(t))
+                t = step if low < step < high else (low + high) / 2
+            return t, index
+        done += progress
+    message = "a target within the piece"
+    raise AssertionError(message)
+
+
+def swung_relative(rates: Rates, key: SwungKey, length: float) -> mpmath.mpf:
+    """The bound of keptone-engine's relative error over a piece, whatever its stretches: rho's error at a key;
+    under the dx7 law the error of k_R's mean over a stretch, and under the exponential law twice k_R's own at
+    the rule's instants, times a quarter of q's largest slope on the key's range, ln 2 more under the
+    exponential law, with twice the tolerance within which a stretch may pass a corner; and the law's own
+    roundings: the length and the product under dx7, the rule's 8u and its truncation's 2^-60 under the
+    exponential law."""
+    u = mpmath.mpf(U)
+    instants = grid(key, length)
+    keys = [key.at(t) for t in instants]
+    largest = max(abs(k) for k in keys) + 1
+    low, high = min(keys) - 1, max(keys) + 1
+    ramps = range(max(LOWEST, int(mpmath.floor(low))), min(HIGHEST, int(mpmath.ceil(high))))
+    slope = max((abs(rates.slope(mpmath.mpf(w))) for w in ramps), default=mpmath.mpf(0))
+    swing, line = key.swing, key.line
+    depth = max(abs(swing.depth_at(mpmath.mpf(0))), abs(swing.depth_at(mpmath.mpf(length))))
+    depth_slope = abs(mpmath.mpf(swing.depth_slope))
+    span = mpmath.mpf(length)
+    glide = 19 * (abs(mpmath.mpf(line.glide)) + 3) if line.glide != 0 else 0
+    tolerance = u * (4 * largest + (5 * (abs(mpmath.mpf(line.glide)) + 3) if line.glide != 0 else 0) + 24 * depth)
+    if swing.wave == 0:
+        turns = abs(mpmath.mpf(swing.second)) * span
+        swung = depth * (31 + 2 * mpmath.pi * turns) + depth_slope * span * (9 + mpmath.mpf("1.4") * turns)
+    else:
+        wave_slope = abs(mpmath.mpf(swing.second))
+        swung = 4 * depth + depth_slope * span + depth_slope * wave_slope * span**2 / 2 + depth * wave_slope * span
+    mean = u * (4 * largest + abs(mpmath.mpf(line.slope)) * span + glide + swung)
+    if rates.law == 0:
+        return rates.quarter_error() + slope * (mean + 2 * tolerance) / 4 + 3 * u
+    at = u * (2 * largest + (mpmath.mpf("4.35") * (abs(mpmath.mpf(line.glide)) + 3) if line.glide != 0 else 0))
+    at += u * 23 * depth
+    return rates.quarter_error() + slope * mpmath.log(2) / 4 * (2 * at + 2 * tolerance) + 9 * u + mpmath.mpf(2) ** -60
+
+
+def swung_case(randoms: Iterator[int]) -> tuple[Rates, SwungKey, float]:
+    """A segment's rates and a piece's key and length, as case() draws them, with the LFO's swing beside them: a
+    sine slow, as on the LFO's scale, or fast, up to turns a sample, or a triangle's or a saw's line whose depth a
+    fade moves, over depths of a fraction of a key to five octaves."""
+    rates, line, length = case(randoms)
+    sign = 1.0 if next(randoms) % 2 else -1.0
+    depth = sign * pick(
+        randoms,
+        [lambda: draw(randoms, 0.05, 2.0), lambda: draw(randoms, 2.0, 24.0), lambda: draw(randoms, 24.0, 60.0)],
+    )
+    fade = pick(randoms, [lambda: 0.0, lambda: draw(randoms, -1.0, 1.0) * abs(depth) / 8])
+    if next(randoms) % 3 != 0:
+        step = pick(
+            randoms,
+            [
+                lambda: draw(randoms, 1e-6, 1e-3),
+                lambda: draw(randoms, 1e-3, 0.05),
+                lambda: draw(randoms, 0.05, 1.5),
+            ],
+        )
+        swing = Swing(0, depth, fade, draw(randoms, 0.0, 1.0), step)
+    else:
+        speed = draw(randoms, 1e-5, 0.02) * (4.0 if next(randoms) % 2 else 2.0)
+        slope = speed if next(randoms) % 2 else -speed
+        fade = fade or abs(depth) / 16
+        swing = Swing(1, depth, fade, draw(randoms, -1.0, 1.0), slope)
+    return rates, SwungKey(line, swing), length
+
+
+def swung_turning(randoms: Iterator[int]) -> tuple[Rates, SwungKey, float]:
+    """A sine that swings the key back and forth across the corners of rho within the piece: the rate scaling at
+    4 to 7, so that q bends every group of keys, and a depth of a few keys over a turn or two."""
+    rates = Rates(
+        draw(randoms, 20.0, 80.0),
+        float(4 + next(randoms) % 4),
+        49096.0,
+        next(randoms) % 2,
+        RATES[next(randoms) % len(RATES)],
+    )
+    line = Key(draw(randoms, 40.0, 100.0), draw(randoms, -0.5, 0.5), 0.0, 0.0)
+    swing = Swing(0, draw(randoms, 1.0, 8.0), 0.0, draw(randoms, 0.0, 1.0), draw(randoms, 0.2, 2.0))
+    return rates, SwungKey(line, swing), 1.0
+
+
+def peak(key: SwungKey, length: float) -> mpmath.mpf:
+    """The largest k_R on the piece: on the grid, refined about its best point by golden-section search."""
+    instants = grid(key, length)
+    best = max(range(len(instants)), key=lambda index: key.at(instants[index]))
+    low, high = instants[max(best - 1, 0)], instants[min(best + 1, len(instants) - 1)]
+    ratio = (mpmath.sqrt(5) - 1) / 2
+    for _ in range(200):
+        left, right = high - ratio * (high - low), low + ratio * (high - low)
+        if key.at(left) < key.at(right):
+            low = left
+        else:
+            high = right
+    return key.at((low + high) / 2)
+
+
+def placed(key: SwungKey, length: float, below: mpmath.mpf) -> SwungKey:
+    """The key moved by a whole binary64 so that 60, a corner of rho at KRS 7 and rate 50, lies halfway between a
+    level below its peak and the peak: its top turns past the corner while its ends stay below it."""
+    top = peak(key, length)
+    if not below < top:
+        message = "a peak above the level"
+        raise ValueError(message)
+    shift = float(60 - (below + top) / 2)
+    line = key.line
+    return SwungKey(Key(line.key + shift, line.slope, line.glide, line.rate), key.swing)
+
+
+def designed(law: int) -> list[tuple[Rates, SwungKey, float]]:
+    """Four keys whose turn passes a corner of rho while both their ends lie below it: two with the corner
+    between the top of their ends' range widened by half the bound of their curvature and their peak, so that the
+    whole bound is needed to find it, one whose swing's depth a fade moves from 0, its curvature at the turn twice
+    A'omega, and one whose glide turns it against its line, its curvature that of the glide; and the second with
+    the corner 10^-6 keys below its peak, at 0.4 of a sample, which no halving reaches, so that only a stretch's
+    range widened by all but the key's own rounding holds the corner; and a sine turned against its line
+    (against())."""
+    rates = Rates(50.0, 7.0, 49096.0, law, 48000.0)
+    step = 0.01
+    omega = 2 * mpmath.pi * step
+    fade = SwungKey(Key(0.0, float(omega), 0.0, 0.0), Swing(0, 0.0, 2.0, 1 - step / 2, step))
+    ends = max(fade.at(mpmath.mpf(0)), fade.at(mpmath.mpf(1)))
+    curvature = 2 * omega**2 + 2 * 2.0 * omega
+    fade = placed(fade, 1.0, ends + curvature / 2 / 8)
+    turned = SwungKey(Key(0.0, -8.0897, -6.0, 2.0), Swing(0, 0.001, 0.0, 0.0, 0.01))
+    length = 0.5
+    ends = max(turned.at(mpmath.mpf(0)), turned.at(mpmath.mpf(length)))
+    glide = placed(turned, length, ends + mpmath.mpf(1) / 1000)
+    grazing = placed(turned, length, peak(turned, length) - mpmath.mpf(2) / 10**6)
+    return [(rates, fade, 1.0), (rates, glide, length), (rates, grazing, length), (rates, against(), 1.0)]
+
+
+def against() -> SwungKey:
+    """A sine of 8 keys at 0.2 turns a sample against a line rising at half its largest slope, which turns the key
+    within the piece's first half, well inside one of its quarters, its peak above both ends of that half; placed
+    so that a corner lies halfway between them, where a slope of the wrong sign would take that half as monotone and
+    miss the corner. The sine's phase is the first of 64 at which the turn lies so."""
+    step, depth = 0.2, 8.0
+    slope = float(depth * 2 * mpmath.pi * step / 2)
+    for index in range(64):
+        key = SwungKey(Key(0.0, slope, 0.0, 0.0), Swing(0, depth, 0.0, index / 64, step))
+        instants = [mpmath.mpf(n) / 1024 for n in range(513)]
+        values = [key.at(t) for t in instants]
+        best = max(range(len(values)), key=values.__getitem__)
+        turn, top = instants[best], values[best]
+        ends = max(values[0], values[-1])
+        inside = 0.15 < turn < 0.22 or 0.28 < turn < 0.35
+        if inside and top - ends > mpmath.mpf(1) / 20:
+            return placed(key, 0.5, ends + mpmath.mpf(1) / 100)
+    message = "a phase at which the sine turns the key so"
+    raise ValueError(message)
+
+
+def swung_lines(randoms: Iterator[int]) -> Iterator[list[str | float]]:
+    """The references of swinging keys: the designed keys under each law, then for each case its progress and the
+    instant at which it reaches a share of it, a quarter of them sines that swing the key across the corners of
+    rho."""
+    count = 0
+    cases = [*designed(0), *designed(1)]
+    every = SWUNG_CASES + len(cases)
+    while count < every:
+        if cases:
+            rates, key, length = cases.pop(0)
+        else:
+            rates, key, length = swung_turning(randoms) if count % 4 == 0 else swung_case(randoms)
+        pieces = swung_stretches(rates, key, length)
+        if len(pieces) > 120:
+            continue
+        total = sum((swung_progress(rates, key, stretch) for stretch in pieces), mpmath.mpf(0))
+        if not total > 0:
+            continue
+        line, swing = key.line, key.swing
+        inputs = [float(rates.law), rates.rate, rates.sensitivity, rates.clock, rates.sample_rate]
+        inputs += [line.key, line.slope, line.glide, line.rate]
+        inputs += [float(swing.wave), swing.depth, swing.depth_slope, swing.first, swing.second, length]
+        relative = swung_relative(rates, key, length)
+        bound = total * relative + mpmath.mpf(U) * total
+        hi = float(total)
+        yield ["progress", *inputs, hi, float(total - mpmath.mpf(hi)), float(bound * (1 + mpmath.mpf(10) ** -6))]
+        target = float(total * mpmath.mpf(draw(randoms, 0.0, 1.0)))
+        if target <= 0:
+            count += 1
+            continue
+        instant, _ = swung_reach(rates, key, pieces, mpmath.mpf(target))
+        rho = rates.step(key.at(instant))
+        before = mpmath.mpf(target) * (relative + mpmath.mpf(U))
+        bound = before / rho + 8 * mpmath.mpf(U) * abs(instant) + mpmath.mpf(2) ** -1070
+        hi = float(instant)
+        yield ["reach", *inputs, target, hi, float(instant - mpmath.mpf(hi)), float(bound * (1 + mpmath.mpf(10) ** -6))]
+        count += 1
+
+
+def write(path: Path, header: str, references: Iterator[list[str | float]]) -> None:
+    """Writes a file of references."""
+    out = [header.rstrip("\n")]
+    for kind, *numbers in references:
         out.append(" ".join([str(kind), *(f"{to_bits(float(x)):016x}" for x in numbers)]))
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text("\n".join(out) + "\n", encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    """Writes the files."""
+    mpmath.mp.dps = 40
+    write(OUTPUT, HEADER, lines(splitmix64(SEED)))
+    write(SWUNG_OUTPUT, SWUNG_HEADER, swung_lines(splitmix64(SWUNG_SEED)))
 
 
 if __name__ == "__main__":

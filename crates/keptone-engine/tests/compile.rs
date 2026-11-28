@@ -245,33 +245,15 @@ fn the_configuration_refuses_what_m3_does_not_compute() {
             "{name}"
         );
     }
-    // The rates' key of the level's with the level's key at the voice's pitch,
-    // which the LFO moves: refused by the later of the two in §17's order, an
-    // earlier refusal named before it, and every other pair of them taken.
+    // Every pair of the two scalings' keys is taken, the rates' key of the
+    // level's with the level's key at the voice's pitch, which the LFO moves,
+    // among them.
     for (rate_key, key) in [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)] {
         let mut pair = settings();
         assert!(set(&mut pair, "scaling.rate_key", Value::Choice(rate_key)));
         assert!(set(&mut pair, "scaling.key", Value::Choice(key)));
-        let result = Configuration::new(&pair, 48_000.0);
-        if (rate_key, key) == (1, 2) {
-            assert_eq!(
-                result,
-                Err(Refusal::Setting {
-                    name: "scaling.rate_key",
-                    value: Value::Choice(1),
-                })
-            );
-            assert!(set(&mut pair, "adaa.order", Value::Choice(1)));
-            assert_eq!(
-                Configuration::new(&pair, 48_000.0),
-                Err(Refusal::Setting {
-                    name: "adaa.order",
-                    value: Value::Choice(1),
-                })
-            );
-        } else {
-            assert!(result.is_ok(), "scaling.rate_key {rate_key}, scaling.key {key}");
-        }
+        let configuration = Configuration::new(&pair, 48_000.0);
+        assert!(configuration.is_ok(), "scaling.rate_key {rate_key}, scaling.key {key}");
     }
     for rate in [0.0, -48_000.0, f64::NAN, f64::INFINITY, -0.0] {
         assert!(

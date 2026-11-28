@@ -14,12 +14,14 @@
 //! the walk over samples of voices whose pitch envelopes, glides,
 //! glissandos and LFOs move within them, its parts against those signals' own
 //! laws at the parts' instants, the parts tiling each sample, and a sample past
-//! `osc.max_pieces` on the rule's equal parts.
+//! `osc.max_pieces` on the rule's equal parts; and the level's key under
+//! `scaling.key = pitch` over those samples, which the rates' key then takes,
+//! against the same laws.
 
 use keptone_engine::control::{Limited, Source, controllers, modulation, pitch_sensitivity};
 use keptone_engine::lfo::Lfo;
 use keptone_engine::peg::{self, PitchEnvelope};
-use keptone_engine::pieces::{Part, Parts, Piece, Portamento, Shape, Signals, advance, sample, span};
+use keptone_engine::pieces::{Keys, Part, Parts, Piece, Portamento, Shape, Signals, advance, sample, span};
 use keptone_engine::pitch::phase::gauss_instants;
 use keptone_engine::portamento::{self, Glide, Glissando, Unit};
 use keptone_engine::time::Instant;
@@ -595,6 +597,124 @@ fn spans_follow_their_signals() {
     }
     println!("spans: {spans} spans, {compared} compared with their samples, the worst {worst:.3} of its bound");
     assert!(compared > 1500, "{compared} samples compared");
+}
+
+#[test]
+fn a_swinging_key_never_holds_still() {
+    // A pitch envelope at rest, no portamento and a sine LFO: the level's key
+    // under `scaling.key = pitch` is one piece over the sample, with neither a
+    // slope nor a glide, which the LFO swings; it does not hold still, so that
+    // an envelope driven at it never takes its closed form. Without the LFO's
+    // depth it holds still at the base and the bend.
+    let rate = 48_000.0;
+    let start = Instant::at(0);
+    let parameters = peg::Parameters {
+        rates: [99.0; 4],
+        levels: [50.0; 4],
+    };
+    let envelope = PitchEnvelope::new(&parameters, start);
+    let mut lfo = Lfo::new(start, 60.0, rate, 7, 0);
+    lfo.key_on(start, true, 0.0, rate);
+    let signals = |depth: f64| Signals {
+        pitch_envelope: envelope,
+        pitch_parameters: &parameters,
+        portamento: Portamento::Still,
+        lfo: &lfo,
+        wave: Wave::Sine,
+        sensitivity: pitch_sensitivity(7.0),
+        depth,
+        controllers: controllers(&[]),
+        sample_rate: rate,
+    };
+    let mut keys = Keys::new(64).expect("memory");
+    keys.pitch_walk(Instant::at(100), 52.75, -1.5, &signals(99.0));
+    let pieces = keys.pieces().expect("the walk's pieces");
+    assert!(
+        pieces.len() == 1 && pieces[0].key.swing.is_some() && pieces[0].key.slope == 0.0,
+        "{pieces:?}"
+    );
+    assert_eq!(keys.still(), None);
+    keys.pitch_walk(Instant::at(100), 52.75, -1.5, &signals(0.0));
+    assert_eq!(keys.still(), Some(51.25));
+}
+
+#[test]
+fn pitch_keys_follow_their_signals() {
+    // The level's key under `scaling.key = pitch` over samples of random
+    // voices (MATH §2.6): a base plus twelve keys an octave of the pitch that
+    // the pitch envelope, the portamento and the LFO move, plus the bend,
+    // against the signals' own laws at interior instants of its pieces, which
+    // tile the sample, with a swing where a sine moves it or a fade moves a
+    // triangle's or a saw's depth; past the budget, the key at the rule's
+    // instants of its equal parts.
+    let mut random = Random(0x7069_7463);
+    let (base, bend) = (52.75, -1.5);
+    let (mut pieces, mut swings, mut rules, mut worst) = (0, 0, 0, 0.0_f64);
+    for _ in 0..150 {
+        let rate = random.pick(&[8_000.0, 44_100.0, 48_000.0, 192_000.0]);
+        let mut voice = voice(&mut random, rate);
+        let mut keys = Keys::new(64).expect("memory");
+        for n in 1..=120 {
+            let from = Instant::at(n - 1);
+            keys.pitch_walk(from, base, bend, &voice.signals());
+            // The key takes λ from the same signals' laws as the walk's parts,
+            // in keys: twelve times their tolerance (Voice::at), and the
+            // products by 12 and the sums with the base and the bend within 4u
+            // of the key on either side.
+            let check = |at: Instant, got: f64| {
+                let (pitch, _, tolerance) = voice.at(at);
+                let expected = 12.0_f64.mul_add(pitch, base) + bend;
+                let bound = 12.0 * tolerance + 8.0 * U * expected.abs().max(64.0);
+                assert!((got - expected).abs() <= bound, "sample {n}: {got} against {expected}");
+                (got - expected).abs() / bound
+            };
+            if let Some(walked) = keys.pieces() {
+                // A key that the LFO swings never holds still.
+                if walked.iter().any(|piece| piece.key.swing.is_some()) {
+                    assert_eq!(keys.still(), None, "sample {n}");
+                }
+                let mut covered = 0.0;
+                for piece in walked {
+                    swings += usize::from(piece.key.swing.is_some());
+                    for share in [0.25, 0.5, 0.75] {
+                        let x = share * piece.length;
+                        let at = from.after(piece.start + x).expect("within the sample");
+                        worst = worst.max(check(at, piece.key.at(x)));
+                    }
+                    covered += piece.length;
+                }
+                let count = f64::from(u32::try_from(walked.len()).expect("few"));
+                assert!((covered - 1.0).abs() <= 8.0 * U * count, "{covered}");
+                pieces += walked.len();
+            } else {
+                let nodes = keys.nodes();
+                assert_eq!(nodes.len(), 64, "the rule's parts");
+                for (index, nodes) in (0_u32..).zip(nodes) {
+                    let boundary = |index: u32| if index >= 64 { 1.0 } else { f64::from(index) / 64.0 };
+                    let part = boundary(index + 1) - boundary(index);
+                    for (node, instant) in nodes.iter().zip(gauss_instants(part)) {
+                        let at = from.after(boundary(index) + instant).expect("within the sample");
+                        worst = worst.max(check(at, *node));
+                    }
+                }
+                rules += 1;
+            }
+            advance(
+                &mut voice.envelope,
+                &voice.parameters,
+                &mut voice.portamento,
+                Instant::at(n),
+                voice.sample_rate,
+            );
+        }
+    }
+    println!(
+        "pitch keys: {pieces} pieces, {swings} of them swung, {rules} samples of the rule, the worst {worst:.3} of its bound"
+    );
+    assert!(
+        swings > 500 && rules > 100,
+        "{swings} swung, {rules} samples of the rule"
+    );
 }
 
 #[test]

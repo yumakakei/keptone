@@ -365,6 +365,38 @@ fn signals<'s>(motion: Motion, lfo: &'s Lfo, context: &Context<'s>) -> Signals<'
     }
 }
 
+/// The rates' key over a span of so many samples from an instant (MATH §2.6,
+/// §4.7), the signals as they are at its start, k′ the key after
+/// transposition and the scaling key's base given: under `frequency` the
+/// pitch envelope's and the portamento's pieces from k′; under `level` with
+/// `scaling.key = pitch` the pitch's pieces from the base, the LFO's among
+/// them; and under `level` otherwise the base, holding still.
+fn rates_keys(
+    keys: &mut Keys,
+    (transposed, scaling): (f64, f64),
+    from: Instant,
+    samples: f64,
+    signals: &Signals<'_>,
+    context: &Context<'_>,
+) {
+    let configuration = context.configuration;
+    match configuration.rate_key {
+        RateKey::Frequency => keys.span(
+            from,
+            samples,
+            transposed,
+            signals.pitch_envelope,
+            signals.pitch_parameters,
+            signals.portamento,
+            configuration.sample_rate,
+        ),
+        RateKey::Level if configuration.scaling_key == ScalingKey::Pitch => {
+            keys.pitch_span(from, samples, scaling, context.bend, signals);
+        }
+        RateKey::Level => keys.hold_over(scaling, samples),
+    }
+}
+
 /// An operator's offset O at a scaling key and a velocity (MATH §3.2), none
 /// where it is silent.
 fn offset_of(operator: &CompiledOperator, key: f64, velocity: f64) -> Option<f64> {
@@ -502,12 +534,17 @@ impl State {
     /// The rates' key kᴿ at an instant (MATH §2.6) from a state of what moves
     /// the pitch there: under `frequency` k′ and twelve keys an octave of the
     /// pitch envelope's level and the portamento's offset, as
-    /// [`Keys::walk`] takes it; under `level` the scaling key.
+    /// [`Keys::walk`] takes it; under `level` the scaling key, which under
+    /// `scaling.key = pitch` moves with the pitch, as [`Keys::pitch_walk`]
+    /// takes it.
     fn rates_key(&self, at: Instant, motion: Motion, context: &Context<'_>) -> f64 {
         match context.configuration.rate_key {
             RateKey::Frequency => {
                 let octaves = finite(motion.envelope.level(at) + motion.portamento.octaves(at));
                 finite(12.0_f64.mul_add(octaves, self.transposed))
+            }
+            RateKey::Level if context.configuration.scaling_key == ScalingKey::Pitch => {
+                self.pitch_key(self.scaling, at, motion, context)
             }
             RateKey::Level => self.scaling,
         }
@@ -628,19 +665,16 @@ impl State {
         }
         let start = self.saved_motion;
         let lfo = self.lfo.as_ref().unwrap_or(context.lfo);
-        pieces::span(&mut self.span_parts, from, samples, &signals(start, lfo, context));
-        match configuration.rate_key {
-            RateKey::Frequency => self.span_keys.span(
-                from,
-                samples,
-                self.transposed,
-                start.envelope,
-                &patch.pitch_envelope,
-                start.portamento,
-                rate,
-            ),
-            RateKey::Level => self.span_keys.hold_over(self.scaling, samples),
-        }
+        let moving = signals(start, lfo, context);
+        pieces::span(&mut self.span_parts, from, samples, &moving);
+        rates_keys(
+            &mut self.span_keys,
+            (self.transposed, self.scaling),
+            from,
+            samples,
+            &moving,
+            context,
+        );
         for (k, slot) in out.iter_mut().enumerate().take(count) {
             let compiled = &patch.operators[k];
             let mut operator = self.saved[k];
@@ -1169,18 +1203,16 @@ impl Voice {
         let start = state.motion;
         state.saved_motion = start;
         let lfo = state.lfo.as_ref().unwrap_or(context.lfo);
-        pieces::sample(&mut self.parts, from, &signals(start, lfo, context));
-        match configuration.rate_key {
-            RateKey::Frequency => self.keys.walk(
-                from,
-                state.transposed,
-                start.envelope,
-                &patch.pitch_envelope,
-                start.portamento,
-                rate,
-            ),
-            RateKey::Level => self.keys.hold(state.scaling),
-        }
+        let moving = signals(start, lfo, context);
+        pieces::sample(&mut self.parts, from, &moving);
+        rates_keys(
+            &mut self.keys,
+            (state.transposed, state.scaling),
+            from,
+            1.0,
+            &moving,
+            context,
+        );
         for (k, compiled) in patch.operators.iter().enumerate() {
             let increment = increment(&self.parts, compiled, state.constant(k, context), rate);
             let mut envelope = state.operators[k].envelope;

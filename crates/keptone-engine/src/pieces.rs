@@ -31,10 +31,13 @@
 //!
 //! The rates' key of the operators' envelopes over a sample, [`Keys`], is
 //! split likewise where the pitch envelope reaches its target and where the
-//! portamento changes, the LFO taking no part in it (MATH §2.6), each piece a
-//! line with a glide's law beside it (`crate::eg::progress::Key`); past the
-//! budget, it is the key at the rule's instants of `osc.max_pieces` equal
-//! parts of the sample, as the phase's fallback takes the pitch.
+//! portamento changes, the LFO taking no part in it under `scaling.rate_key =
+//! frequency` (MATH §2.6), each piece a line with a glide's law beside it
+//! (`crate::eg::progress::Key`); where the rates' key is the level's under
+//! `scaling.key = pitch`, it is split as the pitch is, the LFO's part of it
+//! beside the line and the glide. Past the budget, it is the key at the
+//! rule's instants of `osc.max_pieces` equal parts of the sample, as the
+//! phase's fallback takes the pitch.
 //!
 //! The pieces' signals are those of `crate::peg`, `crate::portamento`,
 //! `crate::lfo` and `crate::control`, each within the error that its laws
@@ -51,7 +54,7 @@ use keptone_model::voice::Wave;
 
 use crate::binary64::finite;
 use crate::control::{Limited, modulation, saturating_fade};
-use crate::eg::progress::Key;
+use crate::eg::progress::{Key, Swing};
 use crate::lfo::{Fading, Lfo, shape};
 use crate::peg::{self, PitchEnvelope};
 use crate::pitch::phase::{gauss_increment, gauss_instants, linear_increment};
@@ -240,7 +243,7 @@ pub(crate) fn rule_parts(bounds: [f64; 6], length: f64) -> f64 {
 /// and the rest summed with φ₀ in two roundings, within u(3 + |lo|) turns of
 /// the exact phase, lo the product's low part, at most u·sτ, as the LFO's own
 /// phase is (`crate::lfo`).
-fn turns_after(turns: f64, step: f64, samples: f64) -> f64 {
+pub(crate) fn turns_after(turns: f64, step: f64, samples: f64) -> f64 {
     let (high, low) = two_product(step, samples);
     let whole = high.floor();
     let part = (high - whole) + (low + turns);
@@ -272,22 +275,65 @@ impl Piece {
         } else {
             return None;
         };
-        let (lfo, lfo_slope) = if self.depth == 0.0 && self.depth_slope == 0.0 {
-            (0.0, 0.0)
-        } else {
-            match self.shape {
-                Shape::Constant(value) => (finite(self.depth * value), finite(self.depth_slope * value)),
-                Shape::Sine { turns, step: 0.0 } => {
-                    let value = -sin2pi(turns);
-                    (finite(self.depth * value), finite(self.depth_slope * value))
-                }
-                Shape::Linear { value, slope } if self.depth_slope == 0.0 => {
-                    (finite(self.depth * value), finite(self.depth * slope))
-                }
-                Shape::Linear { .. } | Shape::Sine { .. } => return None,
-            }
-        };
+        let (lfo, lfo_slope) = self.lfo_line()?;
         Some([finite(pitch + lfo), finite(self.slope + lfo_slope), lfo, lfo_slope])
+    }
+
+    /// The LFO's pitch A·ℓ as a line where it is linear on the piece, its
+    /// value at the start and its slope a sample: where A and ℓ do not both
+    /// move and the wave is not a sine that moves; none elsewhere.
+    fn lfo_line(&self) -> Option<(f64, f64)> {
+        if self.depth == 0.0 && self.depth_slope == 0.0 {
+            return Some((0.0, 0.0));
+        }
+        match self.shape {
+            Shape::Constant(value) => Some((finite(self.depth * value), finite(self.depth_slope * value))),
+            Shape::Sine { turns, step: 0.0 } => {
+                let value = -sin2pi(turns);
+                Some((finite(self.depth * value), finite(self.depth_slope * value)))
+            }
+            Shape::Linear { value, slope } if self.depth_slope == 0.0 => {
+                Some((finite(self.depth * value), finite(self.depth * slope)))
+            }
+            Shape::Linear { .. } | Shape::Sine { .. } => None,
+        }
+    }
+
+    /// The rates' key on the piece where it is the level's under `scaling.key
+    /// = pitch` (MATH §2.6), in keys: a base, the scaling key's base, plus 12
+    /// keys an octave of the ratio mode's λ, plus the bend, as the voice's
+    /// scaling key takes them. The glide's offset, d in octaves, is 12d keys,
+    /// its law's quarter of an octave 3 keys; the LFO's pitch joins the line
+    /// where it is linear on the piece ([`Piece::lfo_line`]) and is the key's
+    /// swing elsewhere, its depth 12A keys. Each product by 12 and each sum
+    /// rounds within u of itself.
+    fn key(&self, base: f64, bend: f64) -> Key {
+        let (lfo, lfo_slope, swing) = match self.lfo_line() {
+            Some((value, slope)) => (value, slope, None),
+            None => (
+                0.0,
+                0.0,
+                Some(Swing {
+                    depth: finite(12.0 * self.depth),
+                    depth_slope: finite(12.0 * self.depth_slope),
+                    shape: self.shape,
+                }),
+            ),
+        };
+        let held = if self.glide != 0.0 && self.rate <= 0.0 {
+            self.glide
+        } else {
+            0.0
+        };
+        let octaves = finite(finite(self.pitch + held) + lfo);
+        let moving = self.glide != 0.0 && self.rate > 0.0;
+        Key {
+            key: finite(finite(12.0_f64.mul_add(octaves, base)) + bend),
+            slope: finite(12.0 * finite(self.slope + lfo_slope)),
+            glide: if moving { finite(12.0 * self.glide) } else { 0.0 },
+            rate: if moving { self.rate } else { 0.0 },
+            swing,
+        }
     }
 
     /// Bounds a₁ … a₆ of the first six derivatives of λ ln 2 on the piece, in
@@ -860,8 +906,34 @@ fn earliest(samples: f64, end: f64, changes: [Option<f64>; 6]) -> f64 {
 fn walk(parts: &mut Parts, from: Instant, length: f64, signals: &Signals<'_>) -> bool {
     parts.parts.clear();
     let mut budget = f64::from(parts.limit);
+    pieces_of(from, length, signals, budget, |_, piece| {
+        let count = piece.count();
+        if count > budget {
+            return false;
+        }
+        budget -= count;
+        let count = parts_of(count);
+        for index in 0..count {
+            parts.push(piece.part(count, index));
+        }
+        true
+    })
+}
+
+/// The pieces of a span of a sample's pitch between the instants where a
+/// signal has a corner or a jump (MATH §2.5), each given to `visit` with the
+/// samples from the span's start to its start, while `visit` takes it: false
+/// where it does not, and at once where the LFO's wave has as many corners
+/// and edges in the span as `limit`, each of which would take a piece.
+fn pieces_of(
+    from: Instant,
+    length: f64,
+    signals: &Signals<'_>,
+    limit: f64,
+    mut visit: impl FnMut(f64, &Piece) -> bool,
+) -> bool {
     let grid = Grid::new(signals.lfo, signals.wave, from);
-    if grid.cells() * length >= budget {
+    if grid.cells() * length >= limit {
         return false;
     }
     let mut envelope = signals.pitch_envelope;
@@ -912,14 +984,8 @@ fn walk(parts: &mut Parts, from: Instant, length: f64, signals: &Signals<'_>) ->
             depth_slope: finite(depth_end - depth) / length,
             shape: grid.shape(signals.lfo, signals.wave, cell, samples),
         };
-        let count = piece.count();
-        if count > budget {
+        if !visit(samples, &piece) {
             return false;
-        }
-        budget -= count;
-        let count = parts_of(count);
-        for index in 0..count {
-            parts.push(piece.part(count, index));
         }
         samples = next;
     }
@@ -987,8 +1053,9 @@ pub struct KeyPiece {
 
 /// The rates' key kᴿ over a sample (MATH §2.6, §4.7): its pieces between the
 /// instants where the pitch envelope and the portamento give it a corner or a
-/// jump, or, past the budget of `osc.max_pieces`, the key at the rule's three
-/// instants of that many equal parts of the sample (MATH §2.5), held in
+/// jump, and, where it is the level's key under `scaling.key = pitch`, the
+/// LFO too; or, past the budget of `osc.max_pieces`, the key at the rule's
+/// three instants of that many equal parts of the sample (MATH §2.5), held in
 /// memory that the engine takes when it is prepared.
 #[derive(Debug, PartialEq)]
 pub struct Keys {
@@ -1063,14 +1130,15 @@ impl Keys {
     }
 
     /// The key over the last span where it held still there, one piece over
-    /// the whole span with neither a slope nor a glide that moves.
+    /// the whole span with neither a slope, a glide that moves nor a swing.
     #[must_use]
     pub fn still(&self) -> Option<f64> {
         match self.pieces() {
             Some([piece])
                 if piece.length >= self.length
                     && piece.key.slope == 0.0
-                    && (piece.key.glide == 0.0 || piece.key.rate <= 0.0) =>
+                    && (piece.key.glide == 0.0 || piece.key.rate <= 0.0)
+                    && piece.key.swing.is_none() =>
             {
                 Some(piece.key.at(0.0))
             }
@@ -1198,6 +1266,7 @@ impl Keys {
                     slope: if moving { finite(12.0 * envelope.slope()) } else { 0.0 },
                     glide,
                     rate,
+                    swing: None,
                 },
             });
             samples = next;
@@ -1241,6 +1310,88 @@ impl Keys {
                 advance(&mut envelope, parameters, &mut portamento, at, sample_rate);
                 let (offset, _) = portamento.keys(at);
                 *node = finite(finite(12.0_f64.mul_add(envelope.level(at), key)) + offset);
+            }
+            if self.nodes.len() < self.nodes.capacity() {
+                self.nodes.push(nodes);
+            }
+        }
+    }
+
+    /// The pieces of kᴿ over a span of a sample, so many samples from an
+    /// instant, where it is the level's key under `scaling.key = pitch`
+    /// (MATH §2.6): a base, the scaling key's base, plus 12 keys an octave of
+    /// the voice's pitch that the pitch envelope, the portamento and the LFO
+    /// move, plus the bend, under 12-TET; on the pieces of the pitch (MATH
+    /// §2.5), split where any of them has a corner or a jump, each a part of
+    /// the budget, its key's law the piece's pitch in keys: a line, a glide and
+    /// the LFO's part, a swing where that does not move along a line (`Key`).
+    /// Past the budget, the key at the rule's instants of `osc.max_pieces`
+    /// equal parts of the span, each signal by its own law there. The
+    /// signals' own states are left as they are.
+    pub fn pitch_span(&mut self, from: Instant, length: f64, base: f64, bend: f64, signals: &Signals<'_>) {
+        self.length = length;
+        self.pieces.clear();
+        self.nodes.clear();
+        let most = usize::try_from(self.limit)
+            .unwrap_or(usize::MAX)
+            .min(self.pieces.capacity());
+        let pieces = &mut self.pieces;
+        self.walked = pieces_of(from, length, signals, f64::from(self.limit), |start, piece| {
+            if pieces.len() >= most {
+                return false;
+            }
+            pieces.push(KeyPiece {
+                start,
+                length: piece.length,
+                key: piece.key(base, bend),
+            });
+            true
+        });
+        if !self.walked {
+            self.pitch_nodes(from, length, base, bend, signals);
+        }
+    }
+
+    /// The pieces of kᴿ over a sample where it is the level's key under
+    /// `scaling.key = pitch`, as [`Keys::pitch_span`] gives a span's.
+    pub fn pitch_walk(&mut self, from: Instant, base: f64, bend: f64, signals: &Signals<'_>) {
+        self.pitch_span(from, 1.0, base, bend, signals);
+    }
+
+    /// The level's key under `scaling.key = pitch` at the rule's instants of
+    /// `osc.max_pieces` equal parts of the span: the base plus 12 keys an
+    /// octave of the pitch envelope's level, the portamento's offset and the
+    /// LFO's pitch there, each by its own law, as the phase's fallback takes
+    /// the pitch, plus the bend.
+    fn pitch_nodes(&mut self, from: Instant, length: f64, base: f64, bend: f64, signals: &Signals<'_>) {
+        self.pieces.clear();
+        self.nodes.clear();
+        let count = self.limit;
+        let boundary = |index: u32| {
+            if index >= count {
+                length
+            } else {
+                length * f64::from(index) / f64::from(count)
+            }
+        };
+        let mut envelope = signals.pitch_envelope;
+        let mut portamento = signals.portamento;
+        for index in 0..count {
+            let start = boundary(index);
+            let length = boundary(index + 1) - start;
+            let mut nodes = [0.0; 3];
+            for (node, instant) in nodes.iter_mut().zip(gauss_instants(length)) {
+                let at = instant_after(from, start + instant);
+                advance(
+                    &mut envelope,
+                    signals.pitch_parameters,
+                    &mut portamento,
+                    at,
+                    signals.sample_rate,
+                );
+                let lfo = finite(signals.depth_at(signals.lfo.fade(at)) * signals.lfo.wave(at, signals.wave));
+                let octaves = finite(finite(envelope.level(at) + portamento.octaves(at)) + lfo);
+                *node = finite(finite(12.0_f64.mul_add(octaves, base)) + bend);
             }
             if self.nodes.len() < self.nodes.capacity() {
                 self.nodes.push(nodes);

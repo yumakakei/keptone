@@ -956,17 +956,19 @@ fn random_parts() -> [Part; 2] {
 #[test]
 fn a_render_is_the_same_however_its_samples_are_split_into_blocks() {
     // Each policy and retrigger, both channels' forms, both LFO scopes and
-    // both graph scopes and three feedback models, three voices for two parts:
-    // random input, with new compiled patches among it, rendered in one block
-    // and in blocks of 1 to 700 samples, bit for bit.
+    // both graph scopes and three feedback models, and the rates' key of the
+    // level's under `scaling.key = pitch`, which the LFO moves, three voices for
+    // two parts: random input, with new compiled patches among it, rendered in
+    // one block and in blocks of 1 to 700 samples, bit for bit.
     let samples = 6000;
     let configurations = [
-        (0, 1, 0, 0, 0, 0),
-        (1, 0, 1, 1, 1, 1),
-        (2, 1, 0, 1, 2, 0),
-        (3, 0, 0, 0, 0, 1),
+        (0, 1, 0, 0, 0, 0, 0, 0),
+        (1, 0, 1, 1, 1, 1, 0, 0),
+        (2, 1, 0, 1, 2, 0, 0, 0),
+        (3, 0, 0, 0, 0, 1, 0, 0),
+        (0, 0, 1, 1, 0, 0, 1, 2),
     ];
-    for (seed, &(steal, retrigger, channels, scope, model, graph)) in (1_u64..).zip(&configurations) {
+    for (seed, &(steal, retrigger, channels, scope, model, graph, rate_key, key)) in (1_u64..).zip(&configurations) {
         let changes = [
             ("voice.count", Value::Integer(3)),
             ("voice.steal", Value::Choice(steal)),
@@ -975,6 +977,8 @@ fn a_render_is_the_same_however_its_samples_are_split_into_blocks() {
             ("lfo.scope", Value::Choice(scope)),
             ("feedback.model", Value::Choice(model)),
             ("graph.algorithm_scope", Value::Choice(graph)),
+            ("scaling.rate_key", Value::Choice(rate_key)),
+            ("scaling.key", Value::Choice(key)),
         ];
         let events = random_events(&mut Random(seed), samples);
         let mut engine = prepared(&changes, &random_parts());

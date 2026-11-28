@@ -167,10 +167,7 @@ impl Feedback {
 }
 
 /// The first setting, in MATH §17's order, whose value M3 does not compute
-/// (DESIGN §16): each of the first five must have the one value that it
-/// computes, and `scaling.rate_key` must not be `level` while `scaling.key` is
-/// `pitch`, under which the rates' key follows the LFO (MATH §2.6), which the
-/// envelopes' progress does not take yet.
+/// (DESIGN §16): each of these five must have the one value that it computes.
 fn refused(settings: &Settings) -> Option<Refusal> {
     [
         ("tuning.source", Value::Choice(0)),
@@ -183,12 +180,6 @@ fn refused(settings: &Settings) -> Option<Refusal> {
     .find_map(|(name, computed)| {
         let given = value(settings, name);
         (given != computed).then_some(Refusal::Setting { name, value: given })
-    })
-    .or_else(|| {
-        let name = "scaling.rate_key";
-        let given = value(settings, name);
-        (given == Value::Choice(1) && value(settings, "scaling.key") == Value::Choice(2))
-            .then_some(Refusal::Setting { name, value: given })
     })
 }
 
@@ -345,9 +336,8 @@ impl Configuration {
     /// is refused: a host rate that is not finite and above 0, or the first in
     /// MATH §17's order of `engine.oversampling` above 1, `adaa.order` above
     /// 0, `feedback.series_beta_max` above 0, `tuning.source` other than
-    /// `12-tet`, `graph.operators` other than 6, and `scaling.rate_key =
-    /// level` with `scaling.key = pitch`, whose values M3 does not compute
-    /// (DESIGN §16).
+    /// `12-tet` and `graph.operators` other than 6, whose values M3 does not
+    /// compute (DESIGN §16).
     ///
     /// # Errors
     ///
